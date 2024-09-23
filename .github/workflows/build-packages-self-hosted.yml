@@ -13,8 +13,9 @@ jobs:
       - name: Run docker build
         run: |
           #FORCE_REBUILD_CONTAINER=1 ./build_in_docker.sh
-          mkdir -p ./build
-          touch ./build/package.tar.gz
+          mkdir -p ./build/1
+          echo 12345 > ./build/1/testfile
+          tar -czf ./build/package.tar.gz -C ./build/1
 
       - name: Create GitHub Release
         id: create_release
