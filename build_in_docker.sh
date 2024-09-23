@@ -1,8 +1,8 @@
 #!/bin/bash
 IMAGE_NAME=tdx-builder
 
-if [[ "$(docker images -q ${IMAGE_NAME} 2> /dev/null)" == "" ]]; then
-  echo "Docker image ${IMAGE_NAME} not found. Building..."
+if [[ "$(docker images -q ${IMAGE_NAME} 2> /dev/null)" == "" || "${FORCE_REBUILD_CONTAINER}" == "1" ]]; then
+  echo "Docker image ${IMAGE_NAME} not found or FORCE_REBUILD_CONTAINER is set. Building..."
   sudo rm -rf ./build
   docker build -t ${IMAGE_NAME} .
 else
