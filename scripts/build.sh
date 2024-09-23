@@ -97,9 +97,12 @@ EOF
         echo "Build failed, OVMF.fd not found"
     fi
 }
-tmp_dir=$(mktemp -d)
-mkdir -p ${tmp_dir}
-preparePatches ${tmp_dir}
-build_kernel_packages ${tmp_dir} $(readlink -f "/builder/config/config-6.8.0-45-generic")
-#build_qemu ${tmp_dir}
-#build_ovmf ${tmp_dir}
+
+main() {
+    tmp_dir=$(mktemp -d)
+    mkdir -p ${tmp_dir}
+    preparePatches ${tmp_dir}
+    build_kernel_packages ${tmp_dir} $(readlink -f "/builder/config/config-6.8.0-45-generic")
+    #build_qemu ${tmp_dir}
+    #build_ovmf ${tmp_dir}
+}
