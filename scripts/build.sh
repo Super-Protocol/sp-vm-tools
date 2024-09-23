@@ -1,7 +1,5 @@
 #!/bin/bash
 
-KERNEL_CONFIG_FILE="/builder/config/config-6.8.0-45-generic"
-
 preparePatches() {
     local build_dir=$1
     pushd ${build_dir}
@@ -94,11 +92,28 @@ EOF
     fi
 }
 
-main() {
-    tmp_dir=$(mktemp -d)
-    mkdir -p ${tmp_dir}
-    preparePatches ${tmp_dir}
-    build_kernel_packages ${tmp_dir} $(readlink -f "/builder/config/config-6.8.0-45-generic")
-    build_qemu ${tmp_dir}
-    build_ovmf ${tmp_dir}
+build_main() {
+    local scripts_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+    local root_dir=${scripts_dir}/../
+    local build_dir=${scripts_dir}/../build
+
+    rm -rf ${build_dir}
+    mkdir -p ${build_dir}
+
+    preparePatches ${build_dir}
+
+    pushd ${root_dir}
+    config_file=$(find ./config -name "config-*" | head -n 1)
+
+    if [[ -z "$config_file" ]]; then
+        echo "Old config not found!"
+        exit 1
+    fi
+    config_file_abs=$(readlink -f "${config_file}")
+    popd
+
+
+    build_kernel_packages ${build_dir} ${config_file_abs}
+    build_qemu ${build_dir}
+    build_ovmf ${build_dir}
 }
