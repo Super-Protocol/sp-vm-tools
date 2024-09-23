@@ -12,7 +12,7 @@ jobs:
 
       - name: Run docker build
         run: |
-          FORCE_REBUILD_CONTAINER=1 ./build_in_docker.sh
+          NON_INTERACTIVE=1 FORCE_REBUILD_CONTAINER=1 ./build_in_docker.sh
 
       - name: Create GitHub Release
         id: create_release

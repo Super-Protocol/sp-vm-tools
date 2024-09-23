@@ -11,4 +11,9 @@ else
 fi
 
 mkdir -p build
-docker run -it --rm -v ${scripts_dir}:/builder --entrypoint /bin/bash ${IMAGE_NAME} -c "source /builder/scripts/build.sh && build_main"
+if [[ -n "$NON_INTERACTIVE" ]]; then
+  IT=""
+else
+  IT="-it"
+fi
+docker run ${IT} --rm -v ${scripts_dir}:/builder --entrypoint /bin/bash ${IMAGE_NAME} -c "source /builder/scripts/build.sh && build_main"
