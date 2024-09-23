@@ -99,6 +99,20 @@ EOF
     popd
 }
 
+packaging() {
+    local build_dir=$1
+    pushd ${build_dir}
+    rm -rf ./package
+    mkdir -p package
+    find ./ -type f -name "*.deb" ! -name "*dbg*.deb" -exec cp -fv {} package/ \;
+    cp -fv qemu/sp-qemu-tdx*.deb package/
+    cp -fv edk2/Build/OvmfX64/DEBUG_GCC5/FV/OVMF.fd package/
+    cd package
+    tar -czvf ../package.tar.gz .
+    popd
+
+}
+
 build_main() {
     local scripts_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
     local root_dir=${scripts_dir}/../
@@ -119,8 +133,8 @@ build_main() {
     config_file_abs=$(readlink -f "${config_file}")
     popd
 
-
     build_kernel_packages ${build_dir} ${config_file_abs}
     build_qemu ${build_dir}
     build_ovmf ${build_dir}
+    packaging ${build_dir}
 }
