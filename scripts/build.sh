@@ -1,10 +1,10 @@
 #!/bin/bash
 
-BUILD_DIR="/build"
 KERNEL_CONFIG_FILE="/builder/config/config-6.8.0-45-generic"
 
 preparePatches() {
-    pushd ${BUILD_DIR}
+    local build_dir=$1
+    pushd ${build_dir}
     git clone https://github.com/intel/tdx-linux.git ./patches
     cd ./patches
     git checkout -b device-passthrough 1323f7b1ddf81076e3fcda6385c0c0dcf506258c
@@ -12,13 +12,16 @@ preparePatches() {
 }
 
 build_kernel_packages() {
-    pushd ${BUILD_DIR}
+    local build_dir=$1
+    local config=$2
+    pushd ${build_dir}
     git clone -b kvm-coco-queue-20240512 --single-branch --depth 1 --no-tags https://git.kernel.org/pub/scm/linux/kernel/git/vishal/kvm.git
     cd ./kvm
     cp -v ../patches/tdx-kvm/tdx_kvm_baseline_698ca1e40357.mbox .
     git am --empty=drop tdx_kvm_baseline_698ca1e40357.mbox
 
-    cp -v ${KERNEL_CONFIG_FILE} .config
+    cp -v ${config} .config
+    return 0
 
     scripts/config -d KEXEC \
     -d KEXEC_FILE \
@@ -37,14 +40,15 @@ build_kernel_packages() {
 
     make olddefconfig
 
-    make -j$(nproc)
-    make modules -j$(nproc)
+    #make -j$(nproc)
+    #make modules -j$(nproc)
     make -j$(nproc) deb-pkg
     popd
 }
 
 build_qemu() {
-    pushd ${BUILD_DIR}
+    local build_dir=$1
+    pushd ${build_dir}
     git init qemu
     cd qemu
     git remote add origin https://gitlab.com/qemu-project/qemu
@@ -93,9 +97,9 @@ EOF
         echo "Build failed, OVMF.fd not found"
     fi
 }
-
-mkdir -p ${BUILD_DIR}
-preparePatches
-build_kernel_packages
-build_qemu
-build_ovmf
+tmp_dir=$(mktemp -d)
+mkdir -p ${tmp_dir}
+preparePatches ${tmp_dir}
+build_kernel_packages ${tmp_dir} $(readlink -f "/builder/config/config-6.8.0-45-generic")
+#build_qemu ${tmp_dir}
+#build_ovmf ${tmp_dir}
