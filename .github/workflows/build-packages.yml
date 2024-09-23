@@ -28,4 +28,4 @@ jobs:
       - name: Build kernel
         run: |
           source ./scripts/build.sh
-          build_kernel_packages $RUNNER_TEMP/build $(readlink -f ./config config-6.8.0-45-generic)
+          build_kernel_packages $RUNNER_TEMP/build $(readlink -f ./config/config-6.8.0-45-generic)
