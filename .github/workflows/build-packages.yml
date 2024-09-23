@@ -23,6 +23,8 @@ jobs:
 
           mkdir -p $RUNNER_TEMP/build
           df -h
+          echo "=========="
+          df -h $RUNNER_TEMP
 
       # - name: Prepare patches
       #   run: |
