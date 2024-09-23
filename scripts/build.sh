@@ -21,7 +21,6 @@ build_kernel_packages() {
     git am --empty=drop tdx_kvm_baseline_698ca1e40357.mbox
 
     cp -v ${config} .config
-    return 0
 
     scripts/config -d KEXEC \
     -d KEXEC_FILE \
@@ -39,9 +38,6 @@ build_kernel_packages() {
     -e CRYPTO_ECRDSA
 
     make olddefconfig
-
-    #make -j$(nproc)
-    #make modules -j$(nproc)
     make -j$(nproc) deb-pkg
     popd
 }
@@ -103,6 +99,6 @@ main() {
     mkdir -p ${tmp_dir}
     preparePatches ${tmp_dir}
     build_kernel_packages ${tmp_dir} $(readlink -f "/builder/config/config-6.8.0-45-generic")
-    #build_qemu ${tmp_dir}
-    #build_ovmf ${tmp_dir}
+    build_qemu ${tmp_dir}
+    build_ovmf ${tmp_dir}
 }

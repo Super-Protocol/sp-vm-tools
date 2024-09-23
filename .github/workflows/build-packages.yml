@@ -28,4 +28,21 @@ jobs:
       - name: Build kernel
         run: |
           source ./scripts/build.sh
-          build_kernel_packages $RUNNER_TEMP/build $(readlink -f ./config/config-6.8.0-45-generic)
+          config_file=$(find ./config -name "config-*" | head -n 1)
+
+
+          if [[ -z "$config_file" ]]; then
+              echo "Old config not found!"
+              exit 1
+          fi
+          build_kernel_packages $RUNNER_TEMP/build $(readlink -f $config_file)
+
+      - name: Build QEMU
+        run: |
+          source ./scripts/build.sh
+          build_qemu ${tmp_dir} $RUNNER_TEMP/build
+
+      - name: Build OVMF
+        run: |
+          source ./scripts/build.sh
+          build_ovmf ${tmp_dir} $RUNNER_TEMP/build
