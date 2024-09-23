@@ -68,13 +68,18 @@ build_qemu() {
 }
 
 build_ovmf() {
-    pushd ${BUILD_DIR}
+    local build_dir=$1
+    pushd ${build_dir}
+
     git clone -b edk2-stable202405 --single-branch --depth 1 --no-tags https://github.com/tianocore/edk2
     cd edk2
     git submodule update --init
     rm -rf Build
     make -C BaseTools
-    . edksetup.sh
+
+    set -- #workaround for source from function with arg
+    source edksetup.sh
+
     cat <<-EOF > Conf/target.txt
 ACTIVE_PLATFORM = OvmfPkg/OvmfPkgX64.dsc
 TARGET = DEBUG
@@ -89,7 +94,9 @@ EOF
     build
     if [ ! -f Build/OvmfX64/DEBUG_GCC5/FV/OVMF.fd ]; then
         echo "Build failed, OVMF.fd not found"
+        return 1
     fi
+    popd
 }
 
 build_main() {
