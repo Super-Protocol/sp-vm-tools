@@ -22,13 +22,10 @@ jobs:
           git config --global user.name "Your Name"
 
           mkdir -p $RUNNER_TEMP/build
+          cd $RUNNER_TEMP/build
+          pwd
           df -h
-          echo "=========="
-          sudo docker image prune --all --force
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo rm -rf /opt/ghc
-          df -h
+
 
 
       # - name: Prepare patches
