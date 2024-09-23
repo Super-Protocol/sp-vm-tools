@@ -24,7 +24,12 @@ jobs:
           mkdir -p $RUNNER_TEMP/build
           df -h
           echo "=========="
-          df -h $RUNNER_TEMP
+          sudo docker image prune --all --force
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /opt/ghc
+          df -h
+
 
       # - name: Prepare patches
       #   run: |
