@@ -61,7 +61,7 @@ build_qemu() {
     # 3) Remove package
     make install
     PACKAGE_NAME=sp-qemu-tdx
-    checkinstall -y --pkgname=${PACKAGE_NAME} --pkgversion=1.0 --requires="libslirp-dev" --backup=no --nodoc --maintainer=SuperProtocol
+    checkinstall -y --pkgname=${PACKAGE_NAME} --pkgversion=1.0 --requires="libslirp0" --backup=no --nodoc --maintainer=SuperProtocol
     dpkg -r ${PACKAGE_NAME}
 
     popd
