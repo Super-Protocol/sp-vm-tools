@@ -1,6 +1,10 @@
 #!/bin/bash
 
-#!/bin/bash
+# Check if the script is running as root
+if [ "$(id -u)" -ne 0 ]; then
+  echo "This script must be run as root. Please run with sudo."
+  exit 1
+fi
 
 # Check for the parameter
 if [ "$#" -ne 1 ]; then
@@ -25,9 +29,12 @@ mkdir -p ${DEB_DIR}
 echo "Extracting archive..."
 tar -xf "$ARCHIVE_PATH" -C "$DEB_DIR"
 
+# Install dependencies
+apt update && DEBIAN_FRONTEND=noninteractive apt install -y libslirp0
+
 # Install deb packages
 echo "Installing deb packages..."
-sudo dpkg -i "$DEB_DIR"/*.deb
+DEBIAN_FRONTEND=noninteractiv dpkg -i "$DEB_DIR"/*.deb
 
 # Check for installation errors
 if [ $? -ne 0 ]; then
@@ -36,11 +43,8 @@ if [ $? -ne 0 ]; then
 fi
 
 # Download the setup-attestation-host.sh script
-SCRIPT_URL="https://raw.githubusercontent.com/canonical/tdx/noble-24.04/attestation/setup-attestation-host.sh"
-SCRIPT_PATH="$TEMP_DIR/setup-attestation-host.sh"
-
-echo "Downloading setup-attestation-host.sh..."
-curl -L -o "$SCRIPT_PATH" "$SCRIPT_URL"
+git clone -b noble-24.04 --single-branch --depth 1 --no-tags https://github.com/canonical/tdx.git ${TMP_DIR}/tdx-cannonical
+SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/attestation/setup-attestation-host.sh
 
 # Check for download errors
 if [ $? -ne 0 ]; then
@@ -59,4 +63,12 @@ echo "Running setup-attestation-host.sh..."
 echo "Cleaning up..."
 rm -rf "$TEMP_DIR"
 
-echo "Installation and setup completed successfully."
+
+if ! grep -q 'kvm_intel.tdx=on' /etc/default/grub; then
+  sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)/\1 nohibernate kvm_intel.tdx=on/' /etc/default/grub
+fi
+
+update-grub
+
+
+echo "Installation and setup completed successfully. Please reboot your server"
