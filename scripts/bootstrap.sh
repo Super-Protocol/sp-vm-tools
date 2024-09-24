@@ -70,5 +70,9 @@ fi
 
 update-grub
 
+# Change pccs url from local to public
+cp /etc/sgx_default_qcnl.conf /etc/sgx_default_qcnl.conf.bak
+sed -i 's|"pccs_url": "https://localhost:8081/sgx/certification/v4/"|"pccs_url": "https://pccs.superprotocol.io/sgx/certification/v4/"|' /etc/sgx_default_qcnl.conf
+
 
 echo "Installation and setup completed successfully. Please reboot your server"
