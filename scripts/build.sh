@@ -135,6 +135,7 @@ build_main() {
 
     build_kernel_packages ${build_dir} ${config_file_abs}
     build_qemu ${build_dir}
-    build_ovmf ${build_dir}
+    # no need build ovmf, just get it from ppa:kobuk-team/tdx-release repo
+    #build_ovmf ${build_dir}
     packaging ${build_dir}
 }
