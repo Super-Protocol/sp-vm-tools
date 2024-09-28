@@ -12,7 +12,7 @@ SCRIPT_DIR=$( cd "$( dirname "$0" )" && pwd )
 DEFAULT_VM_DISK_SIZE=1000
 DEFAULT_CORES=$(( $(nproc) - 2 )) # All cores minus 2
 DEFAULT_MEM=$(( $(free -g | awk '/^Mem:/{print $2}') - 8 ))
-DEFAULT_CACHE="${HOME}./cache/superprotocol" # Default cache path
+DEFAULT_CACHE="${HOME}/.cache/superprotocol" # Default cache path
 
 DEFAULT_SSH_PORT=2222
 
@@ -69,6 +69,21 @@ get_next_available_id() {
     exit 1
 }
 
+# Default parameters
+VM_CPU=${DEFAULT_CORES}
+VM_RAM=${DEFAULT_MEM}
+USED_GPUS=() # List of used GPUs (to be filled dynamically)
+DISK_PATH=""
+DISK_SIZE=0
+CACHE=${DEFAULT_CACHE}
+MAC_ADDRESS=${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX}
+DEBUG_MODE=${DEFAULT_DEBUG}
+RELEASE=""
+
+SSH_PORT=${DEFAULT_SSH_PORT}
+BASE_CID=$(get_next_available_id 3 guest-cid)
+BASE_NIC=$(get_next_available_id 0 nic_id)
+
 parse_args() {
     # Parse arguments
     while [[ "$#" -gt 0 ]]; do
@@ -76,20 +91,82 @@ parse_args() {
             --cores) VM_CPU=$2; shift ;;
             --mem) VM_RAM=$(echo $2 | sed 's/G//'); shift ;;
             --gpu) USED_GPUS+=("$2"); shift ;;
-            --disk_path) VM_CPU=$2; shift ;;
-            --disk_size) VM_CPU=$2; shift ;;
-            --cache) VM_CPU=$2; shift ;;
+            --disk_path) DISK_PATH=$2; shift ;;
+            --disk_size) DISK_SIZE=$2; shift ;;
+            --cache) CACHE=$2; shift ;;
             --provider_config) DEBUG_MODE=$2; shift ;;
             --mount_config) DEBUG_MODE=$2; shift ;;
-            --mac_address) DEBUG_MODE=$2; shift ;;
+            --mac_address) MAC_ADDRESS=$2; shift ;;
             --ssh_port) SSH_PORT=$2; shift ;;
             --debug) DEBUG_MODE=$2; shift ;;
-            --release) DEBUG_MODE=$2; shift ;;
+            --release) RELEASE=$2; shift ;;
             --help) usage; exit 0;;
             *) echo "Unknown parameter: $1"; usage ; exit 1 ;;
         esac
         shift
     done
+}
+
+download_release() {
+    RELEASE_NAME=$1
+    ASSET_NAME=$2
+    TARGET_DIR=$3
+    REPO=$4
+
+    # Check if a target directory was provided, otherwise set to current directory
+    if [[ -z "${TARGET_DIR}" ]]; then
+        TARGET_DIR="."
+    fi
+
+    # Check if release name is provided or not
+    if [[ -z "${RELEASE_NAME}" ]]; then
+        echo "No release name provided. Fetching the latest release..."
+        LATEST_TAG=$(curl -s https://api.github.com/repos/$REPO/releases/latest | jq -r '.tag_name')
+
+        # Проверка, удалось ли получить тег
+        if [[ -z "${LATEST_TAG}" ]]; then
+            echo "Failed to fetch the latest release tag."
+            exit 1
+        fi
+        RELEASE_NAME=${LATEST_TAG}
+    fi
+
+    echo "Fetching release: ${RELEASE_NAME}"
+    RELEASE_URL="https://api.github.com/repos/${REPO}/releases/tags/${RELEASE_NAME}"
+
+    # Fetch the release information
+    RESPONSE=$(curl -s $RELEASE_URL)
+
+    # Check if the release was fetched correctly
+    if [[ $(echo "$RESPONSE" | jq -r '.message') == "Not Found" ]]; then
+        echo "Release not found!"
+        exit 1
+    fi
+
+    # Extract the browser_download_url of the specified asset
+    ASSET_URL=$(echo "${RESPONSE}" | jq -r ".assets[] | select(.name == \"${ASSET_NAME}\") | .browser_download_url")
+
+    # Check if the asset exists
+    if [[ -z "${ASSET_URL}" ]]; then
+        echo "Asset \"${ASSET_NAME}\" not found!"
+        exit 1
+    fi
+
+    # Create the target directory if it doesn't exist
+    TARGET_DIR="${TARGET_DIR}/${RELEASE_NAME}"
+    mkdir -p "${TARGET_DIR}"
+
+    # Download the asset to the specified directory
+    echo "Downloading ${ASSET_NAME} to ${TARGET_DIR}..."
+    curl -L "$ASSET_URL" -o "$TARGET_DIR/$ASSET_NAME"
+
+    if [[ -f "$TARGET_DIR/$ASSET_NAME" && -s "$TARGET_DIR/$ASSET_NAME" ]]; then
+        echo "Download complete! File saved to $TARGET_DIR/$ASSET_NAME"
+    else
+        echo "Download failed or the file is empty!"
+        exit 1
+    fi
+
 }
 
 # Function to generate a unique MAC address
@@ -115,26 +192,20 @@ TOTAL_DISK=$(df -h . | awk 'NR==2 {print $4}' | sed 's/G//')
 USED_CPUS=0  # Add logic to calculate used CPUs by VM
 USED_RAM=0   # Add logic to calculate used RAM by VM
 AVAILABLE_GPUS=$(lspci -nnk -d 10de: | grep -E '3D controller' | awk '{print $1}')
-USED_GPUS=() # List of used GPUs (to be filled dynamically)
-DEBUG_MODE="off"
+
 TDX_SUPPORT=$(lscpu | grep -i tdx)
 SEV_SUPPORT=$(lscpu | grep -i sev)
 
-# Default parameters
-VM_CPU=$(( TOTAL_CPUS * DEFAULT_CPU_PERCENTAGE / 100 ))
-VM_RAM=$(( TOTAL_RAM * DEFAULT_RAM_PERCENTAGE / 100 ))
-VM_DISK_SIZE=$DEFAULT_VM_DISK_SIZE
-SSH_PORT=$DEFAULT_SSH_PORT
-BASE_CID=$(get_next_available_id 3 guest-cid)
-BASE_NIC=$(get_next_available_id 0 nic_id)
 
 # Generate a unique MAC address
 MAC_ADDRESS=$(generate_mac_address $DEFAULT_MAC_PREFIX $DEFAULT_MAC_SUFFIX)
 
-
-
-
 main() {
+    mkdir -p "${CACHE}"
+    download_release "${RELEASE}" "MRENCLAVE.sign" "${CACHE}" "Super-Protocol/sp-kata-containers"
+    exit 0
+
+
     # Collect system information to print
     echo "1. Used / total CPUs on host: $VM_CPU / $TOTAL_CPUS"
     echo "2. Used RAM for VM / total RAM on host: $VM_RAM GB / $TOTAL_RAM GB"
