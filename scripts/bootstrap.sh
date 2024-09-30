@@ -154,15 +154,15 @@ bootstrap() {
   echo "Extracting archive..."
   tar -xf "${ARCHIVE_PATH}" -C "${DEB_DIR}"
 
-  # Clean up temporary directory
-  echo "Cleaning up..."
-  rm -rf "${TMP_DIR}"
-
   install_debs "${DEB_DIR}"
   setup_attestation "${TMP_DIR}"
   setup_grub
   update_tdx_module "${TMP_DIR}"
   setup_nvidia_gpus "${TMP_DIR}"
+
+  # Clean up temporary directory
+  echo "Cleaning up..."
+  rm -rf "${TMP_DIR}"
 
   echo "Installation and setup completed successfully. Please reboot your server"
 }
@@ -170,5 +170,5 @@ bootstrap() {
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
   echo "Script was sourced"
 else
-  bootstrap
+  bootstrap $@
 fi
