@@ -62,9 +62,67 @@ update_tdx_module() {
 }
 
 setup_nvidia_gpus() {
+  TMP_DIR=$1
 
+  echo "Determining PCI IDs for your NVIDIA GPU(s)..."
+  gpu_list=$(lspci -nnk -d 10de: | grep -E '3D controller')
+
+  if [ -z "$gpu_list" ]; then
+    echo "No NVIDIA GPU found."
+    return
+  fi
+
+  echo "The following NVIDIA GPUs were found:"
+  echo "$gpu_list"
+
+  # enable cc mode
+  git clone -b v2024.08.09 --single-branch --depth 1 --no-tags https://github.com/NVIDIA/gpu-admin-tools.git "${TMP_DIR}/gpu-admin-tools"
+  pushd "${TMP_DIR}/gpu-admin-tools"
+  AVAILABLE_GPUS=$(echo ${gpu_list} | awk '{print $1}')
+  for gpu in $AVAILABLE_GPUS; do
+    echo "Enable CC mode for ${gpu}"
+    python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu} --set-cc-mode=on --reset-after-cc-mode-switch
+    if [ $? -ne 0 ]; then
+      echo "Failed to enable cc-mode for GPU ${gpu}"
+    exit 1
+  fi
+  done
+  popd
+
+  new_pci_ids=$(echo "$gpu_list" | grep -oP '\[\K[0-9a-f]{4}:[0-9a-f]{4}(?=\])' | sort -u | tr '\n' ',' | sed 's/,$//')
+
+  existing_pci_ids=""
+  if [ -f /etc/modprobe.d/vfio.conf ]; then
+    existing_pci_ids=$(grep -oP '(?<=ids=)[^ ]+' /etc/modprobe.d/vfio.conf | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+  fi
+
+  if [ -n "$existing_pci_ids" ]; then
+    combined_pci_ids=$(echo -e "${existing_pci_ids}\n${new_pci_ids}" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+  else
+    combined_pci_ids="$new_pci_ids"
+  fi
+
+  echo "Updating kernel module for VFIO-PCI with IDs: $combined_pci_ids"
+  sudo bash -c "echo 'options vfio-pci ids=$combined_pci_ids' > /etc/modprobe.d/vfio.conf"
+
+  echo "Ensuring the VFIO-PCI module is added to /etc/modules-load.d/vfio-pci.conf..."
+  if [ ! -f /etc/modules-load.d/vfio-pci.conf ]; then
+    sudo bash -c "echo 'vfio-pci' > /etc/modules-load.d/vfio-pci.conf"
+    echo "Created /etc/modules-load.d/vfio-pci.conf and added 'vfio-pci' module."
+  else
+    if ! grep -q '^vfio-pci$' /etc/modules-load.d/vfio-pci.conf; then
+      sudo bash -c "echo 'vfio-pci' >> /etc/modules-load.d/vfio-pci.conf"
+      echo "'vfio-pci' module added to /etc/modules-load.d/vfio-pci.conf."
+    else
+      echo "'vfio-pci' module is already present in /etc/modules-load.d/vfio-pci.conf."
+    fi
+  fi
+
+  echo "Regenerating kernel initramfs..."
+  sudo update-initramfs -u
+
+  echo "VFIO-PCI setup is complete."
 }
-
 
 bootstrap() {
   # Check if the script is running as root
@@ -109,4 +167,8 @@ bootstrap() {
   echo "Installation and setup completed successfully. Please reboot your server"
 }
 
-bootstrap()
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+  echo "Script was sourced"
+else
+  bootstrap
+fi
