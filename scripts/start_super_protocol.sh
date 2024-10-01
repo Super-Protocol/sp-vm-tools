@@ -10,7 +10,6 @@ S3_SECRET_KEY="jztnpl532njcljtdolnpbszq66lgqmwmgkbh747342hwc72grkohi"
 S3_ENDPOINT="gateway.storjshare.io"
 S3_BUCKET="builds-vm"
 
-DEFAULT_VM_STATE_DISK_SIZE=1000
 DEFAULT_CORES=$(( $(nproc) - 2 )) # All cores minus 2
 DEFAULT_MEM=$(( $(free -g | awk '/^Mem:/{print $2}') - 8 ))
 DEFAULT_CACHE="${HOME}/.cache/superprotocol" # Default cache path
@@ -40,7 +39,6 @@ usage() {
     echo "  --disk_size <size>           Size of disk (default: autodetermining, but no less than 512G)"
     echo "  --cache <path>               Cache directory (default: ${DEFAULT_CACHE})"
     echo "  --provider_config <file>     Provider configuration file (default: no)"
-    #echo "  --mount_config <path>        Mount configuration directory (default: ${DEFAULT_MOUNT_CONFIG})"
     echo "  --mac_address <address>      MAC address (default: ${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX})"
     echo "  --ssh_port <port>            SSH port (default: ${DEFAULT_SSH_PORT})"
     echo "  --log_file <file>            Log file (default: no)"
@@ -71,7 +69,7 @@ get_next_available_id() {
     exit 1
 }
 
-# Default parameters
+# Initialize parameters
 VM_CPU=${DEFAULT_CORES}
 VM_RAM=${DEFAULT_MEM}
 USED_GPUS=() # List of used GPUs (to be filled dynamically)
@@ -325,7 +323,7 @@ check_params() {
 
     # Check if MOUNT_POINT is empty
     if [ -z "${MOUNT_POINT}" ]; then
-        echo "Could not determine the mount point for ${MOUNT_POINT}"
+        echo "Could not determine the mount point for ${STATE_DISK_PATH}"
         exit 1
     fi
 
@@ -363,12 +361,6 @@ check_params() {
         exit 1
     fi
 
-    #if [[ -z "${MOUNT_CONFIG}" ]]; then
-    #    echo "Error: <mount_config> option can't be empty"
-    #    exit 1
-    #fi
-    #echo "• Mount config: ${MOUNT_CONFIG}"
-
     if [[ "${MAC_ADDRESS}" =~ ^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$ ]]; then
          echo "• Mac address: ${MAC_ADDRESS}"
     else
@@ -382,7 +374,6 @@ check_params() {
         echo "Error: <debug> option must be true or false"
         exit 1
     fi
-
 
     if [[ ${DEBUG_MODE} == "true" ]]; then
         echo "   SSH Port: $SSH_PORT"
