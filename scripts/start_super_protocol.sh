@@ -37,7 +37,7 @@ usage() {
     echo "  --mem <size>                 Amount of memory (default: ${DEFAULT_MEM})"
     echo "  --gpu <gpu_id>               Specify GPU(s) (default: all available gpu, specify --gpu no to disable gpu passthrough)"
     echo "  --disk_path <path>           Path to disk image (default: <cache>/state_disk.qcow2)"
-    echo "  --disk_size <size>     Size of disk (default: autodetermining, but no less than 512G)"
+    echo "  --disk_size <size>           Size of disk (default: autodetermining, but no less than 512G)"
     echo "  --cache <path>               Cache directory (default: ${DEFAULT_CACHE})"
     echo "  --provider_config <file>     Provider configuration file (default: no)"
     #echo "  --mount_config <path>        Mount configuration directory (default: ${DEFAULT_MOUNT_CONFIG})"
@@ -435,15 +435,18 @@ main() {
     NETWORK_SETTINGS=" -device virtio-net-pci,netdev=nic_id$BASE_NIC,mac=$MAC_ADDRESS"
     NETWORK_SETTINGS+=" -netdev user,id=nic_id$BASE_NIC"
     DEBUG_PARAMS=""
+    KERNEL_CMD_LINE=""
+    ROOT_HASH=$(grep 'Root hash' "${ROOTFS_HASH_PATH}" | awk '{print $3}')
     if [[ ${DEBUG_MODE} == true ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
+        KERNEL_CMD_LINE="root=/dev/vda1 console=ttyS0 clearcpuid=mtrr systemd.log_level=trace systemd.log_target=log rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} sp-debug=true"
+    else
+        KERNEL_CMD_LINE="root=/dev/vda1 clearcpuid=mtrrrootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}"
     fi
-
-    ROOT_HASH=$(grep 'Root hash' "${ROOTFS_HASH_PATH}" | awk '{print $3}')
 
     QEMU_COMMAND="${QEMU_PATH} \
     -enable-kvm \
-    -append \"root=/dev/vda1 console=ttyS0 clearcpuid=mtrr systemd.log_level=trace systemd.log_target=log rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}\" \
+    -append \"${KERNEL_CMD_LINE}\" \
     -drive file=${ROOTFS_PATH},if=virtio,format=raw \
     -drive file=${STATE_DISK_PATH},if=virtio,format=qcow2 \
     -kernel ${KERNEL_PATH} \
