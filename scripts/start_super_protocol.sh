@@ -9,6 +9,8 @@ S3_ACCESS_KEY="jxekrow2wxmjps6pr2jv22hamtha"
 S3_SECRET_KEY="jztnpl532njcljtdolnpbszq66lgqmwmgkbh747342hwc72grkohi"
 S3_ENDPOINT="gateway.storjshare.io"
 S3_BUCKET="builds-vm"
+RELEASE_REPO="Super-Protocol/sp-vm"
+RELEASE_ASSET="vm.json"
 
 DEFAULT_CORES=$(( $(nproc) - 2 )) # All cores minus 2
 DEFAULT_MEM=$(( $(free -g | awk '/^Mem:/{print $2}') - 8 ))
@@ -397,7 +399,7 @@ main() {
     check_params
 
     mkdir -p "${CACHE}"
-    download_release "${RELEASE}" "vm.json" "${CACHE}" "Super-Protocol/sp-vm"
+    download_release "${RELEASE}" "${RELEASE_ASSET}" "${CACHE}" "${RELEASE_REPO}"
     parse_and_download_release_files ${RELEASE_FILEPATH}
 
     # Prepare QEMU command with GPU passthrough and chassis increment
