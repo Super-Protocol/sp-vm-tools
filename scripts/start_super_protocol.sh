@@ -207,7 +207,7 @@ parse_and_download_release_files() {
             fi
         fi
 
-        s3cmd --access_key="$S3_ACCESS_KEY" --secret_key="$S3_SECRET_KEY" --host="$S3_ENDPOINT" --host-bucket="%(bucket)s.$S3_ENDPOINT" get "$s3_path" "$local_path"
+        s3cmd --access_key="$S3_ACCESS_KEY" --secret_key="$S3_SECRET_KEY" --host="$S3_ENDPOINT" --host-bucket="%(bucket)s.$S3_ENDPOINT" --force get "$s3_path" "$local_path"
 
         computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
         if [[ "$computed_sha256" != "$sha256" ]]; then
@@ -416,7 +416,7 @@ main() {
         GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
         GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
         GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
-        GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,straing=262144" # @TODO add only once?
+        GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,string=262144" # @TODO add only once?
         CHASSIS=$((CHASSIS + 1))
     done
 
@@ -458,6 +458,7 @@ main() {
     -vga none \
     -nodefaults \
     -serial stdio \
+    ${GPU_PASSTHROUGH} \
     "
     if [ -n "${PROVIDER_CONFIG}" ] && [ -d "${PROVIDER_CONFIG}" ]; then
         QEMU_COMMAND+=" -fsdev local,security_model=passthrough,id=fsdev0,path=${PROVIDER_CONFIG} \
