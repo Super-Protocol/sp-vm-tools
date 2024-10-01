@@ -279,8 +279,9 @@ check_params() {
     fi
     echo "• Used RAM for VM / total RAM on host: $VM_RAM GB / $TOTAL_RAM GB"
 
-    if [ ${#USED_GPUS[@]} -eq 0 ]; then
-        # If empty, fill it with AVAILABLE_GPUS
+    if [[ ${#USED_GPUS[@]} -eq 0 || "${USED_GPUS}" == "no" ]]; then
+        USED_GPUS=()
+    else
         USED_GPUS=${AVAILABLE_GPUS_ARRAY}
     fi
 
