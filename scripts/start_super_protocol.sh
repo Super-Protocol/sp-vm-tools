@@ -279,10 +279,10 @@ check_params() {
     fi
     echo "• Used RAM for VM / total RAM on host: $VM_RAM GB / $TOTAL_RAM GB"
 
-    if [[ ${#USED_GPUS[@]} -eq 0 || "${USED_GPUS}" == "no" ]]; then
+    if [[ " ${USED_GPUS[@]} " =~ " none " ]]; then
         USED_GPUS=()
-    else
-        USED_GPUS=${AVAILABLE_GPUS_ARRAY}
+    elif [[ ${#USED_GPUS[@]} -eq 0 ]]; then
+        USED_GPUS=(${AVAILABLE_GPUS_ARRAY[@]})
     fi
 
     declare -A UNIQUE_GPUS
@@ -300,10 +300,6 @@ check_params() {
     USED_GPUS=("${UNIQUE_GPU_LIST[@]}")
 
     for USER_GPU in "${USED_GPUS[@]}"; do
-        if [[ $USER_GPU == "no" ]]; then
-            continue
-        fi
-
         if [[ $AVAILABLE_GPUS == *"$USER_GPU"* ]]; then
             echo "GPU $USER_GPU is available."
         else
@@ -311,8 +307,8 @@ check_params() {
             exit 1
         fi
     done
-    echo "• Used GPUs for VM / available GPUs on host: ${USED_GPUS[@]} / $AVAILABLE_GPUS"
-
+    echo "• Used GPUs for VM / available GPUs on host: ${USED_GPUS[@]:-None} / $AVAILABLE_GPUS"
+    exit 0
     if [[ -z "$STATE_DISK_PATH" ]]; then
         STATE_DISK_PATH="$CACHE/state.qcow2"
     fi
