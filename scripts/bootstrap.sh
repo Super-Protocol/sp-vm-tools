@@ -3,7 +3,7 @@
 install_debs() {
   DEB_DIR=$1
   # Install dependencies
-  apt update && DEBIAN_FRONTEND=noninteractive apt install -y libslirp0
+  apt update && DEBIAN_FRONTEND=noninteractive apt install -y libslirp0 s3cmd
 
   # Install deb packages
   echo "Installing deb packages..."
