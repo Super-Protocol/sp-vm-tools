@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "",
   "main": "dist/index.js",
+  "bin": "dist/index.js",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -13,8 +14,8 @@
   },
   "scripts": {
     "dev": "ts-node src/index.ts",
-    "build:prepare": "tsc -p",
-    "build": "npm run build:prepare && pkg -o dist/spctl .",
+    "build:prepare": "tsc -p tsconfig.build.json",
+    "build": "npm run build:prepare && pkg -o dist/ca-initializer .",
     "build:win:x64": "npm run build -- --target win-x64",
     "build:win:arm64": "npm run build -- --target win-arm64",
     "build:linux:x64": "npm run build -- --target linux-x64",

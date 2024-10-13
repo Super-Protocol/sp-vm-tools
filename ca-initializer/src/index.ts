@@ -1,4 +1,4 @@
-import { ChallengeProviderSgx, PkiClient } from "@super-protocol/pki-client";
+import { ChallengeProviderUntrusted, PkiClient } from "@super-protocol/pki-client";
 import { StaticAttestationServiceClient } from "@super-protocol/pki-api-client";
 import * as fs from 'fs';
 import * as path from 'path';
@@ -10,11 +10,11 @@ const requestSecretFromVault = async (
     outputCertFolder: string
 ) => {
     try {
-        const challengeProvider = new ChallengeProviderSgx();
+        const challengeProvider = new ChallengeProviderUntrusted(Buffer.from('cccccc', 'hex'));
         const caBundle = fs.readFileSync(caBundlePath, 'utf-8');
 
         const attestationServiceClient = new StaticAttestationServiceClient(
-            caUrl,
+            caUrl + '/api/v1/pki',
             caBundle
         );
 
