@@ -25,7 +25,7 @@ const requestSecretFromVault = async (
 
         const certDomainGenerated = await pkiClient.generateSslCertificate([certDomain]);
 
-        fs.writeFileSync(path.join(outputCertFolder, certDomain + '.crt'), certDomainGenerated.caBundle, 'utf-8');
+        fs.writeFileSync(path.join(outputCertFolder, certDomain + '.crt'), certDomainGenerated.certPem, 'utf-8');
         fs.writeFileSync(path.join(outputCertFolder, certDomain + '.key'), certDomainGenerated.keyPair.privateKeyPem, 'utf-8');
 
         console.log(`Certificate ${certDomainGenerated} stored successfull to ${outputCertFolder}`);
