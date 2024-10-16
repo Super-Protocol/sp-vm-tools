@@ -36,7 +36,7 @@ usage() {
     echo "Options:"
     echo "  --cores <number>             Number of CPU cores (default: ${DEFAULT_CORES})"
     echo "  --mem <size>                 Amount of memory (default: ${DEFAULT_MEM})"
-    echo "  --gpu <gpu_id>               Specify GPU(s) (default: all available gpu, specify --gpu no to disable gpu passthrough)"
+    echo "  --gpu <gpu_id>               Specify GPU(s) (default: all available gpu, specify --gpu none to disable gpu passthrough)"
     echo "  --disk_path <path>           Path to disk image (default: <cache>/state_disk.qcow2)"
     echo "  --disk_size <size>           Size of disk (default: autodetermining, but no less than 512G)"
     echo "  --cache <path>               Cache directory (default: ${DEFAULT_CACHE})"
@@ -308,7 +308,7 @@ check_params() {
         fi
     done
     echo "• Used GPUs for VM / available GPUs on host: ${USED_GPUS[@]:-None} / $AVAILABLE_GPUS"
-    exit 0
+
     if [[ -z "$STATE_DISK_PATH" ]]; then
         STATE_DISK_PATH="$CACHE/state.qcow2"
     fi
