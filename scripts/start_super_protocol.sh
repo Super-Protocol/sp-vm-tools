@@ -393,7 +393,7 @@ main() {
 
     mkdir -p "${CACHE}"
     download_release "${RELEASE}" "${RELEASE_ASSET}" "${CACHE}" "${RELEASE_REPO}"
-    parse_and_download_release_files "${TARGET_DIR}/${ASSET_NAME}"
+    parse_and_download_release_files "${CACHE}/${RELEASE_ASSET}"
 
     # Prepare QEMU command with GPU passthrough and chassis increment
     GPU_PASSTHROUGH=""
