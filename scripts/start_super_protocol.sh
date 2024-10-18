@@ -85,7 +85,7 @@ DEBUG_MODE=${DEFAULT_DEBUG}
 RELEASE=""
 
 SSH_PORT=${DEFAULT_SSH_PORT}
-BASE_CID=$(get_next_available_id 3 guest-cid)
+BASE_CID=$(get_next_available_id 2 guest-cid)
 BASE_NIC=$(get_next_available_id 0 nic_id)
 
 BIOS_PATH=""
@@ -447,6 +447,7 @@ main() {
     -vga none \
     -nodefaults \
     -serial stdio \
+    -device vhost-vsock-pci,guest-cid=3 \
     ${GPU_PASSTHROUGH} \
     "
     if [ -n "${PROVIDER_CONFIG}" ] && [ -d "${PROVIDER_CONFIG}" ]; then
