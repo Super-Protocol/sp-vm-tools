@@ -83,6 +83,7 @@ PROVIDER_CONFIG=""
 MOUNT_CONFIG=${DEFAULT_MOUNT_CONFIG}
 DEBUG_MODE=${DEFAULT_DEBUG}
 RELEASE=""
+RELEASE_FILEPATH=""
 
 SSH_PORT=${DEFAULT_SSH_PORT}
 BASE_CID=$(get_next_available_id 2 guest-cid)
@@ -170,6 +171,7 @@ download_release() {
         echo "Download failed or the file is empty!"
         exit 1
     fi
+    RELEASE_FILEPATH="${TARGET_DIR}/${ASSET_NAME}"
 }
 
 parse_and_download_release_files() {
@@ -393,7 +395,7 @@ main() {
 
     mkdir -p "${CACHE}"
     download_release "${RELEASE}" "${RELEASE_ASSET}" "${CACHE}" "${RELEASE_REPO}"
-    parse_and_download_release_files "${CACHE}/${RELEASE_ASSET}"
+    parse_and_download_release_files ${RELEASE_FILEPATH}
 
     # Prepare QEMU command with GPU passthrough and chassis increment
     GPU_PASSTHROUGH=""
