@@ -464,11 +464,10 @@ main() {
 
     for GPU in "${USED_GPUS[@]}"; do
         if [[ "$IOMMUFD_SUPPORTED" == "true" ]]; then
-            GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
-            GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
-            GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
+            GPU_PASSTHROUGH+=" -M iommu=smmuv3"  # Add IOMMU support
+            GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS,hotplug=off"
+            GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS"
         else
-            # Старый вариант без iommufd
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS"
         fi
