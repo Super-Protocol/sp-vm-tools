@@ -3,7 +3,8 @@
 # Default values
 SCRIPT_DIR=$( cd "$( dirname "$0" )" && pwd )
 
-REQUIRED_PACKAGES=("s3cmd" "sp-qemu-tdx")
+REQUIRED_PACKAGES=("s3cmd")
+REQUIRED_TDX_PACKAGES=("sp-qemu-tdx")
 
 S3_ACCESS_KEY="jxekrow2wxmjps6pr2jv22hamtha"
 S3_SECRET_KEY="jztnpl532njcljtdolnpbszq66lgqmwmgkbh747342hwc72grkohi"
@@ -224,27 +225,30 @@ parse_and_download_release_files() {
 }
 
 check_packages() {
-    # Check packages only for TDX mode
-    if [[ "${VM_MODE}" == "tdx" ]]; then
-        if [[ "$EUID" -ne 0 ]]; then
-            echo "This script must be run as root. Please use sudo."
-            exit 1
+    if [[ "$EUID" -ne 0 ]]; then
+        echo "This script must be run as root. Please use sudo."
+        exit 1
+    fi
+
+    local missing=()
+    for package in "${REQUIRED_PACKAGES[@]}"; do
+        if ! dpkg -l | grep -q "^ii.*$package"; then
+            missing+=("$package")
         fi
+    done
 
-        local missing=()
-
-        for package in "${REQUIRED_PACKAGES[@]}"; do
+    if [[ "${VM_MODE}" == "tdx" ]]; then
+        for package in "${REQUIRED_TDX_PACKAGES[@]}"; do
             if ! dpkg -l | grep -q "^ii.*$package"; then
                 missing+=("$package")
             fi
         done
-        if [ ${#missing[@]} -gt 0 ]; then
-            echo "The following packages are missing: ${missing[*]}"
-            echo "Please install these packages before running the script."
-            exit 1
-        else
-            echo "All required packages are installed."
-        fi
+    fi
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "The following packages are missing: ${missing[*]}"
+        echo "Please install these packages before running the script."
+        exit 1
     fi
 }
 
