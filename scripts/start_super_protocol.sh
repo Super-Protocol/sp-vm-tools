@@ -334,7 +334,7 @@ check_params() {
 
     echo "• VM disk size / total available space on host: ${STATE_DISK_SIZE} Gb / ${MOUNT_SIZE_TOTAL} Gb"
 
-    echo "• Cache directory: ${echo "• Cache directory: ${CACHE}"
+    echo "• Cache directory: ${CACHE}"
 
     if [[ -z "${PROVIDER_CONFIG}" ]]; then
         echo "Error: <provider_config> option must be passed"
