@@ -458,6 +458,7 @@ main() {
         
     # Initialize machine parameters based on mode
     MACHINE_PARAMS=""
+    CPU_PARAMS="-cpu host"
     CC_PARAMS=""
     CC_SPECIFIC_PARAMS=""
 
@@ -480,7 +481,8 @@ main() {
             CC_PARAMS+=" -object sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1"
             ;;
         "untrusted")
-            MACHINE_PARAMS="q35"
+            MACHINE_PARAMS="q35,kernel_irqchip=split"
+            CPU_PARAMS="-cpu host,-kvm-steal-time,pmu=off"
             ;;
         *)
             echo "Error: Invalid mode '${VM_MODE}'. Must be 'untrusted', 'tdx', or 'sev'."
@@ -509,7 +511,7 @@ main() {
     -kernel ${KERNEL_PATH} \
     -smp cores=${VM_CPU} \
     -m ${VM_RAM}G \
-    -cpu host \
+    ${CPU_PARAMS} \
     -machine ${MACHINE_PARAMS} \
     ${CC_SPECIFIC_PARAMS} \
     ${NETWORK_SETTINGS} \
