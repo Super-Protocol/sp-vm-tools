@@ -224,24 +224,27 @@ parse_and_download_release_files() {
 }
 
 check_packages() {
-    if [[ "$EUID" -ne 0 ]]; then
-        echo "This script must be run as root. Please use sudo."
-        exit 1
-    fi
-
-    local missing=()
-
-    for package in "${REQUIRED_PACKAGES[@]}"; do
-        if ! dpkg -l | grep -q "^ii.*$package"; then
-            missing+=("$package")
+    # Check packages only for TDX mode
+    if [[ "${VM_MODE}" == "tdx" ]]; then
+        if [[ "$EUID" -ne 0 ]]; then
+            echo "This script must be run as root. Please use sudo."
+            exit 1
         fi
-    done
-    if [ ${#missing[@]} -gt 0 ]; then
-        echo "The following packages are missing: ${missing[*]}"
-        echo "Please install these packages before running the script."
-        exit 1
-    else
-        echo "All required packages are installed."
+
+        local missing=()
+
+        for package in "${REQUIRED_PACKAGES[@]}"; do
+            if ! dpkg -l | grep -q "^ii.*$package"; then
+                missing+=("$package")
+            fi
+        done
+        if [ ${#missing[@]} -gt 0 ]; then
+            echo "The following packages are missing: ${missing[*]}"
+            echo "Please install these packages before running the script."
+            exit 1
+        else
+            echo "All required packages are installed."
+        fi
     fi
 }
 
@@ -381,8 +384,8 @@ check_params() {
 }
 
 main() {
-    check_packages
     check_params
+    check_packages
 
     mkdir -p "${CACHE}"
     download_release "${RELEASE}" "${RELEASE_ASSET}" "${CACHE}" "${RELEASE_REPO}"
