@@ -164,26 +164,6 @@ find_qemu_path() {
     exit 1
 }
 
-get_qemu_version() {
-    local version=$($QEMU_PATH --version | head -n1 | awk '{print $4}' | cut -d'.' -f1-2)
-    echo "$version"
-}
-
-check_iommufd_support() {
-    local version=$(get_qemu_version)
-    if awk -v ver="$version" 'BEGIN {exit !(ver >= 8.1)}'; then
-        echo "true"
-    else
-        echo "false"
-    fi
-}
-
-check_qemu() {
-    local qemu_version=$(get_qemu_version)
-    echo "Found QEMU version: $qemu_version"
-    echo "IOMMUFD support: $(check_iommufd_support)"
-}
-
 download_release() {
     RELEASE_NAME=$1
     ASSET_NAME=$2
@@ -451,7 +431,6 @@ main() {
 
     # Find QEMU path before using it
     find_qemu_path
-    check_qemu
 
     mkdir -p "${CACHE}"
     download_release "${RELEASE}" "${RELEASE_ASSET}" "${CACHE}" "${RELEASE_REPO}"
@@ -460,21 +439,23 @@ main() {
     # Prepare QEMU command with GPU passthrough and chassis increment
     GPU_PASSTHROUGH=""
     CHASSIS=1
-    IOMMUFD_SUPPORTED=$(check_iommufd_support)
 
+    # Set up GPU passthrough based on VM mode
     for GPU in "${USED_GPUS[@]}"; do
-        if [[ "$IOMMUFD_SUPPORTED" == "true" ]]; then
-            GPU_PASSTHROUGH+=" -M iommu=smmuv3"  # Add IOMMU support
-            GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS,hotplug=off"
-            GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS"
+        if [[ "${VM_MODE}" == "tdx" ]]; then
+            # Original TDX configuration
+            GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
+            GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
+            GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
         else
+            # Configuration for untrusted and sev modes
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS"
         fi
         GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,string=262144"
         CHASSIS=$((CHASSIS + 1))
     done
-    
+        
     # Initialize machine parameters based on mode
     MACHINE_PARAMS=""
     CC_PARAMS=""
