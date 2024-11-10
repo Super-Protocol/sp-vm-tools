@@ -23,7 +23,7 @@ DEFAULT_SSH_PORT=2222
 LOG_FILE=""
 DEFAULT_MAC_PREFIX="52:54:00:12:34"
 DEFAULT_MAC_SUFFIX="56"
-QEMU_PATH="/usr/local/bin/qemu-system-x86_64"
+QEMU_PATH=""
 DEFAULT_DEBUG=false
 
 TDX_SUPPORT=$(lscpu | grep -i tdx)
@@ -124,6 +124,44 @@ parse_args() {
 
     # Set default mode if not specified
     VM_MODE=${VM_MODE:-$DEFAULT_MODE}
+}
+
+find_qemu_path() {
+    # List of common QEMU binary locations
+    local qemu_locations=(
+        "/usr/bin/qemu-system-x86_64"
+        "/usr/local/bin/qemu-system-x86_64"
+        "/usr/sbin/qemu-system-x86_64"
+        "/usr/local/sbin/qemu-system-x86_64"
+    )
+
+    # First try using which
+    QEMU_PATH=$(which qemu-system-x86_64 2>/dev/null)
+    
+    if [[ -x "$QEMU_PATH" ]]; then
+        echo "Found QEMU at: $QEMU_PATH"
+        return 0
+    fi
+
+    # If which failed, check common locations
+    for location in "${qemu_locations[@]}"; do
+        if [[ -x "$location" ]]; then
+            QEMU_PATH="$location"
+            echo "Found QEMU at: $QEMU_PATH"
+            return 0
+        fi
+    done
+
+    # If still not found, try finding it anywhere in the system
+    QEMU_PATH=$(find /usr -type f -executable -name "qemu-system-x86_64" 2>/dev/null | head -n 1)
+    
+    if [[ -n "$QEMU_PATH" ]]; then
+        echo "Found QEMU at: $QEMU_PATH"
+        return 0
+    fi
+
+    echo "Error: Could not find qemu-system-x86_64 executable"
+    exit 1
 }
 
 download_release() {
@@ -390,6 +428,9 @@ check_params() {
 main() {
     check_params
     check_packages
+
+    # Find QEMU path before using it
+    find_qemu_path
 
     mkdir -p "${CACHE}"
     download_release "${RELEASE}" "${RELEASE_ASSET}" "${CACHE}" "${RELEASE_REPO}"
