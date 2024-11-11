@@ -152,14 +152,6 @@ find_qemu_path() {
         fi
     done
 
-    # If still not found, try finding it anywhere in the system
-    QEMU_PATH=$(find /usr -type f -executable -name "qemu-system-x86_64" 2>/dev/null | head -n 1)
-    
-    if [[ -n "$QEMU_PATH" ]]; then
-        echo "Found QEMU at: $QEMU_PATH"
-        return 0
-    fi
-
     echo "Error: Could not find qemu-system-x86_64 executable"
     exit 1
 }
