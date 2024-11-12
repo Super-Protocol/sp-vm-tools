@@ -3,7 +3,8 @@
 # Default values
 SCRIPT_DIR=$( cd "$( dirname "$0" )" && pwd )
 
-REQUIRED_PACKAGES=("s3cmd" "sp-qemu-tdx")
+REQUIRED_PACKAGES=("s3cmd")
+REQUIRED_TDX_PACKAGES=("sp-qemu-tdx")
 
 S3_ACCESS_KEY="jxekrow2wxmjps6pr2jv22hamtha"
 S3_SECRET_KEY="jztnpl532njcljtdolnpbszq66lgqmwmgkbh747342hwc72grkohi"
@@ -22,32 +23,14 @@ DEFAULT_SSH_PORT=2222
 LOG_FILE=""
 DEFAULT_MAC_PREFIX="52:54:00:12:34"
 DEFAULT_MAC_SUFFIX="56"
-QEMU_PATH="/usr/local/bin/qemu-system-x86_64"
+QEMU_PATH=""
 DEFAULT_DEBUG=false
 
 TDX_SUPPORT=$(lscpu | grep -i tdx)
 SEV_SUPPORT=$(lscpu | grep -i sev)
 
-
-# Function to display usage
-usage() {
-    echo "Usage: $0 [OPTIONS]"
-    echo ""
-    echo "Options:"
-    echo "  --cores <number>             Number of CPU cores (default: ${DEFAULT_CORES})"
-    echo "  --mem <size>                 Amount of memory (default: ${DEFAULT_MEM})"
-    echo "  --gpu <gpu_id>               Specify GPU(s) (default: all available gpu, specify --gpu none to disable gpu passthrough)"
-    echo "  --disk_path <path>           Path to disk image (default: <cache>/state_disk.qcow2)"
-    echo "  --disk_size <size>           Size of disk (default: autodetermining, but no less than 512G)"
-    echo "  --cache <path>               Cache directory (default: ${DEFAULT_CACHE})"
-    echo "  --provider_config <file>     Provider configuration file (default: no)"
-    echo "  --mac_address <address>      MAC address (default: ${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX})"
-    echo "  --ssh_port <port>            SSH port (default: ${DEFAULT_SSH_PORT})"
-    echo "  --log_file <file>            Log file (default: no)"
-    echo "  --debug <true|false>         Enable debug mode (default: ${DEFAULT_DEBUG})"
-    echo "  --release <name>             Release name (default: latest)"
-    echo ""
-}
+# Default mode
+DEFAULT_MODE="untrusted"  # Can be "untrusted", "tdx", or "sev"
 
 # Function to get the next available guest-cid and nic_id numbers
 get_next_available_id() {
@@ -69,6 +52,27 @@ get_next_available_id() {
     done
     echo "No available ID found for $check_type"
     exit 1
+}
+
+# Function to display usage
+usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --cores <number>             Number of CPU cores (default: ${DEFAULT_CORES})"
+    echo "  --mem <size>                 Amount of memory (default: ${DEFAULT_MEM})"
+    echo "  --gpu <gpu_id>               Specify GPU(s) (default: all available gpu, specify --gpu none to disable gpu passthrough)"
+    echo "  --disk_path <path>           Path to disk image (default: <cache>/state_disk.qcow2)"
+    echo "  --disk_size <size>           Size of disk (default: autodetermining, but no less than 512G)"
+    echo "  --cache <path>               Cache directory (default: ${DEFAULT_CACHE})"
+    echo "  --provider_config <file>     Provider configuration file (default: no)"
+    echo "  --mac_address <address>      MAC address (default: ${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX})"
+    echo "  --ssh_port <port>            SSH port (default: ${DEFAULT_SSH_PORT})"
+    echo "  --log_file <file>            Log file (default: no)"
+    echo "  --debug <true|false>         Enable debug mode (default: ${DEFAULT_DEBUG})"
+    echo "  --release <name>             Release name (default: latest)"
+    echo "  --mode <mode>                VM mode: untrusted, tdx, sev (default: ${DEFAULT_MODE})"
+    echo ""
 }
 
 # Initialize parameters
@@ -94,7 +98,6 @@ ROOTFS_PATH=""
 ROOTFS_HASH_PATH=""
 KERNEL_PATH=""
 
-
 parse_args() {
     # Parse arguments
     while [[ "$#" -gt 0 ]]; do
@@ -112,11 +115,45 @@ parse_args() {
             --log_file) LOG_FILE=$2; shift ;;
             --debug) DEBUG_MODE=$2; shift ;;
             --release) RELEASE=$2; shift ;;
+            --mode) VM_MODE=$2; shift ;;
             --help) usage; exit 0;;
             *) echo "Unknown parameter: $1"; usage ; exit 1 ;;
         esac
         shift
     done
+
+    # Set default mode if not specified
+    VM_MODE=${VM_MODE:-$DEFAULT_MODE}
+}
+
+find_qemu_path() {
+    # List of common QEMU binary locations
+    local qemu_locations=(
+        "/usr/bin/qemu-system-x86_64"
+        "/usr/local/bin/qemu-system-x86_64"
+        "/usr/sbin/qemu-system-x86_64"
+        "/usr/local/sbin/qemu-system-x86_64"
+    )
+
+    # First try using which
+    QEMU_PATH=$(which qemu-system-x86_64 2>/dev/null)
+    
+    if [[ -x "$QEMU_PATH" ]]; then
+        echo "Found QEMU at: $QEMU_PATH"
+        return 0
+    fi
+
+    # If which failed, check common locations
+    for location in "${qemu_locations[@]}"; do
+        if [[ -x "$location" ]]; then
+            QEMU_PATH="$location"
+            echo "Found QEMU at: $QEMU_PATH"
+            return 0
+        fi
+    done
+
+    echo "Error: Could not find qemu-system-x86_64 executable"
+    exit 1
 }
 
 download_release() {
@@ -217,22 +254,6 @@ parse_and_download_release_files() {
     done < <(jq -c 'to_entries[]' "$RELEASE_JSON")
 }
 
-# Function to generate a unique MAC address
-generate_mac_address() {
-    local mac_prefix=$1
-    local mac_suffix=$2
-    for (( i=0; i<100; i++ )); do
-        current_mac="$mac_prefix:$mac_suffix"
-        if ! ip link show | grep -q "$current_mac"; then
-            echo "$current_mac"
-            return
-        fi
-        mac_suffix=$(printf '%x\n' $(( 0x$mac_suffix + 1 )))  # Increment the MAC suffix
-    done
-    echo "Unable to find an available MAC address."
-    exit 1
-}
-
 check_packages() {
     if [[ "$EUID" -ne 0 ]]; then
         echo "This script must be run as root. Please use sudo."
@@ -240,18 +261,24 @@ check_packages() {
     fi
 
     local missing=()
-
     for package in "${REQUIRED_PACKAGES[@]}"; do
         if ! dpkg -l | grep -q "^ii.*$package"; then
             missing+=("$package")
         fi
     done
+
+    if [[ "${VM_MODE}" == "tdx" ]]; then
+        for package in "${REQUIRED_TDX_PACKAGES[@]}"; do
+            if ! dpkg -l | grep -q "^ii.*$package"; then
+                missing+=("$package")
+            fi
+        done
+    fi
+
     if [ ${#missing[@]} -gt 0 ]; then
         echo "The following packages are missing: ${missing[*]}"
         echo "Please install these packages before running the script."
         exit 1
-    else
-        echo "All required packages are installed."
     fi
 }
 
@@ -387,11 +414,15 @@ check_params() {
         fi
     fi
     echo "• Superprotocol release: ${RELEASE:-latest}"
+    echo "• VM Mode: ${VM_MODE}"
 }
 
 main() {
-    check_packages
     check_params
+    check_packages
+
+    # Find QEMU path before using it
+    find_qemu_path
 
     mkdir -p "${CACHE}"
     download_release "${RELEASE}" "${RELEASE_ASSET}" "${CACHE}" "${RELEASE_REPO}"
@@ -400,36 +431,68 @@ main() {
     # Prepare QEMU command with GPU passthrough and chassis increment
     GPU_PASSTHROUGH=""
     CHASSIS=1
+
+    # Set up GPU passthrough based on VM mode
     for GPU in "${USED_GPUS[@]}"; do
-        GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
-        GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
-        GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
-        GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,string=262144" # @TODO add only once?
+        if [[ "${VM_MODE}" == "tdx" ]]; then
+            # Original TDX configuration
+            GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
+            GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
+            GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
+        else
+            # Configuration for untrusted and sev modes
+            GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
+            GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS"
+        fi
+        GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,string=262144"
         CHASSIS=$((CHASSIS + 1))
     done
-
+        
+    # Initialize machine parameters based on mode
+    MACHINE_PARAMS=""
+    CPU_PARAMS="-cpu host"
     CC_PARAMS=""
     CC_SPECIFIC_PARAMS=""
-    # Check for TDX and SEV support and append relevant options
-    if [[ $TDX_SUPPORT ]]; then
-        CC_PARAMS+=" -object memory-backend-ram,id=mem0,size=${VM_RAM}G "
-        CC_PARAMS+=" -machine q35,kernel-irqchip=split,confidential-guest-support=tdx,memory-backend=mem0"
-        CC_SPECIFIC_PARAMS=" -object '{\"qom-type\":\"tdx-guest\",\"id\":\"tdx\",\"quote-generation-socket\":{\"type\":\"vsock\",\"cid\":\"${BASE_CID}\",\"port\":\"4050\"}}'"
-    elif [[ $SEV_SUPPORT ]]; then
-        CC_PARAMS+=" -machine q35,kernel_irqchip=split,confidential-guest-support=sev0" # @TODO check with docs, do we need memory-backend?
-        CC_PARAMS+=" -object sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1"
-    fi
+
+    case ${VM_MODE} in
+        "tdx")
+            if [[ ! $TDX_SUPPORT ]]; then
+                echo "Error: TDX is not supported on this system"
+                exit 1
+            fi
+            CC_PARAMS+=" -object memory-backend-ram,id=mem0,size=${VM_RAM}G "
+            MACHINE_PARAMS="q35,kernel-irqchip=split,confidential-guest-support=tdx,memory-backend=mem0"
+            CC_SPECIFIC_PARAMS=" -object '{\"qom-type\":\"tdx-guest\",\"id\":\"tdx\",\"quote-generation-socket\":{\"type\":\"vsock\",\"cid\":\"${BASE_CID}\",\"port\":\"4050\"}}'"
+            ;;
+        "sev")
+            if [[ ! $SEV_SUPPORT ]]; then
+                echo "Error: SEV is not supported on this system"
+                exit 1
+            fi
+            MACHINE_PARAMS="q35,kernel_irqchip=split,confidential-guest-support=sev0"
+            CC_PARAMS+=" -object sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1"
+            ;;
+        "untrusted")
+            MACHINE_PARAMS="q35,kernel_irqchip=split"
+            CPU_PARAMS="-cpu host,-kvm-steal-time,pmu=off"
+            ;;
+        *)
+            echo "Error: Invalid mode '${VM_MODE}'. Must be 'untrusted', 'tdx', or 'sev'."
+            exit 1
+            ;;
+    esac
 
     NETWORK_SETTINGS=" -device virtio-net-pci,netdev=nic_id$BASE_NIC,mac=$MAC_ADDRESS"
     NETWORK_SETTINGS+=" -netdev user,id=nic_id$BASE_NIC"
     DEBUG_PARAMS=""
     KERNEL_CMD_LINE=""
     ROOT_HASH=$(grep 'Root hash' "${ROOTFS_HASH_PATH}" | awk '{print $3}')
+    
     if [[ ${DEBUG_MODE} == true ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
         KERNEL_CMD_LINE="root=/dev/vda1 console=ttyS0 clearcpuid=mtrr systemd.log_level=trace systemd.log_target=log rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} sp-debug=true"
     else
-        KERNEL_CMD_LINE="root=/dev/vda1 clearcpuid=mtrrrootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}"
+        KERNEL_CMD_LINE="root=/dev/vda1 clearcpuid=mtrr rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}"
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
@@ -440,7 +503,8 @@ main() {
     -kernel ${KERNEL_PATH} \
     -smp cores=${VM_CPU} \
     -m ${VM_RAM}G \
-    -cpu host \
+    ${CPU_PARAMS} \
+    -machine ${MACHINE_PARAMS} \
     ${CC_SPECIFIC_PARAMS} \
     ${NETWORK_SETTINGS} \
     -nographic \
@@ -452,6 +516,7 @@ main() {
     -device vhost-vsock-pci,guest-cid=3 \
     ${GPU_PASSTHROUGH} \
     "
+
     if [ -n "${PROVIDER_CONFIG}" ] && [ -d "${PROVIDER_CONFIG}" ]; then
         QEMU_COMMAND+=" -fsdev local,security_model=passthrough,id=fsdev0,path=${PROVIDER_CONFIG} \
                     -device virtio-9p-pci,fsdev=fsdev0,mount_tag=sharedfolder"
@@ -468,7 +533,6 @@ main() {
     # Output each argument on a new line
     echo -e "$ARGS_SPLIT"
 
-    #sleep 5
     eval $QEMU_COMMAND
 }
 
