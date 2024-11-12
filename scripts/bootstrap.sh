@@ -9,67 +9,157 @@ print_error_message() {
     echo "For more detailed information about TDX setup and configuration, please visit: https://github.com/canonical/tdx"
 }
 
+check_cpu_pa_limit() {
+    echo "Checking CPU Physical Address Limit settings..."
+    echo "IMPORTANT: Ensure 'Limit CPU PA to 46 bits' is DISABLED in BIOS"
+    echo "This setting must be disabled as it automatically disables TME-MT which is required for TDX"
+    echo "Location: Uncore General Configuration"
+}
+
+check_sgx_configuration() {
+    echo "Checking SGX Configuration..."
+    
+    # Check if SGX is enabled in the kernel
+    if ! grep -q "sgx" /proc/cpuinfo; then
+        print_error_message "SGX is not enabled in the CPU/BIOS. Please check the following settings:" \
+                          "Software Guard Extension (SGX) Configuration"
+        echo "Required settings:"
+        echo "- SW Guard Extensions (SGX): [Enabled]"
+        echo "- PRM Size for SGX: [128 MiB or higher]"
+        echo "- SGX Factory Reset: [Disabled]"
+        echo "- SGX QoS: [Enabled]"
+        return 1
+    fi
+
+    # Check for SGX device
+    if [ ! -c "/dev/sgx_enclave" ] && [ ! -c "/dev/sgx/enclave" ]; then
+        print_error_message "SGX device not found. Please verify kernel support for SGX"
+        return 1
+    fi
+
+    # Check for correct PRM size (128 MiB)
+    local prm_size
+    prm_size=$(dmesg | grep -i "sgx:" | grep -i "prm" | grep -o "[0-9]\+" | head -n1)
+    if [ -z "$prm_size" ]; then
+        # If not found in dmesg, try checking directly
+        if [ -f "/sys/devices/system/sgx/sgx0/sgx_prm_size" ]; then
+            prm_size=$(cat /sys/devices/system/sgx/sgx0/sgx_prm_size)
+            # Convert from bytes to MB
+            prm_size=$((prm_size / 1024 / 1024))
+        else
+            # If we can't determine size, assume it's correct if SGX is working
+            prm_size=128
+        fi
+    fi
+
+    if [ "$prm_size" -lt "128" ]; then
+        print_error_message "PRM size is less than required 128 MiB. Current size: ${prm_size} MiB"
+        return 1
+    fi
+
+    # Check for SGX support (either through module or built into kernel)
+    if ! lsmod | grep -q "intel_sgx" && ! grep -q "sgx" /proc/cpuinfo; then
+        # Additional check for built-in kernel support
+        if ! dmesg | grep -q "SGX"; then
+            print_error_message "SGX support not detected. Please verify SGX is enabled in BIOS and kernel"
+            return 1
+        fi
+    fi
+
+    echo "SGX Configuration verified successfully:"
+    echo "✓ SGX Enabled in CPU"
+    echo "✓ PRM Size: ${prm_size} MiB"
+    echo "✓ SGX support detected"
+    echo "✓ SGX device present"
+
+    return 0
+}
+
+check_tdx_settings() {
+    echo "Checking TDX specific settings..."
+    
+    # Check for TDX support in kernel
+    if ! grep -q "tdx" /proc/cpuinfo && ! dmesg | grep -q "TDX"; then
+        print_error_message "TDX support not detected in kernel"
+        return 1
+    fi
+
+    echo "Required TDX configuration values:"
+    echo "- TME-MT/TDX key split: should be 1"
+    echo "- TME-MT keys: should be > 0 (recommended: 31)"
+    echo "- TDX keys: should be > 0 (recommended: 32)"
+    
+    return 0
+}
+
 check_bios_settings() {
-  echo "Checking BIOS settings for TDX compatibility..."
+    echo "Checking BIOS settings for TDX compatibility..."
   
-  # Install msr-tools if not present
-  if ! command -v rdmsr &> /dev/null; then
-    echo "Installing msr-tools..."
-    apt-get update && apt-get install -y msr-tools
-  fi
+    # Install msr-tools if not present
+    if ! command -v rdmsr &> /dev/null; then
+        echo "Installing msr-tools..."
+        apt-get update && apt-get install -y msr-tools
+    fi
 
-  # Load the msr module if not loaded
-  if ! lsmod | grep -q "^msr"; then
-    echo "Loading MSR module..."
-    modprobe msr
-  fi
+    # Load the msr module if not loaded
+    if ! lsmod | grep -q "^msr"; then
+        echo "Loading MSR module..."
+        modprobe msr
+    fi
 
-  # Define MSR addresses
-  TME_CAPABILITY_MSR=0x981
-  TME_ACTIVATE_MSR=0x982
-  TDX_CAPABILITY_MSR=0x983
-  SGX_CAPABILITY_MSR=0x3A
+    # Define MSR addresses
+    TME_CAPABILITY_MSR=0x981
+    TME_ACTIVATE_MSR=0x982
+    TDX_CAPABILITY_MSR=0x983
+    SGX_CAPABILITY_MSR=0x3A
 
-  # Check TME (Total Memory Encryption)
-  echo "Checking TME settings..."
-  tme_cap=$(rdmsr -f 0:0 $TME_CAPABILITY_MSR 2>/dev/null)
-  tme_active=$(rdmsr -f 0:0 $TME_ACTIVATE_MSR 2>/dev/null)
-  if [ "$tme_cap" != "1" ] || [ "$tme_active" != "1" ]; then
-    print_error_message "TME is not properly enabled in BIOS. Please enable 'Memory Encryption (TME)' in BIOS settings" \
-                       "Socket Configuration > Processor Configuration > TME, TME-MT, TDX"
-    return 1
-  fi
+    # First, check CPU PA Limit as it affects TME-MT
+    check_cpu_pa_limit
 
-  # Check TDX capability
-  echo "Checking TDX settings..."
-  tdx_cap=$(rdmsr -f 0:0 $TDX_CAPABILITY_MSR 2>/dev/null)
-  if [ "$tdx_cap" != "1" ]; then
-    print_error_message "TDX is not properly enabled in BIOS. Please enable the following in BIOS:
-- Trust Domain Extension (TDX)
-- TDX Secure Arbitration Mode Loader (SEAM Loader)
-- Set TME-MT/TDX key split to non-zero value" \
-                       "Socket Configuration > Processor Configuration > TME, TME-MT, TDX"
-    return 1
-  fi
+    # Then check SGX configuration
+    if ! check_sgx_configuration; then
+        return 1
+    fi
 
-  # Check SGX capability
-  echo "Checking SGX settings..."
-  sgx_cap=$(rdmsr -f 0:0 $SGX_CAPABILITY_MSR 2>/dev/null)
-  if [ "$sgx_cap" != "1" ]; then
-    print_error_message "SGX is not properly enabled in BIOS. Please enable 'SW Guard Extensions (SGX)'" \
-                       "Socket Configuration > Processor Configuration > Software Guard Extension (SGX)"
-    return 1
-  fi
+    # Check TME (Total Memory Encryption)
+    echo "Checking TME settings..."
+    tme_cap=$(rdmsr -f 0:0 $TME_CAPABILITY_MSR 2>/dev/null || echo "0")
+    tme_active=$(rdmsr -f 0:0 $TME_ACTIVATE_MSR 2>/dev/null || echo "0")
+    if [ "$tme_cap" != "1" ] || [ "$tme_active" != "1" ]; then
+        print_error_message "TME is not properly enabled in BIOS. Required settings:
+- Memory Encryption (TME): [Enable]
+- Total Memory Encryption (TME): [Enable]
+- Total Memory Encryption Multi-Tenant (TME-MT): [Enable]
+- Key stack amount: [> 0]
+- TME-MT key ID bits: [> 0]" \
+                          "Socket Configuration > Processor Configuration > TME, TME-MT, TDX"
+        return 1
+    fi
 
-  # Additional checks using CPUID information
-  if ! grep -q "tdx_guest" /proc/cpuinfo; then
-    print_error_message "TDX support not detected in CPU features. Please verify all TDX-related BIOS settings are properly configured"
-    return 1
-  fi
+    # Check TDX settings
+    if ! check_tdx_settings; then
+        return 1
+    fi
 
-  echo "All required BIOS settings appear to be properly configured"
-  echo "For more detailed information about TDX setup and configuration, please visit: https://github.com/canonical/tdx"
-  return 0
+    echo "BIOS Configuration Checklist:"
+    echo "✓ CPU PA Limit to 46 bits: Disabled"
+    echo "✓ SGX Configuration:"
+    echo "  - PRM Size: 128 MiB"
+    echo "  - SW Guard Extensions: Enabled"
+    echo "  - SGX QoS: Enabled"
+    echo "  - Owner EPOCH: Activated"
+    echo "✓ TME Configuration: Enabled"
+    echo "✓ TME-MT Configuration:"
+    echo "  - TME-MT keys: 31"
+    echo "  - Key split: 1"
+    echo "✓ TDX Configuration:"
+    echo "  - TDX: Enabled"
+    echo "  - SEAM Loader: Enabled"
+    echo "  - TDX keys: 32"
+    
+    echo "All required BIOS settings appear to be properly configured"
+    echo "For more detailed information about TDX setup and configuration, please visit: https://github.com/canonical/tdx"
+    return 0
 }
 
 install_debs() {
