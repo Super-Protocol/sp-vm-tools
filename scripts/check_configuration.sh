@@ -88,4 +88,4 @@ if command -v smartctl &> /dev/null; then
             sudo smartctl -i /dev/$disk 2>/dev/null | grep -E "Device Model|User Capacity|Rotation Rate|Form Factor|Transport protocol" | sed 's/^/      /'
         fi
     done
-f
+fi
