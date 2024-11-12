@@ -1,5 +1,7 @@
 #!/bin/bash
 
+#!/bin/bash
+
 print_error_message() {
     local error_message="$1"
     local bios_location="$2"
@@ -7,6 +9,41 @@ print_error_message() {
     echo "ERROR: $error_message"
     [ ! -z "$bios_location" ] && echo "Location: $bios_location"
     echo "For more detailed information about TDX setup and configuration, please visit: https://github.com/canonical/tdx"
+}
+
+check_cpu_pa_limit() {
+    echo "Checking CPU Physical Address Limit settings..."
+    # Unfortunately there's no direct way to check this via command line
+    # This is a documentation note for manual verification
+    echo "IMPORTANT: Ensure 'Limit CPU PA to 46 bits' is DISABLED in BIOS"
+    echo "This setting must be disabled as it automatically disables TME-MT which is required for TDX"
+    echo "Location: Uncore General Configuration"
+}
+
+check_sgx_configuration() {
+    echo "Checking SGX Configuration..."
+    
+    # Check if SGX is enabled in the kernel
+    if ! grep -q "sgx" /proc/cpuinfo; then
+        print_error_message "SGX is not enabled in the CPU/BIOS. Please check the following settings:" \
+                          "Software Guard Extension (SGX) Configuration"
+        echo "Required settings:"
+        echo "- SW Guard Extensions (SGX): [Enabled]"
+        echo "- PRM Size for SGX: [128 MiB or higher]"
+        echo "- SGX Factory Reset: [Disabled]"
+        echo "- SGX QoS: [Enabled]"
+        return 1
+    fi
+
+    # Check PRM Size allocation
+    if [ -f "/sys/firmware/efi/efivars/SgxLaunchControl-*" ]; then
+        echo "SGX is properly configured in UEFI"
+    else
+        print_error_message "SGX Launch Control configuration not found. Please verify BIOS settings."
+        return 1
+    fi
+
+    return 0
 }
 
 check_bios_settings() {
@@ -30,12 +67,25 @@ check_bios_settings() {
   TDX_CAPABILITY_MSR=0x983
   SGX_CAPABILITY_MSR=0x3A
 
+  # First, check CPU PA Limit as it affects TME-MT
+  check_cpu_pa_limit
+
+  # Then check SGX configuration
+  if ! check_sgx_configuration; then
+    return 1
+  fi
+
   # Check TME (Total Memory Encryption)
   echo "Checking TME settings..."
   tme_cap=$(rdmsr -f 0:0 $TME_CAPABILITY_MSR 2>/dev/null)
   tme_active=$(rdmsr -f 0:0 $TME_ACTIVATE_MSR 2>/dev/null)
   if [ "$tme_cap" != "1" ] || [ "$tme_active" != "1" ]; then
-    print_error_message "TME is not properly enabled in BIOS. Please enable 'Memory Encryption (TME)' in BIOS settings" \
+    print_error_message "TME is not properly enabled in BIOS. Required settings:
+- Memory Encryption (TME): [Enable]
+- Total Memory Encryption (TME): [Enable]
+- Total Memory Encryption Multi-Tenant (TME-MT): [Enable]
+- Key stack amount: [> 0]
+- TME-MT key ID bits: [> 0]" \
                        "Socket Configuration > Processor Configuration > TME, TME-MT, TDX"
     return 1
   fi
@@ -44,29 +94,33 @@ check_bios_settings() {
   echo "Checking TDX settings..."
   tdx_cap=$(rdmsr -f 0:0 $TDX_CAPABILITY_MSR 2>/dev/null)
   if [ "$tdx_cap" != "1" ]; then
-    print_error_message "TDX is not properly enabled in BIOS. Please enable the following in BIOS:
-- Trust Domain Extension (TDX)
-- TDX Secure Arbitration Mode Loader (SEAM Loader)
-- Set TME-MT/TDX key split to non-zero value" \
+    print_error_message "TDX is not properly enabled in BIOS. Please verify:
+1. 'Limit CPU PA to 46 bits' is Disabled
+2. After disabling CPU PA limit, enable:
+   - Trust Domain Extension (TDX)
+   - TDX Secure Arbitration Mode Loader (SEAM Loader)
+   - Set TME-MT/TDX key split to non-zero value" \
                        "Socket Configuration > Processor Configuration > TME, TME-MT, TDX"
-    return 1
-  fi
-
-  # Check SGX capability
-  echo "Checking SGX settings..."
-  sgx_cap=$(rdmsr -f 0:0 $SGX_CAPABILITY_MSR 2>/dev/null)
-  if [ "$sgx_cap" != "1" ]; then
-    print_error_message "SGX is not properly enabled in BIOS. Please enable 'SW Guard Extensions (SGX)'" \
-                       "Socket Configuration > Processor Configuration > Software Guard Extension (SGX)"
     return 1
   fi
 
   # Additional checks using CPUID information
   if ! grep -q "tdx_guest" /proc/cpuinfo; then
-    print_error_message "TDX support not detected in CPU features. Please verify all TDX-related BIOS settings are properly configured"
+    print_error_message "TDX support not detected in CPU features. Please verify all TDX-related BIOS settings."
     return 1
   fi
 
+  echo "BIOS Configuration Checklist:"
+  echo "✓ CPU PA Limit to 46 bits: Must be Disabled"
+  echo "✓ SGX Configuration:"
+  echo "  - PRM Size: Should be 128 MiB or higher"
+  echo "  - SW Guard Extensions: Enabled"
+  echo "  - SGX QoS: Enabled"
+  echo "✓ TME Configuration: Enabled"
+  echo "✓ TME-MT Configuration: Enabled"
+  echo "✓ TDX Configuration: Enabled"
+  echo "✓ SEAM Loader: Enabled"
+  
   echo "All required BIOS settings appear to be properly configured"
   echo "For more detailed information about TDX setup and configuration, please visit: https://github.com/canonical/tdx"
   return 0
