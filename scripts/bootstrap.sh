@@ -1,5 +1,77 @@
 #!/bin/bash
 
+print_error_message() {
+    local error_message="$1"
+    local bios_location="$2"
+    
+    echo "ERROR: $error_message"
+    [ ! -z "$bios_location" ] && echo "Location: $bios_location"
+    echo "For more detailed information about TDX setup and configuration, please visit: https://github.com/canonical/tdx"
+}
+
+check_bios_settings() {
+  echo "Checking BIOS settings for TDX compatibility..."
+  
+  # Install msr-tools if not present
+  if ! command -v rdmsr &> /dev/null; then
+    echo "Installing msr-tools..."
+    apt-get update && apt-get install -y msr-tools
+  fi
+
+  # Load the msr module if not loaded
+  if ! lsmod | grep -q "^msr"; then
+    echo "Loading MSR module..."
+    modprobe msr
+  fi
+
+  # Define MSR addresses
+  TME_CAPABILITY_MSR=0x981
+  TME_ACTIVATE_MSR=0x982
+  TDX_CAPABILITY_MSR=0x983
+  SGX_CAPABILITY_MSR=0x3A
+
+  # Check TME (Total Memory Encryption)
+  echo "Checking TME settings..."
+  tme_cap=$(rdmsr -f 0:0 $TME_CAPABILITY_MSR 2>/dev/null)
+  tme_active=$(rdmsr -f 0:0 $TME_ACTIVATE_MSR 2>/dev/null)
+  if [ "$tme_cap" != "1" ] || [ "$tme_active" != "1" ]; then
+    print_error_message "TME is not properly enabled in BIOS. Please enable 'Memory Encryption (TME)' in BIOS settings" \
+                       "Socket Configuration > Processor Configuration > TME, TME-MT, TDX"
+    return 1
+  fi
+
+  # Check TDX capability
+  echo "Checking TDX settings..."
+  tdx_cap=$(rdmsr -f 0:0 $TDX_CAPABILITY_MSR 2>/dev/null)
+  if [ "$tdx_cap" != "1" ]; then
+    print_error_message "TDX is not properly enabled in BIOS. Please enable the following in BIOS:
+- Trust Domain Extension (TDX)
+- TDX Secure Arbitration Mode Loader (SEAM Loader)
+- Set TME-MT/TDX key split to non-zero value" \
+                       "Socket Configuration > Processor Configuration > TME, TME-MT, TDX"
+    return 1
+  fi
+
+  # Check SGX capability
+  echo "Checking SGX settings..."
+  sgx_cap=$(rdmsr -f 0:0 $SGX_CAPABILITY_MSR 2>/dev/null)
+  if [ "$sgx_cap" != "1" ]; then
+    print_error_message "SGX is not properly enabled in BIOS. Please enable 'SW Guard Extensions (SGX)'" \
+                       "Socket Configuration > Processor Configuration > Software Guard Extension (SGX)"
+    return 1
+  fi
+
+  # Additional checks using CPUID information
+  if ! grep -q "tdx_guest" /proc/cpuinfo; then
+    print_error_message "TDX support not detected in CPU features. Please verify all TDX-related BIOS settings are properly configured"
+    return 1
+  fi
+
+  echo "All required BIOS settings appear to be properly configured"
+  echo "For more detailed information about TDX setup and configuration, please visit: https://github.com/canonical/tdx"
+  return 0
+}
+
 install_debs() {
   DEB_DIR=$1
   # Install dependencies
@@ -142,6 +214,13 @@ bootstrap() {
   # Check if the archive exists
   if [ ! -f "${ARCHIVE_PATH}" ]; then
     echo "Archive not found: ${ARCHIVE_PATH}"
+    exit 1
+  fi
+
+  # Check BIOS settings first
+  if ! check_bios_settings; then
+    echo "ERROR: Required BIOS settings are not properly configured"
+    echo "Please configure BIOS settings according to the instructions above and try again"
     exit 1
   fi
 
