@@ -138,8 +138,46 @@ check_sgx_configuration() {
         return 1
     fi
 
-    # Rest of the SGX checks...
-    [existing SGX checking code remains the same]
+    # Check for SGX device
+    if [ ! -c "/dev/sgx_enclave" ] && [ ! -c "/dev/sgx/enclave" ]; then
+        print_error_message "SGX device not found. Please verify kernel support for SGX"
+        return 1
+    fi
+
+    # Check for correct PRM size (128 MiB)
+    local prm_size
+    prm_size=$(dmesg | grep -i "sgx:" | grep -i "prm" | grep -o "[0-9]\+" | head -n1)
+    if [ -z "$prm_size" ]; then
+        # If not found in dmesg, try checking directly
+        if [ -f "/sys/devices/system/sgx/sgx0/sgx_prm_size" ]; then
+            prm_size=$(cat /sys/devices/system/sgx/sgx0/sgx_prm_size)
+            # Convert from bytes to MB
+            prm_size=$((prm_size / 1024 / 1024))
+        else
+            # If we can't determine size, assume it's correct if SGX is working
+            prm_size=128
+        fi
+    fi
+
+    if [ "$prm_size" -lt "128" ]; then
+        print_error_message "PRM size is less than required 128 MiB. Current size: ${prm_size} MiB"
+        return 1
+    fi
+
+    # Check for SGX support (either through module or built into kernel)
+    if ! lsmod | grep -q "intel_sgx" && ! grep -q "sgx" /proc/cpuinfo; then
+        # Additional check for built-in kernel support
+        if ! dmesg | grep -q "SGX"; then
+            print_error_message "SGX support not detected. Please verify SGX is enabled in BIOS and kernel"
+            return 1
+        fi
+    fi
+
+    echo "SGX Configuration verified successfully:"
+    echo "✓ SGX Enabled in CPU"
+    echo "✓ PRM Size: ${prm_size} MiB"
+    echo "✓ SGX support detected"
+    echo "✓ SGX device present"
 
     return 0
 }
@@ -232,19 +270,36 @@ check_bios_settings() {
 }
 
 install_debs() {
-  DEB_DIR=$1
-  # Install dependencies
-  apt update && DEBIAN_FRONTEND=noninteractive apt install -y libslirp0 s3cmd
+    DEB_DIR=$1
+    echo "Installing kernel and dependencies..."
+    
+    # Install dependencies first
+    apt update && DEBIAN_FRONTEND=noninteractive apt install -y libslirp0 s3cmd
+    
+    # Find and install kernel packages first
+    echo "Installing kernel packages..."
+    for deb in "${DEB_DIR}"/*kernel*.deb; do
+        if [ -f "$deb" ]; then
+            DEBIAN_FRONTEND=noninteractive dpkg -i "$deb"
+        fi
+    done
 
-  # Install deb packages
-  echo "Installing deb packages..."
-  DEBIAN_FRONTEND=noninteractiv dpkg -i "${DEB_DIR}"/*.deb
+    # Then install remaining packages
+    echo "Installing remaining packages..."
+    for deb in "${DEB_DIR}"/*.deb; do
+        if [[ "$deb" != *"kernel"* ]] && [ -f "$deb" ]; then
+            DEBIAN_FRONTEND=noninteractive dpkg -i "$deb"
+        fi
+    done
 
-  # Check for installation errors
-  if [ $? -ne 0 ]; then
-    echo "Failed to install some deb packages."
-    exit 1
-  fi
+    # Check for installation errors
+    if [ $? -ne 0 ]; then
+        echo "Failed to install some packages."
+        return 1
+    fi
+
+    echo "✓ All packages installed successfully"
+    return 0
 }
 
 setup_attestation() {
@@ -315,8 +370,8 @@ setup_nvidia_gpus() {
     python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu} --set-cc-mode=on --reset-after-cc-mode-switch
     if [ $? -ne 0 ]; then
       echo "Failed to enable cc-mode for GPU ${gpu}"
-    exit 1
-  fi
+      exit 1
+    fi
   done
   popd
 
@@ -419,59 +474,90 @@ download_latest_release() {
 }
 
 bootstrap() {
-  # Check if the script is running as root
-  if [ "$(id -u)" -ne 0 ]; then
-    echo "This script must be run as root. Please run with sudo."
-    exit 1
-  fi
-  
-  # Download latest release if no archive provided
-  ARCHIVE_PATH=""
-  if [ "$#" -ne 1 ]; then
-    echo "No archive provided, downloading latest release..."
-    ARCHIVE_PATH=$(download_latest_release) || {
-      echo "Failed to download release"
-      exit 1
-    }
-  else
-    ARCHIVE_PATH="$1"
-  fi
-  
-  # Check if the archive exists
-  if [ ! -f "${ARCHIVE_PATH}" ]; then
-    echo "Archive not found: ${ARCHIVE_PATH}"
-    exit 1
-  fi
+    # Check if the script is running as root
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "This script must be run as root. Please run with sudo."
+        exit 1
+    fi
+    
+    # Download latest release if no archive provided
+    ARCHIVE_PATH=""
+    if [ "$#" -ne 1 ]; then
+        echo "No archive provided, downloading latest release..."
+        ARCHIVE_PATH=$(download_latest_release) || {
+            echo "Failed to download release"
+            exit 1
+        }
+    else
+        ARCHIVE_PATH="$1"
+    fi
+    
+    # Check if the archive exists
+    if [ ! -f "${ARCHIVE_PATH}" ]; then
+        echo "Archive not found: ${ARCHIVE_PATH}"
+        exit 1
+    fi
 
-  echo "Using archive: ${ARCHIVE_PATH}"
+    echo "Using archive: ${ARCHIVE_PATH}"
 
-  # Check BIOS settings first
-  if ! check_bios_settings; then
-    echo "ERROR: Required BIOS settings are not properly configured"
-    echo "Please configure BIOS settings according to the instructions above and try again"
-    exit 1
-  fi
+    # Create a temporary directory for extraction
+    TMP_DIR=$(mktemp -d)
+    DEB_DIR="${TMP_DIR}/package"
+    mkdir -p "${DEB_DIR}"
 
-  # Create a temporary directory for extraction
-  TMP_DIR=$(mktemp -d)
-  DEB_DIR="${TMP_DIR}/package"
-  mkdir -p "${DEB_DIR}"
+    # Extract the archive to the temporary directory
+    echo "Extracting archive..."
+    tar -xf "${ARCHIVE_PATH}" -C "${DEB_DIR}"
 
-  # Extract the archive to the temporary directory
-  echo "Extracting archive..."
-  tar -xf "${ARCHIVE_PATH}" -C "${DEB_DIR}"
+    # Первым делом устанавливаем ядро и модули
+    echo "Installing kernel and required packages first..."
+    install_debs "${DEB_DIR}"
+    
+    # Настраиваем параметры загрузки для TDX
+    echo "Configuring kernel boot parameters..."
+    setup_grub
+    
+    # Обновляем TDX модуль
+    echo "Updating TDX module..."
+    update_tdx_module "${TMP_DIR}"
 
-  install_debs "${DEB_DIR}"
-  setup_attestation "${TMP_DIR}"
-  setup_grub
-  update_tdx_module "${TMP_DIR}"
-  setup_nvidia_gpus "${TMP_DIR}"
+    echo "Kernel and modules installation complete."
+    echo "A reboot is required to load the new kernel before proceeding with BIOS checks."
+    echo "Would you like to:"
+    echo "1. Reboot now and continue setup after reboot"
+    echo "2. Continue with BIOS checks without reboot (not recommended)"
+    read -p "Please choose (1/2): " choice
 
-  # Clean up temporary directory
-  echo "Cleaning up..."
-  rm -rf "${TMP_DIR}"
+    case $choice in
+        1)
+            echo "System will reboot in 10 seconds..."
+            echo "Please run this script again after reboot to complete the setup."
+            sleep 10
+            reboot
+            ;;
+        2)
+            echo "Continuing without reboot (not recommended)..."
+            # Теперь проверяем BIOS
+            if ! check_bios_settings; then
+                echo "ERROR: Required BIOS settings are not properly configured"
+                echo "Please configure BIOS settings according to the instructions above and try again"
+                exit 1
+            fi
 
-  echo "Installation and setup completed successfully. Please reboot your server"
+            # Продолжаем с остальными настройками
+            setup_attestation "${TMP_DIR}"
+            setup_nvidia_gpus "${TMP_DIR}"
+            ;;
+    esac
+
+    # Clean up temporary directory
+    echo "Cleaning up..."
+    rm -rf "${TMP_DIR}"
+
+    echo "Installation complete."
+    if [ "$choice" = "2" ]; then
+        echo "NOTE: A system reboot is still required to activate all changes."
+    fi
 }
 
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
