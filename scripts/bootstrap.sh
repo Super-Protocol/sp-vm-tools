@@ -286,26 +286,95 @@ setup_nvidia_gpus() {
   echo "VFIO-PCI setup is complete."
 }
 
+download_latest_release() {
+  # Check and install required tools
+  if ! command -v curl &> /dev/null || ! command -v git &> /dev/null; then
+    apt-get update && apt-get install -y curl git || return 1
+  fi
+  
+  # Form file name and paths
+  SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+  
+  # Create temporary directory for download
+  TMP_DOWNLOAD=$(mktemp -d)
+  pushd "${TMP_DOWNLOAD}" > /dev/null
+
+  # Clone repository to get tags info
+  if ! git clone -q --filter=blob:none --no-checkout https://github.com/Super-Protocol/sp-vm-tools.git; then
+    echo "Failed to access repository" >&2
+    popd > /dev/null
+    rm -rf "${TMP_DOWNLOAD}"
+    return 1
+  fi
+
+  cd sp-vm-tools
+  
+  # Get latest tag
+  LATEST_TAG=$(git describe --tags $(git rev-list --tags --max-count=1 2>/dev/null) 2>/dev/null)
+  if [ -z "${LATEST_TAG}" ]; then
+    echo "No tags found in repository" >&2
+    popd > /dev/null
+    rm -rf "${TMP_DOWNLOAD}"
+    return 1
+  fi
+
+  # Form file name
+  ARCHIVE_NAME="package_${LATEST_TAG}.tar.gz"
+  ARCHIVE_PATH="${SCRIPT_DIR}/${ARCHIVE_NAME}"
+  
+  popd > /dev/null
+  rm -rf "${TMP_DOWNLOAD}"
+
+  # Check if file already exists
+  if [ -f "${ARCHIVE_PATH}" ]; then
+    printf "%s" "${ARCHIVE_PATH}"
+    return 0
+  fi
+
+  DOWNLOAD_URL="https://github.com/Super-Protocol/sp-vm-tools/releases/download/${LATEST_TAG}/package.tar.gz"
+  
+  echo "Downloading version ${LATEST_TAG}..." >&2
+
+  # Download archive directly to target directory
+  if ! curl -L -o "${ARCHIVE_PATH}" "${DOWNLOAD_URL}"; then
+    echo "Failed to download release" >&2
+    rm -f "${ARCHIVE_PATH}"
+    return 1
+  fi
+
+  echo "Successfully downloaded ${ARCHIVE_NAME}" >&2
+  
+  # Return the path only if everything was successful
+  printf "%s" "${ARCHIVE_PATH}"
+  return 0  
+}
+
 bootstrap() {
   # Check if the script is running as root
   if [ "$(id -u)" -ne 0 ]; then
     echo "This script must be run as root. Please run with sudo."
     exit 1
   fi
-
-  # Check for the parameter
+  
+  # Download latest release if no archive provided
+  ARCHIVE_PATH=""
   if [ "$#" -ne 1 ]; then
-    echo "Usage: $0 <path_to_archive>"
-    exit 1
+    echo "No archive provided, downloading latest release..."
+    ARCHIVE_PATH=$(download_latest_release) || {
+      echo "Failed to download release"
+      exit 1
+    }
+  else
+    ARCHIVE_PATH="$1"
   fi
-
-  ARCHIVE_PATH="$1"
-
+  
   # Check if the archive exists
   if [ ! -f "${ARCHIVE_PATH}" ]; then
     echo "Archive not found: ${ARCHIVE_PATH}"
     exit 1
   fi
+
+  echo "Using archive: ${ARCHIVE_PATH}"
 
   # Check BIOS settings first
   if ! check_bios_settings; then
