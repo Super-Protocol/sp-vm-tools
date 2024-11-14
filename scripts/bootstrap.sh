@@ -329,9 +329,53 @@ setup_raid_modules() {
     fi
 }
 
+get_kernel_version() {
+  local deb_file="$1"
+  local version=""
+  local basename_file=$(basename "$deb_file")
+
+  # Method 1: Extract from linux-image-VERSION_something format
+  if [[ $basename_file =~ linux-image-([0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+\+) ]]; then
+  version="${BASH_REMATCH[1]}"
+  elif [[ $basename_file =~ linux-image-([0-9]+\.[0-9]+\.[0-9]+-[^_]+) ]]; then
+  version="${BASH_REMATCH[1]}"
+  fi
+
+  # Method 2: Check package info if method 1 failed
+  if [ -z "$version" ]; then
+  version=$(dpkg-deb -f "$deb_file" Package | grep -oP 'linux-image-\K.*' || true)
+  fi
+  
+  printf "%s" "$version"
+}
+
+
 # Main installation function
 install_debs() {
     local DEB_DIR="$1"
+    echo "Checking current kernel installation..."
+    
+    # Get current kernel version
+    CURRENT_KERNEL=$(uname -r)
+    echo "Current kernel version: ${CURRENT_KERNEL}"
+    
+    # Try to detect version from kernel package before installation
+    NEW_KERNEL_VERSION=""
+    for deb in "${DEB_DIR}"/*linux-image*.deb; do
+        if [ -f "$deb" ]; then
+            NEW_KERNEL_VERSION=$(get_kernel_version "$deb")
+            echo "Detected kernel version in package: $NEW_KERNEL_VERSION"
+            break
+        fi
+    done
+    
+    # Check if this kernel is already running
+    if [ -n "$NEW_KERNEL_VERSION" ] && [ "$NEW_KERNEL_VERSION" = "$CURRENT_KERNEL" ]; then
+        echo "Kernel version ${NEW_KERNEL_VERSION} is already running"
+        echo "Skipping kernel installation..."
+        return 0
+    fi
+    
     echo "Installing kernel and dependencies..."
     
     # Show directory contents
@@ -348,10 +392,6 @@ install_debs() {
     # Install dependencies
     apt update && DEBIAN_FRONTEND=noninteractive apt install -y libslirp0 s3cmd
     
-    # Store current kernel version
-    CURRENT_KERNEL=$(uname -r)
-    echo "Current kernel version: ${CURRENT_KERNEL}"
-    
     # Install kernel headers first
     echo "Installing kernel headers..."
     for deb in "${DEB_DIR}"/*kernel-headers*.deb; do
@@ -361,57 +401,11 @@ install_debs() {
         fi
     done
 
-		get_kernel_version() {
-		  local deb_file="$1"
-		  local version=""
-		  local basename_file=$(basename "$deb_file")
-		  
-		  # Method 1: Extract from linux-image-VERSION_something format
-		  if [[ $basename_file =~ linux-image-([0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+\+) ]]; then
-		    version="${BASH_REMATCH[1]}"
-		  elif [[ $basename_file =~ linux-image-([0-9]+\.[0-9]+\.[0-9]+-[^_]+) ]]; then
-		    version="${BASH_REMATCH[1]}"
-		  fi
-		  
-		  # Method 2: Check package info if method 1 failed
-		  if [ -z "$version" ]; then
-		    version=$(dpkg-deb -f "$deb_file" Package | grep -oP 'linux-image-\K.*' || true)
-		  fi
-		
-		  printf "%s" "$version"
-		}
-	
-    # Install kernel image and detect version
     echo "Installing kernel image..."
-    NEW_KERNEL_VERSION=""
     for deb in "${DEB_DIR}"/*linux-image*.deb; do
         if [ -f "$deb" ]; then
-            echo "Processing kernel package: $(basename "$deb")"
-            
-            # Try to get version before installation
-            NEW_KERNEL_VERSION=$(get_kernel_version "$deb")
-            echo "Pre-installation version detection: $NEW_KERNEL_VERSION"
-            
-            # Install the kernel package
+            echo "Installing: $(basename "$deb")"
             DEBIAN_FRONTEND=noninteractive dpkg -i "$deb"
-            
-            # If version not detected, check newly installed kernel
-            if [ -z "$NEW_KERNEL_VERSION" ]; then
-                echo "Searching for newly installed kernel..."
-                # Look for kernel that's not the current one
-                NEW_KERNEL_VERSION=$(find /lib/modules/* -maxdepth 0 -type d -exec basename {} \; | grep -v "$CURRENT_KERNEL" | sort -V | tail -n1)
-                echo "Post-installation detected version: $NEW_KERNEL_VERSION"
-            fi
-            
-            if [ -n "$NEW_KERNEL_VERSION" ]; then
-                echo "✓ Kernel version detected: $NEW_KERNEL_VERSION"
-                # Verify kernel files exist
-                if [ -f "/boot/vmlinuz-${NEW_KERNEL_VERSION}" ] && [ -d "/lib/modules/${NEW_KERNEL_VERSION}" ]; then
-                    echo "✓ Kernel files verified in /boot and /lib/modules"
-                else
-                    echo "! Warning: Kernel files incomplete"
-                fi
-            fi
             break
         fi
     done
@@ -678,39 +672,43 @@ bootstrap() {
     echo "Updating TDX module..."
     update_tdx_module "${TMP_DIR}"
 
-    echo "Kernel and modules installation complete."
-    echo "A reboot is required to load the new kernel before proceeding with BIOS checks."
-    echo "Would you like to:"
-    echo "1. Reboot now and continue setup after reboot"
-    echo "2. Continue with BIOS checks without reboot (not recommended)"
-    read -p "Please choose (1/2): " choice
+    # Check if kernel was actually installed
+    if [ "$NEW_KERNEL_VERSION" != "$CURRENT_KERNEL" ]; then
+        echo "Kernel and modules installation complete."
+        echo "A reboot is required to load the new kernel before proceeding with BIOS checks."
+        echo "Would you like to:"
+        echo "1. Reboot now and continue setup after reboot"
+        echo "2. Continue with BIOS checks without reboot (not recommended)"
+        read -p "Please choose (1/2): " choice
 
-    case $choice in
-        1)
-            echo "System will reboot in 10 seconds..."
-            echo "Please run this script again after reboot to complete the setup."
-            sleep 10
-            reboot
-            ;;
-        2)
-            echo "Continuing without reboot (not recommended)..."
-            if ! check_bios_settings; then
-                echo "ERROR: Required BIOS settings are not properly configured"
-                echo "Please configure BIOS settings according to the instructions above and try again"
-                exit 1
-            fi
+        case $choice in
+            1)
+                echo "System will reboot in 10 seconds..."
+                echo "Please run this script again after reboot to complete the setup."
+                sleep 10
+                reboot
+                ;;
+            2)
+                echo "Continuing without reboot (not recommended)..."
+                ;;
+        esac
+    fi
 
-            setup_attestation "${TMP_DIR}"
-            setup_nvidia_gpus "${TMP_DIR}"
-            ;;
-    esac
+    if ! check_bios_settings; then
+        echo "ERROR: Required BIOS settings are not properly configured"
+        echo "Please configure BIOS settings according to the instructions above and try again"
+        exit 1
+    fi
+
+    setup_attestation "${TMP_DIR}"
+    setup_nvidia_gpus "${TMP_DIR}"
 
     # Clean up temporary directory
     echo "Cleaning up..."
     rm -rf "${TMP_DIR}"
 
     echo "Installation complete."
-    if [ "$choice" = "2" ]; then
+    if [ "$NEW_KERNEL_VERSION" != "$CURRENT_KERNEL" ] && [ "$choice" = "2" ]; then
         echo "NOTE: A system reboot is still required to activate all changes."
     fi
 }
