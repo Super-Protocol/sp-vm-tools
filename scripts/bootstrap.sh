@@ -295,7 +295,6 @@ detect_raid_config() {
     return 1
 }
 
-# Function to handle RAID module setup
 setup_raid_modules() {
     local new_kernel="$1"
     local current_kernel="$2"
@@ -314,119 +313,82 @@ setup_raid_modules() {
         "multipath"
     )
 
-    # Create module directory
-    mkdir -p "/lib/modules/${new_kernel}/kernel/drivers/md"
+    echo "Configuring kernel for built-in RAID support..."
     
-    # Backup current RAID configuration
-    mdadm --detail --scan > "/etc/mdadm/mdadm.conf.${new_kernel}"
-    
-    echo "Installing build dependencies..."
-    DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential "linux-headers-${new_kernel}" linux-source
-    
-    # Extract kernel source
-    echo "Extracting kernel source..."
-    local source_dir="/usr/src"
-    local kernel_source=$(find "${source_dir}" -name "linux-source-*" -type f)
-    
-    if [ -z "$kernel_source" ]; then
-        echo "! Error: Kernel source package not found"
-        return 1
-    fi
+    # Install dependencies
+    DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential "linux-headers-${new_kernel}"
     
     # Create build directory
     local build_dir=$(mktemp -d)
     pushd "${build_dir}"
     
-    echo "Extracting kernel source from ${kernel_source}..."
-    tar xf "${kernel_source}"
-    
-    # Find extracted source directory
-    local linux_src_dir=$(find . -maxdepth 1 -type d -name "linux-*" | head -n1)
-    if [ -z "$linux_src_dir" ]; then
-        echo "! Error: Could not find extracted kernel source"
-        popd
-        rm -rf "${build_dir}"
-        return 1
-    fi
-    
-    cd "${linux_src_dir}"
-    
-    # Copy kernel config
-    echo "Configuring kernel build..."
+    # Copy current kernel config
     cp "/boot/config-${new_kernel}" .config
     
-    # Prepare kernel source
-    echo "Preparing kernel source..."
-    make prepare modules_prepare
-    
-    # Create directory for RAID modules
-    mkdir -p drivers/md
-    cp -r "${linux_src_dir}/drivers/md/"* drivers/md/
-    
-    echo "Creating Makefile for RAID modules..."
-    cat > drivers/md/Makefile <<EOF
-obj-m := md-mod.o linear.o raid0.o raid1.o raid10.o raid456.o
-raid456-y := raid5.o raid6.o
+    # Enable required RAID configs
+    {
+        echo "CONFIG_MD=y"
+        echo "CONFIG_BLK_DEV_MD=y"
+        echo "CONFIG_MD_LINEAR=m"
+        echo "CONFIG_MD_RAID0=m"
+        echo "CONFIG_MD_RAID1=m"
+        echo "CONFIG_MD_RAID10=m"
+        echo "CONFIG_MD_RAID456=m"
+        echo "CONFIG_MD_MULTIPATH=m"
+        echo "CONFIG_ASYNC_RAID6_RECOV=y"
+        echo "CONFIG_ASYNC_MEMCPY=y"
+        echo "CONFIG_ASYNC_XOR=y"
+        echo "CONFIG_ASYNC_PQ=y"
+        echo "CONFIG_ASYNC_RAID6_TEST=n"
+        echo "CONFIG_MD_CLUSTER=n"
+    } >> .config
 
-KDIR := /lib/modules/${new_kernel}/build
-PWD := \$(shell pwd)
-
-default:
-	\$(MAKE) -C \$(KDIR) M=\$(PWD)/drivers/md modules
-
-clean:
-	\$(MAKE) -C \$(KDIR) M=\$(PWD)/drivers/md clean
-EOF
-
-    # Build modules
-    echo "Compiling RAID modules..."
-    cd drivers/md
-    if ! make -j$(nproc); then
-        echo "! Module compilation failed"
-        popd
-        rm -rf "${build_dir}"
-        return 1
-    fi
-
-    # Install compiled modules
-    echo "Installing compiled modules..."
-    cp *.ko "/lib/modules/${new_kernel}/kernel/drivers/md/"
-    
-    # Cleanup
-    popd
-    rm -rf "${build_dir}"
-
-    # Configure module loading
-    echo "Updating module configuration..."
-    for module in "${RAID_MODULES[@]}"; do
-        if ! grep -q "^${module}$" /etc/initramfs-tools/modules 2>/dev/null; then
-            echo "$module" >> /etc/initramfs-tools/modules
-        fi
-    done
+    # Update module configuration
+    echo "Configuring module loading..."
+    {
+        echo "# RAID modules"
+        for module in "${RAID_MODULES[@]}"; do
+            echo "$module"
+        done
+    } > /etc/initramfs-tools/modules.d/raid
 
     # Update module dependencies
     echo "Updating module dependencies..."
     depmod -a "${new_kernel}"
     
-    # Generate initramfs
-    echo "Creating initramfs for kernel ${new_kernel}..."
+    # Create RAID rules file
+    echo "Creating RAID udev rules..."
+    cat > /etc/udev/rules.d/63-md-raid-arrays.rules <<EOF
+KERNEL=="md*", ACTION=="add|change", ATTR{md/array_state}=="clean|active", ATTR{md/array_state}="clean"
+EOF
+
+    # Backup current mdadm configuration
+    echo "Backing up RAID configuration..."
+    if [ -f "/etc/mdadm/mdadm.conf" ]; then
+        cp "/etc/mdadm/mdadm.conf" "/etc/mdadm/mdadm.conf.${new_kernel}.bak"
+    fi
+    
+    # Create new mdadm configuration
+    echo "Creating new RAID configuration..."
+    mdadm --detail --scan > "/etc/mdadm/mdadm.conf.new"
+    cp "/etc/mdadm/mdadm.conf.new" "/etc/mdadm/mdadm.conf"
+
+    # Generate new initramfs with RAID support
+    echo "Generating initramfs with RAID support..."
     update-initramfs -c -k "${new_kernel}"
     
-    # Verify installation
-    echo "Verifying RAID modules..."
-    local missing_modules=()
-    for module in "${RAID_MODULES[@]}"; do
-        if ! find "/lib/modules/${new_kernel}" -name "${module}.ko*" | grep -q .; then
-            missing_modules+=("$module")
-        fi
-    done
-    
-    if [ ${#missing_modules[@]} -gt 0 ]; then
-        echo "! Error: Missing RAID modules: ${missing_modules[*]}"
+    # Verify initramfs contains RAID modules
+    echo "Verifying RAID modules in initramfs..."
+    if ! lsinitramfs "/boot/initrd.img-${new_kernel}" | grep -q "md_mod"; then
+        echo "! Error: RAID modules not found in initramfs"
         return 1
     fi
 
-    echo "✓ RAID setup completed successfully"
+    # Clean up
+    popd
+    rm -rf "${build_dir}"
+
+    echo "✓ RAID configuration completed successfully"
     return 0
 }
 
@@ -462,33 +424,26 @@ install_debs() {
         fi
     done
 
-    # Function to extract kernel version from package name
-    get_kernel_version() {
-        local deb_file="$1"
-        local version=""
-        local basename_file=$(basename "$deb_file")
-        
-        echo "Analyzing package: $basename_file"
-        
-        # Method 1: Extract from linux-image-VERSION_something format
-        if [[ $basename_file =~ linux-image-([0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+\+) ]]; then
-            version="${BASH_REMATCH[1]}"
-            echo "Extracted version from rc format: $version"
-        elif [[ $basename_file =~ linux-image-([0-9]+\.[0-9]+\.[0-9]+-[^_]+) ]]; then
-            version="${BASH_REMATCH[1]}"
-            echo "Extracted version from standard format: $version"
-        fi
-        
-        # Method 2: Check package info if method 1 failed
-        if [ -z "$version" ]; then
-            version=$(dpkg-deb -f "$deb_file" Package | grep -oP 'linux-image-\K.*' || true)
-            echo "Extracted version from package info: $version"
-        fi
-        
-        echo "Final detected version: $version"
-        echo "$version"
-    }
-    
+		get_kernel_version() {
+		  local deb_file="$1"
+		  local version=""
+		  local basename_file=$(basename "$deb_file")
+		  
+		  # Method 1: Extract from linux-image-VERSION_something format
+		  if [[ $basename_file =~ linux-image-([0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+\+) ]]; then
+		    version="${BASH_REMATCH[1]}"
+		  elif [[ $basename_file =~ linux-image-([0-9]+\.[0-9]+\.[0-9]+-[^_]+) ]]; then
+		    version="${BASH_REMATCH[1]}"
+		  fi
+		  
+		  # Method 2: Check package info if method 1 failed
+		  if [ -z "$version" ]; then
+		    version=$(dpkg-deb -f "$deb_file" Package | grep -oP 'linux-image-\K.*' || true)
+		  fi
+		
+		  printf "%s" "$version"
+		}
+	
     # Install kernel image and detect version
     echo "Installing kernel image..."
     NEW_KERNEL_VERSION=""
