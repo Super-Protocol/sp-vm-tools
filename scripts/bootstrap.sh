@@ -39,7 +39,6 @@ check_txt_status() {
     if grep -q "smx" /proc/cpuinfo; then
         echo "✓ CPU supports TXT (SMX feature present)"
     else
-        # Дополнительная проверка через MSR, так как иногда smx может не отображаться в cpuinfo
         if command -v rdmsr &> /dev/null; then
             if ! modprobe msr 2>/dev/null; then
                 echo "Note: Could not load MSR module for additional TXT checks"
@@ -59,7 +58,6 @@ check_txt_status() {
     if lsmod | grep -q "^tpm_tis"; then
         echo "✓ TPM driver (tpm_tis) loaded"
     else
-        # Пробуем загрузить модуль
         if modprobe tpm_tis 2>/dev/null; then
             echo "✓ TPM driver (tpm_tis) loaded successfully"
         else
@@ -72,7 +70,6 @@ check_txt_status() {
     if [ -d "/sys/kernel/security/txt" ]; then
         echo "✓ TXT kernel support detected"
     else
-        # Проверяем поддержку в конфиге ядра
         if grep -q "CONFIG_INTEL_TXT=y" /boot/config-$(uname -r) 2>/dev/null; then
             echo "✓ TXT support built into kernel"
         else
@@ -92,7 +89,6 @@ check_txt_status() {
         echo "- TPM Device: [Enabled]"
         echo "- TPM State: [Activated and Owned]"
         
-        # Возвращаем 0, так как TPM устройства присутствуют
         return 0
     fi
 }
@@ -269,36 +265,252 @@ check_bios_settings() {
     return 0
 }
 
+detect_raid_config() {
+    echo "Detecting RAID configuration..."
+    
+    # Check active arrays
+    if [ -f "/proc/mdstat" ]; then
+        echo "Found RAID arrays:"
+        cat /proc/mdstat | grep ^md
+        
+        if grep -q "^md" /proc/mdstat; then
+            echo "✓ Active RAID arrays detected"
+            return 0
+        fi
+    fi
+    
+    # Check mdadm configuration
+    if [ -f "/etc/mdadm/mdadm.conf" ] && grep -q "ARRAY" /etc/mdadm/mdadm.conf; then
+        echo "✓ RAID configuration found in mdadm.conf"
+        return 0
+    fi
+    
+    # Check for any RAID devices
+    if lsblk | grep -q "raid"; then
+        echo "✓ RAID devices found in system"
+        return 0
+    fi
+    
+    echo "No RAID configuration detected"
+    return 1
+}
+
 install_debs() {
     DEB_DIR=$1
     echo "Installing kernel and dependencies..."
     
-    # Install dependencies first
-    apt update && DEBIAN_FRONTEND=noninteractive apt install -y libslirp0 s3cmd
+    # Show directory contents
+    echo "Contents of ${DEB_DIR}:"
+    ls -la "${DEB_DIR}"
     
-    # Find and install kernel packages first
-    echo "Installing kernel packages..."
-    for deb in "${DEB_DIR}"/*kernel*.deb; do
-        if [ -f "$deb" ]; then
-            DEBIAN_FRONTEND=noninteractive dpkg -i "$deb"
-        fi
-    done
-
-    # Then install remaining packages
-    echo "Installing remaining packages..."
-    for deb in "${DEB_DIR}"/*.deb; do
-        if [[ "$deb" != *"kernel"* ]] && [ -f "$deb" ]; then
-            DEBIAN_FRONTEND=noninteractive dpkg -i "$deb"
-        fi
-    done
-
-    # Check for installation errors
-    if [ $? -ne 0 ]; then
-        echo "Failed to install some packages."
-        return 1
+    # Check for RAID configuration
+    RAID_ACTIVE=false
+    if detect_raid_config; then
+        RAID_ACTIVE=true
+        echo "✓ RAID configuration detected, will prepare modules for new kernel"
     fi
 
-    echo "✓ All packages installed successfully"
+    # Install dependencies
+    apt update && DEBIAN_FRONTEND=noninteractive apt install -y libslirp0 s3cmd
+    
+    # Get current kernel version
+    CURRENT_KERNEL=$(uname -r)
+    echo "Current kernel version: ${CURRENT_KERNEL}"
+    
+    # Function to extract kernel version from package name
+    get_kernel_version() {
+        local deb_file="$1"
+        local version=""
+        local basename_file=$(basename "$deb_file")
+        
+        echo "Analyzing package: $basename_file"
+        
+        # Method 1: Extract from linux-image-VERSION_something format
+        if [[ $basename_file =~ linux-image-([0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+\+) ]]; then
+            version="${BASH_REMATCH[1]}"
+            echo "Extracted version from rc format: $version"
+        elif [[ $basename_file =~ linux-image-([0-9]+\.[0-9]+\.[0-9]+-[^_]+) ]]; then
+            version="${BASH_REMATCH[1]}"
+            echo "Extracted version from standard format: $version"
+        fi
+        
+        # Method 2: Check package info if method 1 failed
+        if [ -z "$version" ]; then
+            version=$(dpkg-deb -f "$deb_file" Package | grep -oP 'linux-image-\K.*' || true)
+            echo "Extracted version from package info: $version"
+        fi
+        
+        echo "Final detected version: $version"
+        echo "$version"
+    }
+
+    # Install kernel packages in correct order
+    echo "Installing kernel headers..."
+    for deb in "${DEB_DIR}"/*kernel-headers*.deb; do
+        if [ -f "$deb" ]; then
+            echo "Installing: $(basename "$deb")"
+            DEBIAN_FRONTEND=noninteractive dpkg -i "$deb"
+        fi
+    done
+
+    # Install kernel image and detect version
+    echo "Installing kernel image..."
+    NEW_KERNEL_VERSION=""
+    for deb in "${DEB_DIR}"/*kernel-image*.deb; do
+        if [ -f "$deb" ]; then
+            echo "Processing kernel package: $(basename "$deb")"
+            
+            # Try to get version before installation
+            NEW_KERNEL_VERSION=$(get_kernel_version "$deb")
+            echo "Pre-installation version detection: $NEW_KERNEL_VERSION"
+            
+            # Install the kernel package
+            DEBIAN_FRONTEND=noninteractive dpkg -i "$deb"
+            
+            # If version not detected, check newly installed kernel
+            if [ -z "$NEW_KERNEL_VERSION" ]; then
+                echo "Searching for newly installed kernel..."
+                # Look for kernel that's not the current one
+                NEW_KERNEL_VERSION=$(find /lib/modules/* -maxdepth 0 -type d -exec basename {} \; | grep -v "$CURRENT_KERNEL" | sort -V | tail -n1)
+                echo "Post-installation detected version: $NEW_KERNEL_VERSION"
+            fi
+            
+            if [ -n "$NEW_KERNEL_VERSION" ]; then
+                echo "✓ Kernel version detected: $NEW_KERNEL_VERSION"
+                # Verify kernel files exist
+                if [ -f "/boot/vmlinuz-${NEW_KERNEL_VERSION}" ] && [ -d "/lib/modules/${NEW_KERNEL_VERSION}" ]; then
+                    echo "✓ Kernel files verified in /boot and /lib/modules"
+                else
+                    echo "! Warning: Kernel files incomplete"
+                fi
+            fi
+            break
+        fi
+    done
+
+    # Install remaining packages
+    echo "Installing remaining packages..."
+    for deb in "${DEB_DIR}"/*.deb; do
+        if [[ "$deb" != *"kernel-image"* ]] && [[ "$deb" != *"kernel-headers"* ]] && [ -f "$deb" ]; then
+            echo "Installing: $(basename "$deb")"
+            DEBIAN_FRONTEND=noninteractive dpkg -i "$deb"
+        fi
+    done
+
+    # Verify kernel version was determined
+    if [ -z "$NEW_KERNEL_VERSION" ]; then
+        echo "Attempting final kernel version detection..."
+        # Last attempt to find the new kernel
+        NEW_KERNEL_VERSION=$(find /lib/modules/* -maxdepth 0 -type d -exec basename {} \; | grep -v "$CURRENT_KERNEL" | sort -V | tail -n1)
+        
+        if [ -z "$NEW_KERNEL_VERSION" ]; then
+            echo "ERROR: Failed to determine kernel version!"
+            echo "Installed kernels:"
+            find /lib/modules -maxdepth 1 -type d
+            echo "Boot directory contents:"
+            find /boot -name "vmlinuz-*"
+            return 1
+        fi
+    fi
+
+    # Setup RAID if active
+    if [ "$RAID_ACTIVE" = true ]; then
+        echo "Setting up RAID modules for kernel ${NEW_KERNEL_VERSION}..."
+        
+        # Create module directory
+        mkdir -p "/lib/modules/${NEW_KERNEL_VERSION}/kernel/drivers/md"
+        
+        # Backup current RAID configuration
+        mdadm --detail --scan > "/etc/mdadm/mdadm.conf.${NEW_KERNEL_VERSION}"
+        
+        # Essential RAID modules
+        RAID_MODULES=(
+            "raid0"
+            "raid1"
+            "raid10"
+            "raid456"
+            "raid5"
+            "raid6"
+            "md_mod"
+            "linear"
+            "multipath"
+            "dm_mod"
+        )
+        
+        # Copy RAID modules
+        echo "Copying RAID modules from kernel ${CURRENT_KERNEL}..."
+        for module in "${RAID_MODULES[@]}"; do
+            # Try current kernel first
+            module_path=$(find "/lib/modules/${CURRENT_KERNEL}" -name "${module}.ko*" -print -quit)
+            if [ -n "$module_path" ]; then
+                echo "Copying $module from current kernel"
+                cp -v "$module_path" "/lib/modules/${NEW_KERNEL_VERSION}/kernel/drivers/md/"
+            else
+                # Search in all available kernels
+                echo "Searching $module in other kernels..."
+                for kernel_dir in /lib/modules/*; do
+                    if [ -d "$kernel_dir" ] && [ "$(basename "$kernel_dir")" != "$NEW_KERNEL_VERSION" ]; then
+                        module_path=$(find "$kernel_dir" -name "${module}.ko*" -print -quit)
+                        if [ -n "$module_path" ]; then
+                            echo "Copying $module from $(basename "$kernel_dir")"
+                            cp -v "$module_path" "/lib/modules/${NEW_KERNEL_VERSION}/kernel/drivers/md/"
+                            break
+                        fi
+                    fi
+                done
+            fi
+        done
+
+        # Configure module loading
+        echo "Updating module configuration..."
+        for module in "${RAID_MODULES[@]}"; do
+            if ! grep -q "^${module}$" /etc/initramfs-tools/modules 2>/dev/null; then
+                echo "$module" >> /etc/initramfs-tools/modules
+            fi
+        done
+
+        # Update dependencies and initramfs
+        echo "Updating module dependencies..."
+        depmod -a "${NEW_KERNEL_VERSION}"
+        
+        echo "Generating initramfs..."
+        update-initramfs -c -k "${NEW_KERNEL_VERSION}"
+        
+        # Verify RAID module installation
+        echo "Verifying RAID modules..."
+        missing_modules=()
+        for module in "${RAID_MODULES[@]}"; do
+            if ! find "/lib/modules/${NEW_KERNEL_VERSION}" -name "${module}.ko*" | grep -q .; then
+                missing_modules+=("$module")
+            fi
+        done
+        
+        if [ ${#missing_modules[@]} -gt 0 ]; then
+            echo "Warning: Missing RAID modules: ${missing_modules[*]}"
+        else
+            echo "✓ All RAID modules installed successfully"
+        fi
+    fi
+
+    echo "Installation Summary:"
+    echo "- Previous kernel: $CURRENT_KERNEL"
+    echo "- New kernel: $NEW_KERNEL_VERSION"
+    echo "- RAID enabled: $RAID_ACTIVE"
+    echo "- Kernel files:"
+    echo "  - /lib/modules/${NEW_KERNEL_VERSION}"
+    echo "  - /boot/vmlinuz-${NEW_KERNEL_VERSION}"
+    
+    if [ "$RAID_ACTIVE" = true ]; then
+        echo "RAID Configuration:"
+        echo "- Module path: /lib/modules/${NEW_KERNEL_VERSION}/kernel/drivers/md/"
+        echo "- Config backup: /etc/mdadm/mdadm.conf.${NEW_KERNEL_VERSION}"
+        echo
+        echo "After reboot verify RAID:"
+        echo "1. Check /proc/mdstat"
+        echo "2. Verify mdadm --detail /dev/mdX"
+        echo "3. Check /etc/mdadm/mdadm.conf"
+    fi
+
     return 0
 }
 
@@ -509,15 +721,12 @@ bootstrap() {
     echo "Extracting archive..."
     tar -xf "${ARCHIVE_PATH}" -C "${DEB_DIR}"
 
-    # Первым делом устанавливаем ядро и модули
     echo "Installing kernel and required packages first..."
     install_debs "${DEB_DIR}"
     
-    # Настраиваем параметры загрузки для TDX
     echo "Configuring kernel boot parameters..."
     setup_grub
     
-    # Обновляем TDX модуль
     echo "Updating TDX module..."
     update_tdx_module "${TMP_DIR}"
 
@@ -537,14 +746,12 @@ bootstrap() {
             ;;
         2)
             echo "Continuing without reboot (not recommended)..."
-            # Теперь проверяем BIOS
             if ! check_bios_settings; then
                 echo "ERROR: Required BIOS settings are not properly configured"
                 echo "Please configure BIOS settings according to the instructions above and try again"
                 exit 1
             fi
 
-            # Продолжаем с остальными настройками
             setup_attestation "${TMP_DIR}"
             setup_nvidia_gpus "${TMP_DIR}"
             ;;
