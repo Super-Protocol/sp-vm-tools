@@ -298,98 +298,35 @@ detect_raid_config() {
 setup_raid_modules() {
     local new_kernel="$1"
     local current_kernel="$2"
-    echo "Setting up RAID modules for kernel ${new_kernel}"
+    echo "Setting up RAID configuration for kernel ${new_kernel}"
 
-    # Required RAID modules
-    local RAID_MODULES=(
-        "raid0"
-        "raid1"
-        "raid10"
-        "raid456"
-        "raid5"
-        "raid6"
-        "md_mod"
-        "linear"
-        "multipath"
-    )
-
-    echo "Configuring kernel for built-in RAID support..."
-    
-    # Install dependencies
-    DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential "linux-headers-${new_kernel}"
-    
-    # Create build directory
-    local build_dir=$(mktemp -d)
-    pushd "${build_dir}"
-    
-    # Copy current kernel config
-    cp "/boot/config-${new_kernel}" .config
-    
-    # Enable required RAID configs
-    {
-        echo "CONFIG_MD=y"
-        echo "CONFIG_BLK_DEV_MD=y"
-        echo "CONFIG_MD_LINEAR=m"
-        echo "CONFIG_MD_RAID0=m"
-        echo "CONFIG_MD_RAID1=m"
-        echo "CONFIG_MD_RAID10=m"
-        echo "CONFIG_MD_RAID456=m"
-        echo "CONFIG_MD_MULTIPATH=m"
-        echo "CONFIG_ASYNC_RAID6_RECOV=y"
-        echo "CONFIG_ASYNC_MEMCPY=y"
-        echo "CONFIG_ASYNC_XOR=y"
-        echo "CONFIG_ASYNC_PQ=y"
-        echo "CONFIG_ASYNC_RAID6_TEST=n"
-        echo "CONFIG_MD_CLUSTER=n"
-    } >> .config
-
-    # Update module configuration
-    echo "Configuring module loading..."
-    {
-        echo "# RAID modules"
-        for module in "${RAID_MODULES[@]}"; do
-            echo "$module"
-        done
-    } > /etc/initramfs-tools/modules.d/raid
-
-    # Update module dependencies
-    echo "Updating module dependencies..."
-    depmod -a "${new_kernel}"
-    
-    # Create RAID rules file
-    echo "Creating RAID udev rules..."
-    cat > /etc/udev/rules.d/63-md-raid-arrays.rules <<EOF
-KERNEL=="md*", ACTION=="add|change", ATTR{md/array_state}=="clean|active", ATTR{md/array_state}="clean"
-EOF
-
-    # Backup current mdadm configuration
-    echo "Backing up RAID configuration..."
-    if [ -f "/etc/mdadm/mdadm.conf" ]; then
-        cp "/etc/mdadm/mdadm.conf" "/etc/mdadm/mdadm.conf.${new_kernel}.bak"
-    fi
-    
     # Create new mdadm configuration
     echo "Creating new RAID configuration..."
-    mdadm --detail --scan > "/etc/mdadm/mdadm.conf.new"
-    cp "/etc/mdadm/mdadm.conf.new" "/etc/mdadm/mdadm.conf"
-
-    # Generate new initramfs with RAID support
-    echo "Generating initramfs with RAID support..."
-    update-initramfs -c -k "${new_kernel}"
-    
-    # Verify initramfs contains RAID modules
-    echo "Verifying RAID modules in initramfs..."
-    if ! lsinitramfs "/boot/initrd.img-${new_kernel}" | grep -q "md_mod"; then
-        echo "! Error: RAID modules not found in initramfs"
+    if mdadm --detail --scan > "/etc/mdadm/mdadm.conf.new"; then
+        # Create backup of existing config if it exists
+        if [ -f "/etc/mdadm/mdadm.conf" ]; then
+            cp "/etc/mdadm/mdadm.conf" "/etc/mdadm/mdadm.conf.${new_kernel}.bak"
+        fi
+        
+        # Replace the current config with the new one
+        if ! mv "/etc/mdadm/mdadm.conf.new" "/etc/mdadm/mdadm.conf"; then
+            echo "Failed to update mdadm configuration"
+            return 1
+        fi
+        
+        # Update initramfs
+        echo "Updating initramfs with new RAID configuration..."
+        if ! update-initramfs -u -k "${new_kernel}"; then
+            echo "Failed to update initramfs"
+            return 1
+        fi
+        
+        echo "✓ RAID configuration completed successfully"
+        return 0
+    else
+        echo "Failed to generate RAID configuration"
         return 1
     fi
-
-    # Clean up
-    popd
-    rm -rf "${build_dir}"
-
-    echo "✓ RAID configuration completed successfully"
-    return 0
 }
 
 # Main installation function
