@@ -60,10 +60,25 @@ jobs:
             tdx-attestation:
               source: "ppa:tdx-attestation-release"
 
-        # Install TDX tools
+        # Configure kernel parameters
+        bootcmd:
+          - echo 'GRUB_CMDLINE_LINUX="clearcpuid=mtrr"' >> /etc/default/grub
+          - update-grub
+
+        # Install TDX tools and update grub
         runcmd:
           - apt-get install -y --allow-downgrades libtdx-attest-dev trustauthority-cli
           - cd /usr/share/doc/libtdx-attest-dev/examples/ && make
+          # Making sure kernel parameters are applied
+          - update-grub
+
+        # Write direct kernel command line modification for immediate effect
+        write_files:
+          - path: /etc/kernel/cmdline
+            content: |
+              clearcpuid=mtrr
+            owner: root:root
+            permissions: '0644'
         EOF
 
     - name: Create cloud-init ISO
@@ -92,6 +107,7 @@ jobs:
           - Base: noble-minimal-cloudimg-amd64
           - Cloud-init configuration for TDX setup
           - Image size: base + 5GB
+          - Added kernel parameter: clearcpuid=mtrr
           
           VM Credentials:
           - Login: ubuntu
