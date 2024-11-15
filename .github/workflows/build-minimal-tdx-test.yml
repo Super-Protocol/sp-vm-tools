@@ -1,12 +1,12 @@
 name: Build TDX Test Image
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
-
+    inputs:
+      release_version:
+        description: "Release version (format v1.2.3)"
+        required: true
+        
 jobs:
   build-image:
     runs-on: ubuntu-latest
@@ -19,13 +19,13 @@ jobs:
     - name: Install required packages
       run: |
         sudo apt-get update
-        sudo apt-get install -y qemu-utils cloud-image-utils
+        sudo apt-get install -y qemu-utils cloud-image-utils qemu-system-x86
 
     - name: Download Ubuntu 24.04 minimal cloud image
       run: |
         wget https://cloud-images.ubuntu.com/minimal/daily/noble/current/noble-minimal-cloudimg-amd64.img
 
-    - name: Create minimal cloud-init config
+    - name: Create cloud-init config
       run: |
         cat << EOF > cloud-init.cfg
         #cloud-config
@@ -33,44 +33,127 @@ jobs:
           - name: ubuntu
             sudo: ALL=(ALL) NOPASSWD:ALL
             shell: /bin/bash
+            # password is 'ubuntu'
+            passwd: "\$6\$xyz\$UFYRcqZP2PvQKDIdaPm9f6sVXnMBKTK0y3.PpPYoKXhCO2UcBE.Tr2Q9kDB3cStKY32.0wkw0BgFQgSjMIqsK0"
+            lock_passwd: false
             
         packages:
           - software-properties-common
           - build-essential
           
         package_update: true
+        package_upgrade: true
         
         apt:
           sources:
             tdx-attestation:
               source: "ppa:tdx-attestation-release"
+
+        # Disable services that might cause issues on first boot
+        cloud_final_modules: []
         
+        write_files:
+          # Setup systemd service for TDX initialization
+          - path: /etc/systemd/system/tdx-setup.service
+            content: |
+              [Unit]
+              Description=TDX Setup Service
+              After=network.target
+              
+              [Service]
+              Type=oneshot
+              ExecStart=/usr/local/bin/tdx-setup.sh
+              RemainAfterExit=yes
+              
+              [Install]
+              WantedBy=multi-user.target
+              
+          # TDX setup script
+          - path: /usr/local/bin/tdx-setup.sh
+            permissions: '0755'
+            content: |
+              #!/bin/bash
+              apt-get install -y --allow-downgrades libtdx-attest-dev trustauthority-cli
+              cd /usr/share/doc/libtdx-attest-dev/examples/ && make
+              exit 0
+
         runcmd:
-          - apt-get install -y --allow-downgrades libtdx-attest-dev trustauthority-cli
-          - cd /usr/share/doc/libtdx-attest-dev/examples/ && make
+          - systemctl enable tdx-setup.service
+          - systemctl start tdx-setup.service
+
+        # Enable password authentication for SSH
+        ssh_pwauth: true
+        
+        # Only include necessary cloud-init modules
+        cloud_init_modules:
+         - migrator
+         - bootcmd
+         - write-files
+         - growpart
+         - resizefs
+         - set_hostname
+         - update_hostname
+         - update_etc_hosts
+         - users-groups
+         - ssh
         EOF
 
     - name: Create cloud-init ISO
       run: |
         cloud-localds cloud-init.iso cloud-init.cfg
 
-    - name: Prepare minimal image
+    - name: Prepare and initialize image
       run: |
-        qemu-img convert -O qcow2 noble-minimal-cloudimg-amd64.img tdx-test-minimal.qcow2
+        # Convert base image to qcow2 format
+        qemu-img convert -O qcow2 noble-minimal-cloudimg-amd64.img tdx-test-base.qcow2
+        
+        # Increase image size
+        qemu-img resize tdx-test-base.qcow2 +5G
+        
+        # Run VM for initialization
+        # Timeout after 600 seconds (10 minutes)
+        timeout 600 qemu-system-x86_64 \
+          -enable-kvm \
+          -cpu host \
+          -m 2G \
+          -smp 2 \
+          -drive file=tdx-test-base.qcow2,if=virtio,format=qcow2 \
+          -drive file=cloud-init.iso,if=virtio,media=cdrom \
+          -device virtio-net-pci,netdev=net0 \
+          -netdev user,id=net0 \
+          -nographic \
+          -serial mon:stdio || true
+        
+        # Create final compressed image
+        qemu-img convert -O qcow2 -c tdx-test-base.qcow2 tdx-test-minimal.qcow2
 
-    - name: Create Release
+    # Create GitHub release
+    - name: Create GitHub Release
       id: create_release
-      uses: softprops/action-gh-release@v1
-      if: github.ref == 'refs/heads/main'
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        files: |
-          tdx-test-minimal.qcow2
-          cloud-init.iso
-        name: "Latest TDX Test Image"
-        tag_name: "latest"
+        tag_name: ${{ github.event.inputs.release_version }}
+        release_name: "TDX Test Image ${{ github.event.inputs.release_version }}"
         draft: false
         prerelease: false
         body: |
-          Latest TDX test image built from Ubuntu 24.04 minimal
-          - tdx-test-minimal.qcow2: Main VM image
-          - cloud-init.iso: Cloud-init configuration
+          Pre-initialized TDX test image built from Ubuntu 24.04 minimal
+          - Base: noble-minimal-cloudimg-amd64
+          - Added TDX attestation tools
+          - Pre-installed and compiled test components
+          
+          Login: ubuntu
+          Password: ubuntu
+
+    # Upload the finalized image to release
+    - name: Upload VM Image
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./tdx-test-minimal.qcow2
+        asset_name: tdx-test-minimal-${{ github.event.inputs.release_version }}.qcow2
+        asset_content_type: application/octet-stream
