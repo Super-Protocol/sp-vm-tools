@@ -11,7 +11,7 @@ jobs:
   build-image:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     
     steps:
     - uses: actions/checkout@v4
@@ -58,15 +58,19 @@ jobs:
       run: |
         qemu-img convert -O qcow2 noble-minimal-cloudimg-amd64.img tdx-test-minimal.qcow2
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+    - name: Create Release
+      id: create_release
+      uses: softprops/action-gh-release@v1
+      if: github.ref == 'refs/heads/main'
       with:
-        name: tdx-test-minimal
-        path: |
+        files: |
           tdx-test-minimal.qcow2
           cloud-init.iso
-
-    - name: List artifact details
-      run: |
-        echo "Created artifacts:"
-        ls -lh tdx-test-minimal.qcow2 cloud-init.iso
+        name: "Latest TDX Test Image"
+        tag_name: "latest"
+        draft: false
+        prerelease: false
+        body: |
+          Latest TDX test image built from Ubuntu 24.04 minimal
+          - tdx-test-minimal.qcow2: Main VM image
+          - cloud-init.iso: Cloud-init configuration
