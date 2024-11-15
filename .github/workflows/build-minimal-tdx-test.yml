@@ -29,14 +29,24 @@ jobs:
       run: |
         cat << EOF > cloud-init.cfg
         #cloud-config
+        
+        # Set password authentication
+        ssh_pwauth: true
+        chpasswd:
+          expire: false
+          list:
+            - ubuntu:ubuntu123
+
+        # Create default user
         users:
+          - default
           - name: ubuntu
             sudo: ALL=(ALL) NOPASSWD:ALL
             shell: /bin/bash
-            # password is 'ubuntu'
-            passwd: "\$6\$xyz\$UFYRcqZP2PvQKDIdaPm9f6sVXnMBKTK0y3.PpPYoKXhCO2UcBE.Tr2Q9kDB3cStKY32.0wkw0BgFQgSjMIqsK0"
+            plain_text_passwd: 'ubuntu123'
             lock_passwd: false
             
+        # Basic packages
         packages:
           - software-properties-common
           - build-essential
@@ -44,30 +54,16 @@ jobs:
         package_update: true
         package_upgrade: true
         
+        # TDX repo
         apt:
           sources:
             tdx-attestation:
               source: "ppa:tdx-attestation-release"
 
+        # Install TDX tools
         runcmd:
           - apt-get install -y --allow-downgrades libtdx-attest-dev trustauthority-cli
           - cd /usr/share/doc/libtdx-attest-dev/examples/ && make
-
-        # Enable password authentication for SSH
-        ssh_pwauth: true
-        
-        # Only include necessary cloud-init modules
-        cloud_init_modules:
-         - migrator
-         - bootcmd
-         - write-files
-         - growpart
-         - resizefs
-         - set_hostname
-         - update_hostname
-         - update_etc_hosts
-         - users-groups
-         - ssh
         EOF
 
     - name: Create cloud-init ISO
@@ -76,11 +72,9 @@ jobs:
 
     - name: Prepare VM image
       run: |
-        # Convert base image to qcow2 format and resize
         qemu-img convert -O qcow2 noble-minimal-cloudimg-amd64.img tdx-test-${{ github.event.inputs.release_version }}.qcow2
         qemu-img resize tdx-test-${{ github.event.inputs.release_version }}.qcow2 +5G
 
-    # Create GitHub release
     - name: Create GitHub Release
       id: create_release
       uses: actions/create-release@v1
@@ -99,16 +93,15 @@ jobs:
           - Cloud-init configuration for TDX setup
           - Image size: base + 5GB
           
+          VM Credentials:
+          - Login: ubuntu
+          - Password: ubuntu123
+          
           Usage:
           1. Download both .qcow2 and .iso files
           2. Use them together to start the VM
           3. First boot will install TDX components
-          
-          Credentials:
-          - Login: ubuntu
-          - Password: ubuntu
 
-    # Upload VM image
     - name: Upload VM Image
       uses: actions/upload-release-asset@v1
       env:
@@ -119,7 +112,6 @@ jobs:
         asset_name: tdx-test-${{ github.event.inputs.release_version }}.qcow2
         asset_content_type: application/octet-stream
 
-    # Upload cloud-init ISO
     - name: Upload Cloud-Init ISO
       uses: actions/upload-release-asset@v1
       env:
