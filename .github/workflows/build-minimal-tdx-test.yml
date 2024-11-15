@@ -1,0 +1,67 @@
+name: Build Minimal TDX Test Image
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install required packages
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y qemu-utils cloud-image-utils
+
+    - name: Download Ubuntu 24.04 minimal cloud image
+      run: |
+        wget https://cloud-images.ubuntu.com/minimal/daily/noble/current/noble-minimal-cloudimg-amd64.img
+
+    - name: Create minimal cloud-init config
+      run: |
+        cat << EOF > cloud-init.cfg
+        #cloud-config
+        users:
+          - name: ubuntu
+            sudo: ALL=(ALL) NOPASSWD:ALL
+            shell: /bin/bash
+            
+        packages:
+          - software-properties-common
+          - build-essential
+          
+        package_update: true
+        package_upgrade: true
+        
+        apt:
+          sources:
+            tdx-attestation:
+              source: "ppa:tdx-attestation-release"
+        
+        runcmd:
+          - apt-get install -y --allow-downgrades libtdx-attest-dev trustauthority-cli
+          - cd /usr/share/doc/libtdx-attest-dev/examples/ && make
+        EOF
+
+    - name: Create cloud-init ISO
+      run: |
+        cloud-localds cloud-init.iso cloud-init.cfg
+
+    - name: Prepare minimal image
+      run: |
+        # Convert the downloaded minimal image to qcow2
+        qemu-img convert -O qcow2 noble-minimal-cloudimg-amd64.img tdx-test-minimal.qcow2
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: tdx-test-minimal
+        path: |
+          tdx-test-minimal.qcow2
+          cloud-init.iso
