@@ -49,37 +49,9 @@ jobs:
             tdx-attestation:
               source: "ppa:tdx-attestation-release"
 
-        # Disable services that might cause issues on first boot
-        cloud_final_modules: []
-        
-        write_files:
-          # Setup systemd service for TDX initialization
-          - path: /etc/systemd/system/tdx-setup.service
-            content: |
-              [Unit]
-              Description=TDX Setup Service
-              After=network.target
-              
-              [Service]
-              Type=oneshot
-              ExecStart=/usr/local/bin/tdx-setup.sh
-              RemainAfterExit=yes
-              
-              [Install]
-              WantedBy=multi-user.target
-              
-          # TDX setup script
-          - path: /usr/local/bin/tdx-setup.sh
-            permissions: '0755'
-            content: |
-              #!/bin/bash
-              apt-get install -y --allow-downgrades libtdx-attest-dev trustauthority-cli
-              cd /usr/share/doc/libtdx-attest-dev/examples/ && make
-              exit 0
-
         runcmd:
-          - systemctl enable tdx-setup.service
-          - systemctl start tdx-setup.service
+          - apt-get install -y --allow-downgrades libtdx-attest-dev trustauthority-cli
+          - cd /usr/share/doc/libtdx-attest-dev/examples/ && make
 
         # Enable password authentication for SSH
         ssh_pwauth: true
@@ -100,32 +72,13 @@ jobs:
 
     - name: Create cloud-init ISO
       run: |
-        cloud-localds cloud-init.iso cloud-init.cfg
+        cloud-localds cloud-init-${{ github.event.inputs.release_version }}.iso cloud-init.cfg
 
-    - name: Prepare and initialize image
+    - name: Prepare VM image
       run: |
-        # Convert base image to qcow2 format
-        qemu-img convert -O qcow2 noble-minimal-cloudimg-amd64.img tdx-test-base.qcow2
-        
-        # Increase image size
-        qemu-img resize tdx-test-base.qcow2 +5G
-        
-        # Run VM for initialization
-        # Timeout after 600 seconds (10 minutes)
-        timeout 600 qemu-system-x86_64 \
-          -enable-kvm \
-          -cpu host \
-          -m 2G \
-          -smp 2 \
-          -drive file=tdx-test-base.qcow2,if=virtio,format=qcow2 \
-          -drive file=cloud-init.iso,if=virtio,media=cdrom \
-          -device virtio-net-pci,netdev=net0 \
-          -netdev user,id=net0 \
-          -nographic \
-          -serial mon:stdio || true
-        
-        # Create final compressed image
-        qemu-img convert -O qcow2 -c tdx-test-base.qcow2 tdx-test-minimal.qcow2
+        # Convert base image to qcow2 format and resize
+        qemu-img convert -O qcow2 noble-minimal-cloudimg-amd64.img tdx-test-${{ github.event.inputs.release_version }}.qcow2
+        qemu-img resize tdx-test-${{ github.event.inputs.release_version }}.qcow2 +5G
 
     # Create GitHub release
     - name: Create GitHub Release
@@ -139,21 +92,40 @@ jobs:
         draft: false
         prerelease: false
         body: |
-          Pre-initialized TDX test image built from Ubuntu 24.04 minimal
-          - Base: noble-minimal-cloudimg-amd64
-          - Added TDX attestation tools
-          - Pre-installed and compiled test components
+          TDX test image based on Ubuntu 24.04 minimal
           
-          Login: ubuntu
-          Password: ubuntu
+          Components:
+          - Base: noble-minimal-cloudimg-amd64
+          - Cloud-init configuration for TDX setup
+          - Image size: base + 5GB
+          
+          Usage:
+          1. Download both .qcow2 and .iso files
+          2. Use them together to start the VM
+          3. First boot will install TDX components
+          
+          Credentials:
+          - Login: ubuntu
+          - Password: ubuntu
 
-    # Upload the finalized image to release
+    # Upload VM image
     - name: Upload VM Image
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./tdx-test-minimal.qcow2
-        asset_name: tdx-test-minimal-${{ github.event.inputs.release_version }}.qcow2
+        asset_path: ./tdx-test-${{ github.event.inputs.release_version }}.qcow2
+        asset_name: tdx-test-${{ github.event.inputs.release_version }}.qcow2
         asset_content_type: application/octet-stream
+
+    # Upload cloud-init ISO
+    - name: Upload Cloud-Init ISO
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./cloud-init-${{ github.event.inputs.release_version }}.iso
+        asset_name: cloud-init-${{ github.event.inputs.release_version }}.iso
+        asset_content_type: application/x-iso9660-image
