@@ -1,4 +1,4 @@
-name: Build Minimal TDX Test Image
+name: Build TDX Test Image
 
 on:
   push:
@@ -10,6 +10,8 @@ on:
 jobs:
   build-image:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     
     steps:
     - uses: actions/checkout@v4
@@ -37,7 +39,6 @@ jobs:
           - build-essential
           
         package_update: true
-        package_upgrade: true
         
         apt:
           sources:
@@ -55,7 +56,6 @@ jobs:
 
     - name: Prepare minimal image
       run: |
-        # Convert the downloaded minimal image to qcow2
         qemu-img convert -O qcow2 noble-minimal-cloudimg-amd64.img tdx-test-minimal.qcow2
 
     - name: Upload artifacts
@@ -65,3 +65,8 @@ jobs:
         path: |
           tdx-test-minimal.qcow2
           cloud-init.iso
+
+    - name: List artifact details
+      run: |
+        echo "Created artifacts:"
+        ls -lh tdx-test-minimal.qcow2 cloud-init.iso
