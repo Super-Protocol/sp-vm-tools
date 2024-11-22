@@ -3,6 +3,9 @@
 # Configuration variables
 PCCS_API_KEY="aecd5ebb682346028d60c36131eb2d92"
 PCCS_PORT="8081"
+PCCS_PASSWORD="pccspassword123"
+# Generate SHA512 hash of the password
+USER_TOKEN=$(echo -n "${PCCS_PASSWORD}" | sha512sum | awk '{print $1}')
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -16,6 +19,47 @@ check_error() {
         echo -e "${RED}Error: $1${NC}"
         exit 1
     fi
+}
+
+# Function to wait for service
+wait_for_service() {
+    local service=$1
+    local max_attempts=30
+    local attempt=1
+
+    while [ $attempt -le $max_attempts ]; do
+        if systemctl is-active --quiet $service; then
+            echo -e "${GREEN}$service is up${NC}"
+            return 0
+        fi
+        echo -n "."
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    echo -e "${RED}$service failed to start${NC}"
+    return 1
+}
+
+register_platform() {
+    local csv_file="pckid_retrieval.csv"
+    
+    if [ ! -f "$csv_file" ]; then
+        echo -e "${RED}PCK ID retrieval file not found${NC}"
+        return 1
+    fi
+
+    # Get platform info from csv
+    echo -e "${YELLOW}Platform information from CSV:${NC}"
+    cat "$csv_file"
+
+    # Register with PCCS using password
+    echo -e "${GREEN}Registering with PCCS...${NC}"
+    PCKIDRetrievalTool \
+        -url "https://localhost:${PCCS_PORT}" \
+        -use_secure_cert false \
+        -user_token "${PCCS_PASSWORD}"
+    
+    return $?
 }
 
 echo -e "${GREEN}Starting clean PCCS installation and setup...${NC}"
@@ -59,11 +103,6 @@ apt-get install -y \
     tdx-qgs
 check_error "Failed to install packages"
 
-# Run PCKIDRetrievalTool
-echo -e "${GREEN}Running PCKIDRetrievalTool...${NC}"
-PCKIDRetrievalTool
-check_error "PCKIDRetrievalTool failed"
-
 # Create PCCS config directory
 mkdir -p /opt/intel/sgx-dcap-pccs/config/
 
@@ -77,10 +116,10 @@ cat > /opt/intel/sgx-dcap-pccs/config/default.json << EOL
     "ApiKey" : "${PCCS_API_KEY}",
     "proxy" : "",
     "RefreshSchedule": "0 0 1 * *",
-    "UserTokenHash" : "2997dd7ea4d3f7db747f5550b37ccaabd80e7b66cb7599443112a4f343f2e91c06793a0aa8a6f1c92b1a213776be55d5475f4b4c363d708ef4f39f3a6ed634ee",
-    "AdminTokenHash" : "2997dd7ea4d3f7db747f5550b37ccaabd80e7b66cb7599443112a4f343f2e91c06793a0aa8a6f1c92b1a213776be55d5475f4b4c363d708ef4f39f3a6ed634ee",
-    "CachingFillMode" : "LAZY",
-    "LogLevel" : "info",
+    "UserTokenHash" : "${USER_TOKEN}",
+    "AdminTokenHash" : "${USER_TOKEN}",
+    "CachingFillMode" : "REQ",
+    "LogLevel" : "debug",
     "DB_CONFIG" : "sqlite",
     "sqlite" : {
         "database" : "database",
@@ -118,14 +157,38 @@ LOCAL_PCK_RETRY_DELAY=10
 EOL
 check_error "Failed to create QCNL configuration"
 
+# Set correct permissions
+echo -e "${GREEN}Setting permissions...${NC}"
+chown -R pccs:pccs /opt/intel/sgx-dcap-pccs/
+chmod -R 750 /opt/intel/sgx-dcap-pccs/
+
 # Enable and start services
 echo -e "${GREEN}Enabling and starting services...${NC}"
 systemctl enable pccs qgsd mpa_registration_tool
 systemctl daemon-reload
 
+# Start PCCS first
+echo -e "${GREEN}Starting PCCS...${NC}"
 systemctl start pccs
+wait_for_service pccs
+check_error "Failed to start PCCS"
 sleep 5
+
+# Get platform info and register
+cd /opt/intel/sgx-dcap-pccs/
+echo -e "${GREEN}Running PCKIDRetrievalTool...${NC}"
+rm -f pckid_retrieval.csv
+PCKIDRetrievalTool
+check_error "PCKIDRetrievalTool failed"
+
+echo -e "${GREEN}Registering platform with PCCS...${NC}"
+register_platform
+check_error "Failed to register platform"
+
+# Start remaining services
+echo -e "${GREEN}Starting remaining services...${NC}"
 systemctl start qgsd
+wait_for_service qgsd
 systemctl start mpa_registration_tool
 
 # Check services status
