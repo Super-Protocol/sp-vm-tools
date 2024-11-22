@@ -456,31 +456,6 @@ install_debs() {
     return 0
 }
 
-setup_attestation() {
-  TMP_DIR=$1
-   # Download the setup-attestation-host.sh script
-  git clone -b noble-24.04 --single-branch --depth 1 --no-tags https://github.com/canonical/tdx.git "${TMP_DIR}/tdx-cannonical"
-  SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/attestation/setup-attestation-host.sh
-
-  # Check for download errors
-  if [ $? -ne 0 ]; then
-    echo "Failed to download the setup-attestation-host.sh script."
-    exit 1
-  fi
-
-  # Make the script executable
-  chmod +x "${SCRIPT_PATH}"
-
-  # Run the script
-  echo "Running setup-attestation-host.sh..."
-  "${SCRIPT_PATH}"
-
-  # Change pccs url from local to public
-  echo "Configuring pccs service..."
-  cp /etc/sgx_default_qcnl.conf /etc/sgx_default_qcnl.conf.bak
-  sed -i 's|"pccs_url": "https://localhost:8081/sgx/certification/v4/"|"pccs_url": "https://pccs.superprotocol.io/sgx/certification/v4/"|' /etc/sgx_default_qcnl.conf
-}
-
 setup_grub() {
   if ! grep -q 'kvm_intel.tdx=on' /etc/default/grub; then
     sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)/\1 nohibernate kvm_intel.tdx=on/' /etc/default/grub
@@ -700,7 +675,17 @@ bootstrap() {
         exit 1
     fi
 
-    setup_attestation "${TMP_DIR}"
+    if [ -f "${DEB_DIR}/setup_tdx.sh" ]; then
+        echo "Running TDX setup script..."
+        cp "${DEB_DIR}/setup_tdx.sh" "${TMP_DIR}/"
+        chmod +x "${TMP_DIR}/setup_tdx.sh"
+        "${TMP_DIR}/setup_tdx.sh"
+        check_error "TDX setup failed"
+    else 
+        echo "ERROR: setup_tdx.sh not found in package"
+        exit 1
+    fi
+    
     setup_nvidia_gpus "${TMP_DIR}"
 
     # Clean up temporary directory
