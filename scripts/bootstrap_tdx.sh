@@ -675,14 +675,14 @@ bootstrap() {
         exit 1
     fi
 
-    if [ -f "${DEB_DIR}/setup_tdx.sh" ]; then
+    if [ -f "$(dirname "${BASH_SOURCE[0]}")/setup_tdx.sh" ]; then
         echo "Running TDX setup script..."
-        cp "${DEB_DIR}/setup_tdx.sh" "${TMP_DIR}/"
+        cp "$(dirname "${BASH_SOURCE[0]}")/setup_tdx.sh" "${TMP_DIR}/"
         chmod +x "${TMP_DIR}/setup_tdx.sh"
         "${TMP_DIR}/setup_tdx.sh"
         check_error "TDX setup failed"
     else 
-        echo "ERROR: setup_tdx.sh not found in package"
+        echo "ERROR: setup_tdx.sh not found"
         exit 1
     fi
     
