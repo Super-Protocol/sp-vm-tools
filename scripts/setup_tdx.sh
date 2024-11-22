@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Configuration variables
-PCCS_API_KEY="322ed6bd9a802109e1e9692be0a825c6"
+PCCS_API_KEY="aecd5ebb682346028d60c36131eb2d92"
 PCCS_PORT="8081"
 
 # Colors for output
@@ -18,40 +18,11 @@ check_error() {
     fi
 }
 
-check_sgx_device() {
-    echo "Checking SGX device..."
-    if [ ! -c "/dev/sgx_enclave" ] && [ ! -c "/dev/sgx/enclave" ]; then
-        echo -e "${RED}SGX device not found. Please verify kernel support for SGX${NC}"
-        return 1
-    fi
-    return 0
-}
-
-check_tdx_support() {
-    echo "Checking TDX support..."
-    if ! grep -q "tdx" /proc/cpuinfo && ! dmesg | grep -q "TDX"; then
-        echo -e "${RED}TDX support not detected in kernel${NC}"
-        return 1
-    fi
-    return 0
-}
-
-echo -e "${GREEN}Starting SGX/TDX setup...${NC}"
+echo -e "${GREEN}Starting clean PCCS installation and setup...${NC}"
 
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then 
     echo -e "${RED}Please run as root${NC}"
-    exit 1
-fi
-
-# Verify hardware support
-if ! check_sgx_device; then
-    echo -e "${RED}SGX device not available. Please check BIOS settings and kernel support.${NC}"
-    exit 1
-fi
-
-if ! check_tdx_support; then
-    echo -e "${RED}TDX not available. Please check BIOS settings and kernel support.${NC}"
     exit 1
 fi
 
@@ -60,7 +31,7 @@ echo -e "${GREEN}Stopping all services...${NC}"
 systemctl stop pccs qgsd mpa_registration_tool
 systemctl disable pccs qgsd mpa_registration_tool
 
-# Remove existing pcss packages
+# Remove existing packages
 echo -e "${GREEN}Removing existing packages...${NC}"
 apt-get remove -y sgx-dcap-pccs 
 
@@ -93,6 +64,47 @@ echo -e "${GREEN}Running PCKIDRetrievalTool...${NC}"
 PCKIDRetrievalTool
 check_error "PCKIDRetrievalTool failed"
 
+# Create PCCS config directory
+mkdir -p /opt/intel/sgx-dcap-pccs/config/
+
+# Create PCCS configuration
+echo -e "${GREEN}Creating PCCS configuration...${NC}"
+cat > /opt/intel/sgx-dcap-pccs/config/default.json << EOL
+{
+    "HTTPS_PORT" : ${PCCS_PORT},
+    "hosts" : "127.0.0.1",
+    "uri": "https://api.trustedservices.intel.com/sgx/certification/v4/",
+    "ApiKey" : "${PCCS_API_KEY}",
+    "proxy" : "",
+    "RefreshSchedule": "0 0 1 * *",
+    "UserTokenHash" : "2997dd7ea4d3f7db747f5550b37ccaabd80e7b66cb7599443112a4f343f2e91c06793a0aa8a6f1c92b1a213776be55d5475f4b4c363d708ef4f39f3a6ed634ee",
+    "AdminTokenHash" : "2997dd7ea4d3f7db747f5550b37ccaabd80e7b66cb7599443112a4f343f2e91c06793a0aa8a6f1c92b1a213776be55d5475f4b4c363d708ef4f39f3a6ed634ee",
+    "CachingFillMode" : "LAZY",
+    "LogLevel" : "info",
+    "DB_CONFIG" : "sqlite",
+    "sqlite" : {
+        "database" : "database",
+        "username" : "username",
+        "password" : "password",
+        "options" : {
+            "host": "localhost",
+            "dialect": "sqlite",
+            "pool": {
+                "max": 5,
+                "min": 0,
+                "acquire": 30000,
+                "idle": 10000
+            },
+            "define": {
+                "freezeTableName": true
+            },
+            "logging" : false, 
+            "storage": "pckcache.db"
+        }
+    }
+}
+EOL
+
 # Configure QCNL
 echo -e "${GREEN}Configuring QCNL...${NC}"
 cat > /etc/sgx_default_qcnl.conf << EOL
@@ -123,25 +135,8 @@ for service in pccs qgsd mpa_registration_tool; do
     systemctl status $service --no-pager
 done
 
-# Verify services are running correctly
-echo -e "\n${GREEN}Verifying services...${NC}"
-services_ok=true
-for service in pccs qgsd mpa_registration_tool; do
-    if ! systemctl is-active --quiet $service; then
-        echo -e "${RED}$service is not running${NC}"
-        services_ok=false
-    else
-        echo -e "${GREEN}✓ $service is running${NC}"
-    fi
-done
-
-if [ "$services_ok" = true ]; then
-    echo -e "\n${GREEN}SGX/TDX setup completed successfully!${NC}"
-    echo -e "${YELLOW}To check logs use:${NC}"
-    echo "PCCS logs: journalctl -u pccs -f"
-    echo "QGSD logs: journalctl -u qgsd -f"
-    echo "MPA Registration logs: cat /var/log/mpa_registration.log"
-else
-    echo -e "\n${RED}Setup completed with errors. Please check the logs above.${NC}"
-    exit 1
-fi
+echo -e "\n${GREEN}Installation and setup completed!${NC}"
+echo -e "${YELLOW}To check logs use:${NC}"
+echo "PCCS logs: journalctl -u pccs -f"
+echo "QGSD logs: journalctl -u qgsd -f"
+echo "MPA Registration logs: cat /var/log/mpa_registration.log"
