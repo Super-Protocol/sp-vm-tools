@@ -3,7 +3,7 @@
 # Default values
 SCRIPT_DIR=$( cd "$( dirname "$0" )" && pwd )
 
-REQUIRED_PACKAGES=("s3cmd")
+REQUIRED_PACKAGES=("rclone")
 REQUIRED_TDX_PACKAGES=("sp-qemu-tdx")
 
 S3_ACCESS_KEY="jxekrow2wxmjps6pr2jv22hamtha"
@@ -212,46 +212,70 @@ download_release() {
 }
 
 parse_and_download_release_files() {
-    RELEASE_JSON=$1
-    DOWNLOAD_DIR=$(dirname ${RELEASE_JSON})
+   RELEASE_JSON=$1
+   DOWNLOAD_DIR=$(dirname ${RELEASE_JSON})
 
-    while read -r entry; do
-        key=$(echo "$entry" | jq -r '.key')
-        bucket=$(echo "$entry" | jq -r '.value.bucket')
-        prefix=$(echo "$entry" | jq -r '.value.prefix')
-        filename=$(echo "$entry" | jq -r '.value.filename')
-        sha256=$(echo "$entry" | jq -r '.value.sha256')
+   # Create rclone config on the fly 
+   RCLONE_CONFIG="/tmp/rclone.conf"
+   cat > "${RCLONE_CONFIG}" << EOF
+[storj]
+type = s3
+provider = Other
+access_key_id = ${S3_ACCESS_KEY}
+secret_access_key = ${S3_SECRET_KEY}
+endpoint = ${S3_ENDPOINT}
+force_path_style = true
+EOF
 
-        s3_path="s3://$bucket/$prefix/$filename"
-        local_path="$DOWNLOAD_DIR/$filename"
+   while read -r entry; do
+       key=$(echo "$entry" | jq -r '.key')
+       bucket=$(echo "$entry" | jq -r '.value.bucket')
+       prefix=$(echo "$entry" | jq -r '.value.prefix')
+       filename=$(echo "$entry" | jq -r '.value.filename')
+       sha256=$(echo "$entry" | jq -r '.value.sha256')
 
-        case $key in
-            rootfs) ROOTFS_PATH=$local_path ;;
-            bios) BIOS_PATH=$local_path ;;
-            root_hash) ROOTFS_HASH_PATH=$local_path;;
-            kernel) KERNEL_PATH=$local_path ;;
-        esac
+       local_path="$DOWNLOAD_DIR/$filename"
 
-        if [[ -f "$local_path" ]]; then
-            computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
-            if [[ "$computed_sha256" == "$sha256" ]]; then
-                echo "File $filename already exists and checksum is valid. Skipping download."
-                continue
-            else
-                echo "Warning: Checksum mismatch for existing file $filename. Downloading again."
-            fi
-        fi
+       case $key in
+           rootfs) ROOTFS_PATH=$local_path ;;
+           bios) BIOS_PATH=$local_path ;;
+           root_hash) ROOTFS_HASH_PATH=$local_path;;
+           kernel) KERNEL_PATH=$local_path ;;
+       esac
 
-        s3cmd --access_key="$S3_ACCESS_KEY" --secret_key="$S3_SECRET_KEY" --host="$S3_ENDPOINT" --host-bucket="%(bucket)s.$S3_ENDPOINT" --force get "$s3_path" "$local_path"
+       if [[ -f "$local_path" ]]; then
+           computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
+           if [[ "$computed_sha256" == "$sha256" ]]; then
+               echo "File $filename already exists and checksum is valid. Skipping download."
+               continue
+           else
+               echo "Warning: Checksum mismatch for existing file $filename. Downloading again."
+           fi
+       fi
 
-        computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
-        if [[ "$computed_sha256" != "$sha256" ]]; then
-            echo "Error: Checksum mismatch for $filename after download. Expected $sha256, got $computed_sha256."
-            exit 1
-        else
-            echo "Successfully downloaded and verified $filename."
-        fi
-    done < <(jq -c 'to_entries[]' "$RELEASE_JSON")
+       echo "Downloading $filename..."
+       # Use rclone with progress display and stats
+       rclone --config="${RCLONE_CONFIG}" \
+           --transfers 8 \
+           --checkers 16 \
+           --s3-upload-concurrency 8 \
+           --s3-chunk-size 32M \
+           --progress \
+           --stats 1s \
+           --stats-one-line \
+           copy "storj:$bucket/$prefix/$filename" "$local_path"
+
+       computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
+       if [[ "$computed_sha256" != "$sha256" ]]; then
+           echo "Error: Checksum mismatch for $filename after download. Expected $sha256, got $computed_sha256."
+           exit 1
+       else
+           echo "Successfully downloaded and verified $filename."
+       fi
+   done < <(jq -c 'to_entries[]' "$RELEASE_JSON")
+
+   # Clean up temporary config
+   rm -f "${RCLONE_CONFIG}"
 }
 
 check_packages() {
@@ -260,13 +284,14 @@ check_packages() {
         exit 1
     fi
 
-    local missing=()
-    for package in "${REQUIRED_PACKAGES[@]}"; do
-        if ! dpkg -l | grep -q "^ii.*$package"; then
-            missing+=("$package")
-        fi
-    done
+    # Check for rclone binary
+    if ! command -v rclone &> /dev/null; then
+        echo "Error: rclone is not installed. Installing..."
+        sudo -v ; curl https://rclone.org/install.sh | sudo bash
+    fi
 
+    # Check TDX packages if needed
+    local missing=()
     if [[ "${VM_MODE}" == "tdx" ]]; then
         for package in "${REQUIRED_TDX_PACKAGES[@]}"; do
             if ! dpkg -l | grep -q "^ii.*$package"; then
