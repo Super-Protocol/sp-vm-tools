@@ -1,5 +1,10 @@
 #!/bin/bash
 
+print_section_header() {
+    echo -e "\n=== $1 ==="
+    echo "$(printf '=%.0s' {1..40})"
+}
+
 print_error_message() {
     local error_message="$1"
     local bios_location="$2"
@@ -93,111 +98,150 @@ check_txt_status() {
     fi
 }
 
-check_sgx_configuration() {
-    echo "Checking SGX Configuration..."
+check_all_bios_settings() {
+    local results=()
+    local all_passed=true
     
-    # Check if SGX is enabled in the kernel
-    if ! grep -q "sgx" /proc/cpuinfo; then
-        print_error_message "SGX is not enabled in the CPU/BIOS. Please check the following settings:" \
-                          "Software Guard Extension (SGX) Configuration"
-        echo "Required settings:"
-        echo "- SW Guard Extensions (SGX): [Enabled]"
-        echo "- PRM Size for SGX: [128 MiB or higher]"
-        echo "- SGX Factory Reset: [Disabled]"
-        echo "- SGX QoS: [Enabled]"
-        return 1
+    print_section_header "BIOS Configuration Check Results"
+    
+    # Store CPU PA check results
+    echo "Checking CPU PA Limit..."
+    results+=("CPU PA Configuration:")
+    results+=("- 'Limit CPU PA to 46 bits' must be DISABLED (affects TME-MT)")
+    results+=("- Location: Uncore General Configuration")
+
+    # Check TME settings
+    echo "Checking TME settings..."
+    local tme_cap=$(rdmsr -f 0:0 0x981 2>/dev/null || echo "0")
+    local tme_active=$(rdmsr -f 0:0 0x982 2>/dev/null || echo "0")
+    
+    results+=("TME Configuration:")
+    if [ "$tme_cap" = "1" ] && [ "$tme_active" = "1" ]; then
+        results+=("✓ TME properly enabled")
+    else
+        results+=("✗ TME not properly configured")
+        results+=("  Required settings:")
+        results+=("  - Memory Encryption (TME): [Enable]")
+        results+=("  - Total Memory Encryption (TME): [Enable]")
+        results+=("  - Total Memory Encryption Multi-Tenant (TME-MT): [Enable]")
+        all_passed=false
     fi
 
-    # Perform TXT check
-    if ! check_txt_status; then
-        print_error_message "TXT configuration needs verification. Please check these BIOS settings:" \
-                          "Intel TXT Configuration"
-        echo "Required settings:"
-        echo "- Intel Virtualization Technology (VT-x): [Enabled]"
-        echo "- Intel VT for Directed I/O (VT-d): [Enabled]"
-        echo "- Intel TXT Support: [Enabled]"
-        echo "- TPM Device: [Enabled]"
-        echo "- TPM State: [Activated and Owned]"
-        echo "- TPM 2.0 UEFI Spec Version: [TCG_2]"
-        echo
-        echo "Troubleshooting steps:"
-        echo "1. Verify that TPM is physically present and properly seated"
-        echo "2. In BIOS settings:"
-        echo "   - Disable and then re-enable TPM"
-        echo "   - Clear TPM ownership"
-        echo "   - Enable Intel TXT explicitly"
-        echo "3. Save BIOS settings and perform a full power cycle"
-        echo "4. Update BIOS to the latest version if available"
-        echo "5. Check if TPM is recognized by the OS:"
-        echo "   - Run 'ls /dev/tpm*'"
-        echo "   - Check 'dmesg | grep -i tpm'"
-        return 1
+    # Check SGX Configuration
+    echo "Checking SGX settings..."
+    local sgx_status=()
+    if grep -q "sgx" /proc/cpuinfo; then
+        sgx_status+=("✓ SGX enabled in CPU")
+    else
+        sgx_status+=("✗ SGX not enabled in CPU/BIOS")
+        all_passed=false
     fi
 
-    # Check for SGX device
-    if [ ! -c "/dev/sgx_enclave" ] && [ ! -c "/dev/sgx/enclave" ]; then
-        print_error_message "SGX device not found. Please verify kernel support for SGX"
-        return 1
+    # Check SGX device
+    if [ -c "/dev/sgx_enclave" ] || [ -c "/dev/sgx/enclave" ]; then
+        sgx_status+=("✓ SGX device present")
+    else
+        sgx_status+=("✗ SGX device not found")
+        all_passed=false
     fi
 
-    # Check for correct PRM size (128 MiB)
-    local prm_size
-    prm_size=$(dmesg | grep -i "sgx:" | grep -i "prm" | grep -o "[0-9]\+" | head -n1)
-    if [ -z "$prm_size" ]; then
-        # If not found in dmesg, try checking directly
-        if [ -f "/sys/devices/system/sgx/sgx0/sgx_prm_size" ]; then
-            prm_size=$(cat /sys/devices/system/sgx/sgx0/sgx_prm_size)
-            # Convert from bytes to MB
-            prm_size=$((prm_size / 1024 / 1024))
+    results+=("SGX Configuration:")
+    results+=("${sgx_status[@]}")
+
+    # Check TXT Configuration
+    echo "Checking TXT settings..."
+    local txt_status=()
+    
+    # Check TPM devices
+    if [ -c "/dev/tpm0" ] && [ -c "/dev/tpmrm0" ]; then
+        txt_status+=("✓ TPM devices present")
+        if [ "$(stat -c %G /dev/tpm0)" = "root" ] || [ "$(stat -c %G /dev/tpm0)" = "tss" ]; then
+            txt_status+=("✓ TPM permissions correct")
         else
-            # If we can't determine size, assume it's correct if SGX is working
-            prm_size=128
+            txt_status+=("! TPM permissions need adjustment")
+        fi
+    else
+        txt_status+=("✗ TPM devices not found")
+        all_passed=false
+    fi
+
+    # Check TXT CPU support
+    if grep -q "smx" /proc/cpuinfo; then
+        txt_status+=("✓ CPU supports TXT (SMX)")
+    else
+        if command -v rdmsr &> /dev/null; then
+            if modprobe msr 2>/dev/null; then
+                local txt_msr=$(rdmsr 0x8B 2>/dev/null || echo "")
+                if [ ! -z "$txt_msr" ] && [ "$txt_msr" != "0" ]; then
+                    txt_status+=("✓ TXT support detected via MSR")
+                else
+                    txt_status+=("✗ TXT support not detected")
+                    all_passed=false
+                fi
+            fi
         fi
     fi
 
-    if [ "$prm_size" -lt "128" ]; then
-        print_error_message "PRM size is less than required 128 MiB. Current size: ${prm_size} MiB"
+    results+=("TXT Configuration:")
+    results+=("${txt_status[@]}")
+
+    # Check TDX Configuration
+    echo "Checking TDX settings..."
+    local tdx_status=()
+    if grep -q "tdx" /proc/cpuinfo || dmesg | grep -q "TDX"; then
+        tdx_status+=("✓ TDX support detected")
+    else
+        tdx_status+=("✗ TDX support not detected")
+        all_passed=false
+    fi
+
+    results+=("TDX Configuration:")
+    results+=("${tdx_status[@]}")
+    results+=("Required values:")
+    results+=("- TME-MT/TDX key split: 1")
+    results+=("- TME-MT keys: >0 (recommended: 31)")
+    results+=("- TDX keys: >0 (recommended: 32)")
+
+    # Print final results
+    print_section_header "Summary"
+    printf '%s\n' "${results[@]}"
+    
+    echo -e "\n=== Required BIOS Settings ===="
+    echo "Socket Configuration > Processor Configuration > TME, TME-MT, TDX:"
+    echo "- Memory Encryption (TME): [Enable]"
+    echo "- Total Memory Encryption (TME): [Enable]"
+    echo "- Total Memory Encryption Multi-Tenant (TME-MT): [Enable]"
+    echo "- TME-MT keys: [31]"
+    echo "- Key split: [1]"
+    echo "- TDX: [Enable]"
+    echo "- SEAM Loader: [Enable]"
+    echo "- TDX keys: [32]"
+    echo
+    echo "Software Guard Extension (SGX) Configuration:"
+    echo "- SW Guard Extensions (SGX): [Enable]"
+    echo "- SGX Factory Reset: [Disable]"
+    echo "- SGX QoS: [Enable]"
+    echo
+    echo "Intel TXT Configuration:"
+    echo "- Intel Virtualization Technology (VT-x): [Enable]"
+    echo "- Intel VT for Directed I/O (VT-d): [Enable]"
+    echo "- Intel TXT Support: [Enable]"
+    echo "- TPM Device: [Enable]"
+    echo "- TPM State: [Activated and Owned]"
+    echo "- TPM 2.0 UEFI Spec Version: [TCG_2]"
+
+    if [ "$all_passed" = true ]; then
+        echo -e "\n✓ All required BIOS settings appear to be properly configured"
+        return 0
+    else
+        echo -e "\n✗ Some BIOS settings need attention. Please review the results above."
         return 1
     fi
-
-    # Check for SGX support (either through module or built into kernel)
-    if ! lsmod | grep -q "intel_sgx" && ! grep -q "sgx" /proc/cpuinfo; then
-        # Additional check for built-in kernel support
-        if ! dmesg | grep -q "SGX"; then
-            print_error_message "SGX support not detected. Please verify SGX is enabled in BIOS and kernel"
-            return 1
-        fi
-    fi
-
-    echo "SGX Configuration verified successfully:"
-    echo "✓ SGX Enabled in CPU"
-    echo "✓ PRM Size: ${prm_size} MiB"
-    echo "✓ SGX support detected"
-    echo "✓ SGX device present"
-
-    return 0
-}
-
-check_tdx_settings() {
-    echo "Checking TDX specific settings..."
-    
-    # Check for TDX support in kernel
-    if ! grep -q "tdx" /proc/cpuinfo && ! dmesg | grep -q "TDX"; then
-        print_error_message "TDX support not detected in kernel"
-        return 1
-    fi
-
-    echo "Required TDX configuration values:"
-    echo "- TME-MT/TDX key split: should be 1"
-    echo "- TME-MT keys: should be > 0 (recommended: 31)"
-    echo "- TDX keys: should be > 0 (recommended: 32)"
-    
-    return 0
 }
 
 check_bios_settings() {
-    echo "Checking BIOS settings for TDX compatibility..."
-  
+    echo "Performing comprehensive BIOS configuration check..."
+    
     # Install msr-tools if not present
     if ! command -v rdmsr &> /dev/null; then
         echo "Installing msr-tools..."
@@ -210,59 +254,9 @@ check_bios_settings() {
         modprobe msr
     fi
 
-    # Define MSR addresses
-    TME_CAPABILITY_MSR=0x981
-    TME_ACTIVATE_MSR=0x982
-    TDX_CAPABILITY_MSR=0x983
-    SGX_CAPABILITY_MSR=0x3A
-
-    # First, check CPU PA Limit as it affects TME-MT
-    check_cpu_pa_limit
-
-    # Then check SGX configuration
-    if ! check_sgx_configuration; then
-        return 1
-    fi
-
-    # Check TME (Total Memory Encryption)
-    echo "Checking TME settings..."
-    tme_cap=$(rdmsr -f 0:0 $TME_CAPABILITY_MSR 2>/dev/null || echo "0")
-    tme_active=$(rdmsr -f 0:0 $TME_ACTIVATE_MSR 2>/dev/null || echo "0")
-    if [ "$tme_cap" != "1" ] || [ "$tme_active" != "1" ]; then
-        print_error_message "TME is not properly enabled in BIOS. Required settings:
-- Memory Encryption (TME): [Enable]
-- Total Memory Encryption (TME): [Enable]
-- Total Memory Encryption Multi-Tenant (TME-MT): [Enable]
-- Key stack amount: [> 0]
-- TME-MT key ID bits: [> 0]" \
-                          "Socket Configuration > Processor Configuration > TME, TME-MT, TDX"
-        return 1
-    fi
-
-    # Check TDX settings
-    if ! check_tdx_settings; then
-        return 1
-    fi
-
-    echo "BIOS Configuration Checklist:"
-    echo "✓ CPU PA Limit to 46 bits: Disabled"
-    echo "✓ SGX Configuration:"
-    echo "  - PRM Size: 128 MiB"
-    echo "  - SW Guard Extensions: Enabled"
-    echo "  - SGX QoS: Enabled"
-    echo "  - Owner EPOCH: Activated"
-    echo "✓ TME Configuration: Enabled"
-    echo "✓ TME-MT Configuration:"
-    echo "  - TME-MT keys: 31"
-    echo "  - Key split: 1"
-    echo "✓ TDX Configuration:"
-    echo "  - TDX: Enabled"
-    echo "  - SEAM Loader: Enabled"
-    echo "  - TDX keys: 32"
-    
-    echo "All required BIOS settings appear to be properly configured"
-    echo "For more detailed information about TDX setup and configuration, please visit: https://github.com/canonical/tdx"
-    return 0
+    # Run all checks at once
+    check_all_bios_settings
+    return $?
 }
 
 detect_raid_config() {
@@ -604,12 +598,14 @@ download_latest_release() {
 
 bootstrap() {
     # Check if the script is running as root
+    print_section_header "Privilege Check"
     if [ "$(id -u)" -ne 0 ]; then
         echo "This script must be run as root. Please run with sudo."
         exit 1
     fi
     
     # Download latest release if no archive provided
+    print_section_header "Release Package Setup"
     ARCHIVE_PATH=""
     if [ "$#" -ne 1 ]; then
         echo "No archive provided, downloading latest release..."
@@ -630,6 +626,7 @@ bootstrap() {
     echo "Using archive: ${ARCHIVE_PATH}"
 
     # Create a temporary directory for extraction
+    print_section_header "Package Extraction"
     TMP_DIR=$(mktemp -d)
     DEB_DIR="${TMP_DIR}/package"
     mkdir -p "${DEB_DIR}"
@@ -638,16 +635,20 @@ bootstrap() {
     echo "Extracting archive..."
     tar -xf "${ARCHIVE_PATH}" -C "${DEB_DIR}"
 
+    print_section_header "Kernel Installation"
     echo "Installing kernel and required packages first..."
     install_debs "${DEB_DIR}"
-    
+
+    print_section_header "Kernel Configuration"
     echo "Configuring kernel boot parameters..."
     setup_grub
-    
+
+    print_section_header "TDX Module Update"
     echo "Updating TDX module..."
     update_tdx_module "${TMP_DIR}"
 
     # Check if kernel was actually installed
+    print_section_header "System State Check"
     if [ "$NEW_KERNEL_VERSION" != "$CURRENT_KERNEL" ]; then
         echo "Kernel and modules installation complete."
         echo "A reboot is required to load the new kernel before proceeding with BIOS checks."
@@ -658,6 +659,7 @@ bootstrap() {
 
         case $choice in
             1)
+                print_section_header "System Reboot"
                 echo "System will reboot in 10 seconds..."
                 echo "Please run this script again after reboot to complete the setup."
                 sleep 10
@@ -669,6 +671,7 @@ bootstrap() {
         esac
     fi
 
+    print_section_header "BIOS Configuration Verification"
     if ! check_bios_settings; then
         echo "ERROR: Required BIOS settings are not properly configured"
         echo "Please configure BIOS settings according to the instructions above and try again"
@@ -685,13 +688,16 @@ bootstrap() {
         echo "ERROR: setup_tdx.sh not found"
         exit 1
     fi
-    
+
+    print_section_header "NVIDIA GPU Configuration"
     setup_nvidia_gpus "${TMP_DIR}"
 
     # Clean up temporary directory
+    print_section_header "Cleanup"
     echo "Cleaning up..."
     rm -rf "${TMP_DIR}"
 
+    print_section_header "Installation Status"
     echo "Installation complete."
     if [ "$NEW_KERNEL_VERSION" != "$CURRENT_KERNEL" ] && [ "$choice" = "2" ]; then
         echo "NOTE: A system reboot is still required to activate all changes."
