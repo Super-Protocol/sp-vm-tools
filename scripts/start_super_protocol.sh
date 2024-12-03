@@ -3,7 +3,6 @@
 # Default values
 SCRIPT_DIR=$( cd "$( dirname "$0" )" && pwd )
 
-REQUIRED_PACKAGES=("rclone")
 REQUIRED_TDX_PACKAGES=("sp-qemu-tdx")
 
 S3_ACCESS_KEY="jxekrow2wxmjps6pr2jv22hamtha"
