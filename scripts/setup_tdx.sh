@@ -63,10 +63,6 @@ register_platform() {
         return 1
     fi
 
-    # Get platform info from csv
-    echo -e "${YELLOW}Platform information from CSV:${NC}"
-    cat "$csv_file"
-
     # Register with PCCS using password
     echo -e "${GREEN}Registering with PCCS...${NC}"
     PCKIDRetrievalTool \
