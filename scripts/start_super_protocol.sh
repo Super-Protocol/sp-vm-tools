@@ -5,10 +5,7 @@ SCRIPT_DIR=$( cd "$( dirname "$0" )" && pwd )
 
 REQUIRED_TDX_PACKAGES=("sp-qemu-tdx")
 
-S3_ACCESS_KEY="jxekrow2wxmjps6pr2jv22hamtha"
-S3_SECRET_KEY="jztnpl532njcljtdolnpbszq66lgqmwmgkbh747342hwc72grkohi"
-S3_ENDPOINT="gateway.storjshare.io"
-S3_BUCKET="builds-vm"
+STORJ_TOKEN="1UXqNMwov41q9TgHmyopNg5q2giQ8aTdh1gjKWKjfbWPFrcrnhenp6QZfd5ukyVnYXDx9Cok6RtnQMMnXmoZPrSUMNGZGF9KuLCzvRNmQYHowX14C2xAxtJeH6VCuNX39ist4bRE9L5VT3k41frDVh3cG1gZvsqh4EaDeaJyV6U4xVaqXqULnSb9PozqU97VVLWhfwdnj6XgUM59Wzq7yo7vn8RxwSyn8H74TEiLNGUPPA3frsYZuoqWQkNzbiYev5ByWeLro1TXo7DogD4WALCKfEmpwHs9j9rsX5WZvvZ13ourTiuZp5vTTZkByB2ibxUJqkSoZSpCNVtmDToNVKkMREVySe"
 RELEASE_REPO="Super-Protocol/sp-vm"
 RELEASE_ASSET="vm.json"
 
@@ -214,18 +211,6 @@ parse_and_download_release_files() {
    RELEASE_JSON=$1
    DOWNLOAD_DIR=$(dirname ${RELEASE_JSON})
 
-   # Create rclone config on the fly 
-   RCLONE_CONFIG="/tmp/rclone.conf"
-   cat > "${RCLONE_CONFIG}" << EOF
-[storj]
-type = s3
-provider = Other
-access_key_id = ${S3_ACCESS_KEY}
-secret_access_key = ${S3_SECRET_KEY}
-endpoint = ${S3_ENDPOINT}
-force_path_style = true
-EOF
-
    while read -r entry; do
        key=$(echo "$entry" | jq -r '.key')
        bucket=$(echo "$entry" | jq -r '.value.bucket')
@@ -253,16 +238,8 @@ EOF
        fi
 
        echo "Downloading $filename..."
-       # Use rclone with progress display and stats
-       rclone --config="${RCLONE_CONFIG}" \
-           --transfers 8 \
-           --checkers 16 \
-           --s3-upload-concurrency 8 \
-           --s3-chunk-size 32M \
-           --progress \
-           --stats 1s \
-           --stats-one-line \
-           copy "storj:$bucket/$prefix/$filename" "$local_path"
+       # Use uplink with progress display and stats
+       uplink cp --parallelism 8 --parallelism-chunk-size 32M --progress --access ${STORJ_TOKEN} "sj://$bucket/$prefix/$filename" "$local_path"
 
        computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
        if [[ "$computed_sha256" != "$sha256" ]]; then
@@ -272,9 +249,6 @@ EOF
            echo "Successfully downloaded and verified $filename."
        fi
    done < <(jq -c 'to_entries[]' "$RELEASE_JSON")
-
-   # Clean up temporary config
-   rm -f "${RCLONE_CONFIG}"
 }
 
 check_packages() {
@@ -283,10 +257,15 @@ check_packages() {
         exit 1
     fi
 
-    # Check for rclone binary
-    if ! command -v rclone &> /dev/null; then
-        echo "Error: rclone is not installed. Installing..."
-        sudo -v ; curl https://rclone.org/install.sh | sudo bash
+    # Check for uplink binary
+    if ! command -v uplink &> /dev/null; then
+        echo "Error: uplink is not installed. Installing..."
+        curl -L https://github.com/storj/storj/releases/latest/download/uplink_linux_amd64.zip -o uplink_linux_amd64.zip
+        unzip -o uplink_linux_amd64.zip
+        sudo install uplink /usr/local/bin/uplink
+        # cleanup
+        rm uplink_linux_amd64.zip
+        rm uplink
     fi
 
     # Check TDX packages if needed
