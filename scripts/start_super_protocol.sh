@@ -261,6 +261,7 @@ check_packages() {
     if ! command -v uplink &> /dev/null; then
         echo "Uplink is not installed. Installing..."
         curl -L https://github.com/storj/storj/releases/latest/download/uplink_linux_amd64.zip -o uplink_linux_amd64.zip
+        apt update && apt install -y unzip
         unzip -o uplink_linux_amd64.zip
         sudo install uplink /usr/local/bin/uplink
         # cleanup
