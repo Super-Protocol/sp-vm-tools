@@ -467,6 +467,21 @@ download_latest_release() {
 }
 
 bootstrap() {
+    # Check Ubuntu version
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        if [ "${VERSION_ID}" -lt "22" ]; then
+            echo -e "${RED}ERROR: Unsupported Ubuntu version${NC}"
+            echo "This script requires Ubuntu 22.04 or higher."
+            echo "Please upgrade your system to continue."
+            exit 1
+        fi
+    else
+        echo -e "${RED}ERROR: Could not determine OS version${NC}"
+        echo "This script is designed for Ubuntu 22.04 or higher."
+        exit 1
+    fi
+
     # Check if the script is running as root
     print_section_header "Privilege Check"
     if [ "$(id -u)" -ne 0 ]; then
