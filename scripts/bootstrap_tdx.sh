@@ -466,21 +466,36 @@ download_latest_release() {
   return 0  
 }
 
-bootstrap() {
-    # Check Ubuntu version
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        if [ "${VERSION_ID}" -lt "23" ]; then
-            echo -e "${RED}ERROR: Unsupported Ubuntu version${NC}"
-            echo "This script requires Ubuntu 23.04 or higher."
-            echo "Please upgrade your system to continue."
-            exit 1
-        fi
-    else
+check_os_version() {
+    if [ ! -f /etc/os-release ]; then
         echo -e "${RED}ERROR: Could not determine OS version${NC}"
-        echo "This script is designed for Ubuntu 22.04 or higher."
+        echo "This script is designed for Ubuntu 23.04 or higher."
         exit 1
     fi
+
+    . /etc/os-release
+    
+    if [ "$ID" != "ubuntu" ]; then
+        echo -e "${RED}ERROR: Unsupported operating system${NC}"
+        echo "This script requires Ubuntu 23.04 or higher."
+        echo "Current OS: $PRETTY_NAME"
+        exit 1
+    fi
+
+    # Extract major version number
+    major_version=$(echo "$VERSION_ID" | cut -d. -f1)
+    
+    if [ "$major_version" -lt 23 ]; then
+        echo -e "${RED}ERROR: Unsupported Ubuntu version${NC}"
+        echo "This script requires Ubuntu 23.04 or higher."
+        echo "Current version: $PRETTY_NAME"
+        echo "Please upgrade your system to continue."
+        exit 1
+    fi
+}
+
+bootstrap() {
+    check_os_version
 
     # Check if the script is running as root
     print_section_header "Privilege Check"
