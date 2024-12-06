@@ -147,10 +147,29 @@ detect_raid_config() {
     return 1
 }
 
+cleanup_mdadm_config() {
+    echo "Cleaning up mdadm configuration..."
+    
+    if [ -f "/etc/mdadm/mdadm.conf" ]; then
+        cp /etc/mdadm/mdadm.conf /etc/mdadm/mdadm.conf.bak
+        
+        grep -v "^mdadm:" /etc/mdadm/mdadm.conf > /etc/mdadm/mdadm.conf.clean
+        mv /etc/mdadm/mdadm.conf.clean /etc/mdadm/mdadm.conf
+    fi
+
+    if [ -d "/etc/mdadm" ]; then
+        rm -f /etc/mdadm/mdadm.conf.new
+        rm -f /etc/mdadm/mdadm.conf.clean
+    fi
+}
+
 setup_raid_modules() {
     local new_kernel="$1"
     local current_kernel="$2"
     echo "Setting up RAID configuration for kernel ${new_kernel}"
+
+    # Cleanup mdadm configuration first
+    cleanup_mdadm_config
 
     # Create new mdadm configuration
     echo "Creating new RAID configuration..."
@@ -477,7 +496,7 @@ bootstrap() {
         echo "This script must be run as root. Please run with sudo."
         exit 1
     fi
-    
+
     # Download latest release if no archive provided
     print_section_header "Release Package Setup"
     ARCHIVE_PATH=""
