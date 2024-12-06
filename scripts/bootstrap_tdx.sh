@@ -1,8 +1,20 @@
 #!/bin/bash
+set -e
+
+# Color definitions
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Modify status indicators:
+SUCCESS="[${GREEN}✓${NC}]"
+FAILURE="[${RED}✗${NC}]"
 
 print_section_header() {
-    echo -e "\n=== $1 ==="
-    echo "$(printf '=%.0s' {1..40})"
+    echo -e "\n${BLUE}=== $1 ===${NC}"
+    echo -e "${BLUE}$(printf '=%.0s' {1..40})${NC}"
 }
 
 check_all_bios_settings() {
@@ -261,7 +273,7 @@ install_debs() {
 
     # Verify kernel version was detected
     if [ -z "$NEW_KERNEL_VERSION" ]; then
-        echo "ERROR: Failed to determine kernel version"
+        echo -e "${RED}ERROR: Failed to determine kernel version${NC}"
         return 1
     fi
 
@@ -516,7 +528,7 @@ bootstrap() {
 
     print_section_header "BIOS Configuration Verification"
     if ! check_bios_settings; then
-        echo "ERROR: Required BIOS settings are not properly configured"
+        echo -e "${RED}ERROR: Required BIOS settings are not properly configured${NC}"
         echo "Please configure BIOS settings according to the instructions above and try again"
         exit 1
     fi
@@ -527,11 +539,11 @@ bootstrap() {
         chmod +x "${TMP_DIR}/setup_tdx.sh"
         "${TMP_DIR}/setup_tdx.sh"
         if [ $? -ne 0 ]; then
-            echo "ERROR: TDX setup failed"
+            echo -e "${RED}ERROR: TDX setup failed${NC}"
             exit 1
         fi
     else 
-        echo "ERROR: setup_tdx.sh not found"
+        echo echo -e "${RED}ERROR: setup_tdx.sh not found${NC}"
         exit 1
     fi
 
