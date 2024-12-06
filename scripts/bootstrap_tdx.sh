@@ -343,6 +343,19 @@ setup_nvidia_gpus() {
     return 0
   fi
 
+  # Blacklist both NVIDIA and Nouveau drivers
+  echo "Blacklisting NVIDIA and Nouveau drivers..."
+  tee /etc/modprobe.d/blacklist-nvidia.conf << EOF
+blacklist nvidia
+blacklist nvidia_drm
+blacklist nvidia_uvm
+blacklist nvidia_modeset
+blacklist nouveau
+EOF
+
+  # Remove Nouveau from modules if present
+  sed -i '/nouveau/d' /etc/modules
+
   echo "Determining PCI IDs for your NVIDIA GPU(s)..."
   gpu_list=$(lspci -nnk -d 10de: | grep -E '3D controller' || true)
 
