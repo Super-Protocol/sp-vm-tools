@@ -470,9 +470,9 @@ bootstrap() {
     # Check Ubuntu version
     if [ -f /etc/os-release ]; then
         . /etc/os-release
-        if [ "${VERSION_ID}" -lt "22" ]; then
+        if [ "${VERSION_ID}" -lt "23" ]; then
             echo -e "${RED}ERROR: Unsupported Ubuntu version${NC}"
-            echo "This script requires Ubuntu 22.04 or higher."
+            echo "This script requires Ubuntu 23.04 or higher."
             echo "Please upgrade your system to continue."
             exit 1
         fi
