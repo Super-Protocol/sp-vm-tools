@@ -23,7 +23,7 @@ check_all_bios_settings() {
     fi
     
     # TME Check
-    results+=("\nTME Settings:")
+    results+=("TME Settings:")
     if rdmsr -f 0:0 0x981 2>/dev/null | grep -q "1" && \
        rdmsr -f 0:0 0x982 2>/dev/null | grep -q "1"; then
         results+=("✓ Memory encryption enabled")
@@ -33,7 +33,7 @@ check_all_bios_settings() {
     fi
 
     # SGX Check
-    results+=("\nSGX Settings:")
+    results+=("SGX Settings:")
     if grep -q "sgx" /proc/cpuinfo && [ -c "/dev/sgx_enclave" -o -c "/dev/sgx/enclave" ]; then
         results+=("✓ SGX enabled and configured")
     else
@@ -42,7 +42,7 @@ check_all_bios_settings() {
     fi
 
     # TXT Check  
-    results+=("\nTXT Settings:")
+    results+=("TXT Settings:")
     if grep -q "smx" /proc/cpuinfo || \
        (command -v rdmsr &> /dev/null && \
         modprobe msr 2>/dev/null && \
@@ -54,7 +54,7 @@ check_all_bios_settings() {
     fi
 
     # TDX Check
-    results+=("\nTDX Settings:")
+    results+=("TDX Settings:")
     if grep -q "tdx" /proc/cpuinfo || dmesg | grep -q "TDX"; then
         results+=("✓ TDX supported and enabled")
     else 
@@ -62,7 +62,7 @@ check_all_bios_settings() {
         all_passed=false
     fi
 
-    results+=("\nRequired BIOS Configuration:")
+    results+=("Required BIOS Configuration:")
     results+=("• Memory Encryption:")
     results+=("  - TME: Enable")
     results+=("  - TME Multi-Tenant: Enable")
