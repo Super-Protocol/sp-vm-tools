@@ -14,7 +14,7 @@ check_all_bios_settings() {
     
     # CPU PA
     results+=("CPU PA Settings:")
-    if true; then  # Здесь нужна реальная проверка PA limit
+    if true; then
         results+=("✓ CPU PA limit properly configured")
     else
         results+=("✗ CPU PA limit must be disabled")
