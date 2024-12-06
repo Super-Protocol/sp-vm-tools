@@ -154,8 +154,14 @@ setup_raid_modules() {
 
     # Create new mdadm configuration
     echo "Creating new RAID configuration..."
-    if mdadm --detail --scan > "/etc/mdadm/mdadm.conf.new"; then
-        sed -i '/^mdadm:/d' "/etc/mdadm/mdadm.conf.new"
+    if ! mdadm --examine --scan > "/dev/null" 2>&1; then
+        echo "No RAID arrays found, skipping RAID configuration"
+        return 0
+    fi
+
+    mdadm --detail --scan | grep -v "^mdadm:" > "/etc/mdadm/mdadm.conf.new"
+    
+    if [ -s "/etc/mdadm/mdadm.conf.new" ]; then
         # Create backup of existing config if it exists
         if [ -f "/etc/mdadm/mdadm.conf" ]; then
             cp "/etc/mdadm/mdadm.conf" "/etc/mdadm/mdadm.conf.${new_kernel}.bak"
@@ -175,11 +181,12 @@ setup_raid_modules() {
         fi
         
         echo "✓ RAID configuration completed successfully"
-        return 0
     else
-        echo "Failed to generate RAID configuration"
-        return 1
+        echo "No valid RAID configuration found"
+        rm -f "/etc/mdadm/mdadm.conf.new"
     fi
+
+    return 0
 }
 
 get_kernel_version() {
@@ -310,7 +317,6 @@ install_debs() {
 }
 
 setup_grub() {
-  mkdir -p /boot/grub
   if ! grep -q 'kvm_intel.tdx=on' /etc/default/grub; then
     sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)/\1 nohibernate kvm_intel.tdx=on/' /etc/default/grub
   fi
@@ -333,12 +339,18 @@ update_tdx_module() {
 setup_nvidia_gpus() {
   TMP_DIR=$1
 
+  echo "Checking for NVIDIA GPUs..."
+  if ! command -v lspci >/dev/null; then
+    echo "lspci not found, skipping NVIDIA GPU configuration"
+    return 0
+  fi
+
   echo "Determining PCI IDs for your NVIDIA GPU(s)..."
-  gpu_list=$(lspci -nnk -d 10de: | grep -E '3D controller')
+  gpu_list=$(lspci -nnk -d 10de: | grep -E '3D controller' || true)
 
   if [ -z "$gpu_list" ]; then
-    echo "No NVIDIA GPU found."
-    return
+    echo "No NVIDIA GPU found, skipping configuration"
+    return 0
   fi
 
   echo "The following NVIDIA GPUs were found:"
@@ -549,8 +561,13 @@ bootstrap() {
         exit 1
     fi
 
-    print_section_header "NVIDIA GPU Configuration"
-    setup_nvidia_gpus "${TMP_DIR}"
+    print_section_header "Hardware Configuration"
+    if command -v lspci >/dev/null; then
+        echo "Checking NVIDIA GPU configuration..."
+        setup_nvidia_gpus "${TMP_DIR}" || true
+    else
+        echo "Skipping NVIDIA GPU check (lspci not found)"
+    fi    
 
     # Clean up temporary directory
     print_section_header "Cleanup"
