@@ -317,6 +317,8 @@ install_debs() {
 }
 
 setup_grub() {
+  mkdir -p /boot/grub
+  
   if ! grep -q 'kvm_intel.tdx=on' /etc/default/grub; then
     sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)/\1 nohibernate kvm_intel.tdx=on/' /etc/default/grub
   fi
