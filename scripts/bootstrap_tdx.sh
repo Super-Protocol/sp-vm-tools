@@ -155,6 +155,7 @@ setup_raid_modules() {
     # Create new mdadm configuration
     echo "Creating new RAID configuration..."
     if mdadm --detail --scan > "/etc/mdadm/mdadm.conf.new"; then
+        sed -i '/^mdadm:/d' "/etc/mdadm/mdadm.conf.new"
         # Create backup of existing config if it exists
         if [ -f "/etc/mdadm/mdadm.conf" ]; then
             cp "/etc/mdadm/mdadm.conf" "/etc/mdadm/mdadm.conf.${new_kernel}.bak"
@@ -309,6 +310,7 @@ install_debs() {
 }
 
 setup_grub() {
+  mkdir -p /boot/grub
   if ! grep -q 'kvm_intel.tdx=on' /etc/default/grub; then
     sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)/\1 nohibernate kvm_intel.tdx=on/' /etc/default/grub
   fi
