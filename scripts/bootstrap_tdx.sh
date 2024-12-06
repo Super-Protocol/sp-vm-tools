@@ -21,83 +21,6 @@ check_cpu_pa_limit() {
     echo "Location: Uncore General Configuration"
 }
 
-check_txt_status() {
-    echo "Checking TXT Configuration..."
-    local txt_enabled=true
-
-    # Check TPM devices
-    if [ -c "/dev/tpm0" ] && [ -c "/dev/tpmrm0" ]; then
-        echo "✓ TPM devices present (/dev/tpm0 and /dev/tpmrm0)"
-        
-        # Check TPM device permissions
-        if [ "$(stat -c %G /dev/tpm0)" = "root" ] || [ "$(stat -c %G /dev/tpm0)" = "tss" ]; then
-            echo "✓ TPM device permissions correctly configured"
-        else
-            echo "WARNING: TPM device permissions might need adjustment"
-        fi
-    else
-        echo "WARNING: TPM devices not found"
-        txt_enabled=false
-    fi
-
-    # Check if CPU supports TXT (SMX)
-    if grep -q "smx" /proc/cpuinfo; then
-        echo "✓ CPU supports TXT (SMX feature present)"
-    else
-        if command -v rdmsr &> /dev/null; then
-            if ! modprobe msr 2>/dev/null; then
-                echo "Note: Could not load MSR module for additional TXT checks"
-            else
-                txt_status=$(rdmsr 0x8B 2>/dev/null || echo "")
-                if [ ! -z "$txt_status" ] && [ "$txt_status" != "0" ]; then
-                    echo "✓ TXT support detected through MSR"
-                else
-                    echo "Note: TXT support not detected through MSR"
-                    txt_enabled=false
-                fi
-            fi
-        fi
-    fi
-
-    # Check kernel modules
-    if lsmod | grep -q "^tpm_tis"; then
-        echo "✓ TPM driver (tpm_tis) loaded"
-    else
-        if modprobe tpm_tis 2>/dev/null; then
-            echo "✓ TPM driver (tpm_tis) loaded successfully"
-        else
-            echo "WARNING: Could not load TPM driver"
-            txt_enabled=false
-        fi
-    fi
-
-    # Check kernel support
-    if [ -d "/sys/kernel/security/txt" ]; then
-        echo "✓ TXT kernel support detected"
-    else
-        if grep -q "CONFIG_INTEL_TXT=y" /boot/config-$(uname -r) 2>/dev/null; then
-            echo "✓ TXT support built into kernel"
-        else
-            echo "Note: TXT kernel support not detected"
-            txt_enabled=false
-        fi
-    fi
-
-    if [ "$txt_enabled" = true ]; then
-        echo "✓ TXT appears to be properly configured"
-        return 0
-    else
-        echo "Note: Some TXT/TPM features are not detected, but TPM devices are present"
-        echo "This might be normal if TXT is configured but not fully initialized"
-        echo "You can verify TXT configuration in BIOS:"
-        echo "- Intel TXT Support: [Enabled]"
-        echo "- TPM Device: [Enabled]"
-        echo "- TPM State: [Activated and Owned]"
-        
-        return 0
-    fi
-}
-
 check_all_bios_settings() {
     local results=()
     local all_passed=true
@@ -117,93 +40,52 @@ check_all_bios_settings() {
     
     results+=("TME Configuration:")
     if [ "$tme_cap" = "1" ] && [ "$tme_active" = "1" ]; then
-        results+=("✓ TME properly enabled")
+        results+=("✓ TME properly enabled and active")
     else
         results+=("✗ TME not properly configured")
-        results+=("  Required settings:")
-        results+=("  - Memory Encryption (TME): [Enable]")
-        results+=("  - Total Memory Encryption (TME): [Enable]")
-        results+=("  - Total Memory Encryption Multi-Tenant (TME-MT): [Enable]")
+        results+=("Required settings:")
+        results+=("- Memory Encryption (TME): [Enable]")
+        results+=("- Total Memory Encryption Multi-Tenant (TME-MT): [Enable]")
         all_passed=false
     fi
-
+    
     # Check SGX Configuration
     echo "Checking SGX settings..."
-    local sgx_status=()
-    if grep -q "sgx" /proc/cpuinfo; then
-        sgx_status+=("✓ SGX enabled in CPU")
-    else
-        sgx_status+=("✗ SGX not enabled in CPU/BIOS")
-        all_passed=false
-    fi
-
-    # Check SGX device
-    if [ -c "/dev/sgx_enclave" ] || [ -c "/dev/sgx/enclave" ]; then
-        sgx_status+=("✓ SGX device present")
-    else
-        sgx_status+=("✗ SGX device not found")
-        all_passed=false
-    fi
-
     results+=("SGX Configuration:")
-    results+=("${sgx_status[@]}")
-
+    if grep -q "sgx" /proc/cpuinfo && [ -c "/dev/sgx_enclave" -o -c "/dev/sgx/enclave" ]; then
+        results+=("✓ SGX properly enabled and configured")
+    else
+        results+=("✗ SGX not properly configured")
+        all_passed=false
+    fi
+    
     # Check TXT Configuration
     echo "Checking TXT settings..."
-    local txt_status=()
-    
-    # Check TPM devices
-    if [ -c "/dev/tpm0" ] && [ -c "/dev/tpmrm0" ]; then
-        txt_status+=("✓ TPM devices present")
-        if [ "$(stat -c %G /dev/tpm0)" = "root" ] || [ "$(stat -c %G /dev/tpm0)" = "tss" ]; then
-            txt_status+=("✓ TPM permissions correct")
-        else
-            txt_status+=("! TPM permissions need adjustment")
-        fi
+    if grep -q "smx" /proc/cpuinfo || \
+       (command -v rdmsr &> /dev/null && \
+        modprobe msr 2>/dev/null && \
+        [ "$(rdmsr 0x8B 2>/dev/null)" != "0" ]); then
+        results+=("✓ TXT support detected")
     else
-        txt_status+=("✗ TPM devices not found")
+        results+=("✗ TXT support not detected")
         all_passed=false
     fi
 
-    # Check TXT CPU support
-    if grep -q "smx" /proc/cpuinfo; then
-        txt_status+=("✓ CPU supports TXT (SMX)")
-    else
-        if command -v rdmsr &> /dev/null; then
-            if modprobe msr 2>/dev/null; then
-                local txt_msr=$(rdmsr 0x8B 2>/dev/null || echo "")
-                if [ ! -z "$txt_msr" ] && [ "$txt_msr" != "0" ]; then
-                    txt_status+=("✓ TXT support detected via MSR")
-                else
-                    txt_status+=("✗ TXT support not detected")
-                    all_passed=false
-                fi
-            fi
-        fi
-    fi
-
-    results+=("TXT Configuration:")
-    results+=("${txt_status[@]}")
-
-    # Check TDX Configuration
+   # Check TDX Configuration
     echo "Checking TDX settings..."
-    local tdx_status=()
+    results+=("TDX Configuration:")
     if grep -q "tdx" /proc/cpuinfo || dmesg | grep -q "TDX"; then
-        tdx_status+=("✓ TDX support detected")
+        results+=("✓ TDX support detected")
     else
-        tdx_status+=("✗ TDX support not detected")
+        results+=("✗ TDX support not detected")
         all_passed=false
     fi
-
-    results+=("TDX Configuration:")
-    results+=("${tdx_status[@]}")
     results+=("Required values:")
     results+=("- TME-MT/TDX key split: 1")
     results+=("- TME-MT keys: >0 (recommended: 31)")
     results+=("- TDX keys: >0 (recommended: 32)")
-
     # Print final results
-    print_section_header "Summary"
+    print_section_header "\nSummary"
     printf '%s\n' "${results[@]}"
     
     echo -e "\n=== Required BIOS Settings ===="
@@ -226,9 +108,6 @@ check_all_bios_settings() {
     echo "- Intel Virtualization Technology (VT-x): [Enable]"
     echo "- Intel VT for Directed I/O (VT-d): [Enable]"
     echo "- Intel TXT Support: [Enable]"
-    echo "- TPM Device: [Enable]"
-    echo "- TPM State: [Activated and Owned]"
-    echo "- TPM 2.0 UEFI Spec Version: [TCG_2]"
 
     if [ "$all_passed" = true ]; then
         echo -e "\n✓ All required BIOS settings appear to be properly configured"
