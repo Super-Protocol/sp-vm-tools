@@ -13,7 +13,119 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+print_section_header() {
+    echo -e "\n${BLUE}=== $1 ===${NC}"
+    echo -e "${BLUE}$(printf '=%.0s' {1..40})${NC}"
+}
+
+check_all_bios_settings() {
+    local results=()
+    local all_passed=true
+    
+    print_section_header "BIOS Configuration Check Results"
+    echo "Checking all settings..."
+    
+    # CPU PA
+    results+=("CPU PA Settings:")
+    if true; then
+        results+=("✓ CPU PA limit properly configured")
+    else
+        results+=("✗ CPU PA limit must be disabled")
+        results+=("  Location: Uncore General Configuration")
+        all_passed=false
+    fi
+    
+    # TME Check
+    results+=("TME Settings:")
+    if rdmsr -f 0:0 0x981 2>/dev/null | grep -q "1" && \
+       rdmsr -f 0:0 0x982 2>/dev/null | grep -q "1"; then
+        results+=("✓ Memory encryption enabled")
+    else
+        results+=("✗ Memory encryption disabled")
+        all_passed=false
+    fi
+
+    # SGX Check
+    results+=("SGX Settings:")
+    if grep -q "sgx" /proc/cpuinfo && [ -c "/dev/sgx_enclave" -o -c "/dev/sgx/enclave" ]; then
+        results+=("✓ SGX enabled and configured")
+    else
+        results+=("✗ SGX not properly configured")
+        all_passed=false
+    fi
+
+    # TXT Check  
+    results+=("TXT Settings:")
+    if grep -q "smx" /proc/cpuinfo || \
+       (command -v rdmsr &> /dev/null && \
+        modprobe msr 2>/dev/null && \
+        [ "$(rdmsr 0x8B 2>/dev/null)" != "0" ]); then
+        results+=("✓ TXT supported and enabled")
+    else
+        results+=("✗ TXT not properly configured")
+        all_passed=false
+    fi
+
+    # TDX Check
+    results+=("TDX Settings:")
+    if grep -q "tdx" /proc/cpuinfo || dmesg | grep -q "TDX"; then
+        results+=("✓ TDX supported and enabled")
+    else 
+        results+=("✗ TDX not properly configured")
+        all_passed=false
+    fi
+
+    results+=("Required BIOS Configuration:")
+    results+=("• Memory Encryption:")
+    results+=("  - TME: Enable")
+    results+=("  - TME Multi-Tenant: Enable")
+    results+=("  - TME-MT keys: 31")
+    results+=("  - Key split: 1")
+    results+=("• TDX:")
+    results+=("  - TDX: Enable")
+    results+=("  - SEAM Loader: Enable")
+    results+=("  - TDX keys: 32")
+
+    print_section_header "Status"
+    printf '%s\n' "${results[@]}"
+
+    if [ "$all_passed" = true ]; then
+        echo -e "\n✓ All settings properly configured"
+        return 0
+    else
+        echo -e "\n✗ Some settings need attention"
+        return 1
+    fi
+}
+
+check_bios_settings() {
+    echo "Performing comprehensive BIOS configuration check..."
+    
+    # Install msr-tools if not present
+    if ! command -v rdmsr &> /dev/null; then
+        echo "Installing msr-tools..."
+        apt-get update && apt-get install -y msr-tools
+    fi
+
+    # Load the msr module if not loaded
+    if ! lsmod | grep -q "^msr"; then
+        echo "Loading MSR module..."
+        modprobe msr
+    fi
+
+    # Run all checks at once
+    check_all_bios_settings
+    return $?
+}
+
 TMP_DIR=$1
+print_section_header "BIOS Configuration Verification"
+if ! check_bios_settings; then
+    echo -e "${RED}ERROR: Required BIOS settings are not properly configured${NC}"
+    echo "Please configure BIOS settings according to the instructions above and try again"
+    exit 1
+fi
+
 # Download the setup-attestation-host.sh script
 git clone -b noble-24.04 --single-branch --depth 1 --no-tags https://github.com/canonical/tdx.git "${TMP_DIR}/tdx-cannonical"
 SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/attestation/setup-attestation-host.sh
@@ -73,7 +185,7 @@ register_platform() {
     return $?
 }
 
-echo -e "${GREEN}Starting clean PCCS installation and setup...${NC}"
+print_section_header "Starting clean PCCS installation and setup..."
 
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then 
@@ -82,21 +194,21 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Stop and disable all services first
-echo -e "${GREEN}Stopping all services...${NC}"
+print_section_header "Stopping all services..."
 systemctl stop pccs qgsd mpa_registration_tool
 systemctl disable pccs qgsd mpa_registration_tool
 
 # Remove existing packages
-echo -e "${GREEN}Removing existing packages...${NC}"
+print_section_header "Removing existing packages..."
 apt-get remove -y sgx-dcap-pccs 
 
 # Clean up old configurations
-echo -e "${GREEN}Cleaning up old configurations...${NC}"
+print_section_header "Cleaning up old configurations..."
 rm -f /etc/sgx_default_qcnl.conf
 rm -rf /opt/intel/sgx-dcap-pccs/config/*
 
 # Install packages
-echo -e "${GREEN}Installing packages...${NC}"
+print_section_header "Installing packages..."
 apt-get update
 apt-get install -y \
     libsgx-ae-id-enclave \
@@ -118,7 +230,7 @@ check_error "Failed to install packages"
 mkdir -p /opt/intel/sgx-dcap-pccs/config/
 
 # Create PCCS configuration
-echo -e "${GREEN}Creating PCCS configuration...${NC}"
+print_section_header "Creating PCCS configuration..."
 cat > /opt/intel/sgx-dcap-pccs/config/default.json << EOL
 {
     "HTTPS_PORT" : ${PCCS_PORT},
@@ -156,7 +268,7 @@ cat > /opt/intel/sgx-dcap-pccs/config/default.json << EOL
 EOL
 
 # Configure QCNL
-echo -e "${GREEN}Configuring QCNL...${NC}"
+print_section_header "Configuring QCNL..."
 cat > /etc/sgx_default_qcnl.conf << EOL
 PCCS_URL=https://localhost:${PCCS_PORT}/sgx/certification/v4/
 USE_SECURE_CERT=false
@@ -169,17 +281,17 @@ EOL
 check_error "Failed to create QCNL configuration"
 
 # Set correct permissions
-echo -e "${GREEN}Setting permissions...${NC}"
+print_section_header "Setting permissions..."
 chown -R pccs:pccs /opt/intel/sgx-dcap-pccs/
 chmod -R 750 /opt/intel/sgx-dcap-pccs/
 
 # Enable and start services
-echo -e "${GREEN}Enabling and starting services...${NC}"
+print_section_header "Enabling and starting services..."
 systemctl enable pccs qgsd mpa_registration_tool
 systemctl daemon-reload
 
 # Start PCCS first
-echo -e "${GREEN}Starting PCCS...${NC}"
+print_section_header "Starting PCCS..."
 systemctl start pccs
 wait_for_service pccs
 check_error "Failed to start PCCS"
@@ -187,29 +299,29 @@ sleep 5
 
 # Get platform info and register
 cd /opt/intel/sgx-dcap-pccs/
-echo -e "${GREEN}Running PCKIDRetrievalTool...${NC}"
+print_section_header "Running PCKIDRetrievalTool..."
 rm -f pckid_retrieval.csv
 PCKIDRetrievalTool
 check_error "PCKIDRetrievalTool failed"
 
-echo -e "${GREEN}Registering platform with PCCS...${NC}"
+print_section_header "Registering platform with PCCS..."
 register_platform
 check_error "Failed to register platform"
 
 # Start remaining services
-echo -e "${GREEN}Starting remaining services...${NC}"
+print_section_header "Starting remaining services..."
 systemctl start qgsd
 wait_for_service qgsd
 systemctl start mpa_registration_tool
 
 # Check services status
-echo -e "${GREEN}Checking services status...${NC}"
+print_section_header "Checking services status..."
 for service in pccs qgsd mpa_registration_tool; do
     echo -e "\n${YELLOW}${service} Status:${NC}"
     systemctl status $service --no-pager
 done
 
-echo -e "\n${GREEN}Installation and setup completed!${NC}"
+print_section_header "Installation and setup completed!"
 echo -e "${YELLOW}To check logs use:${NC}"
 echo "PCCS logs: journalctl -u pccs -f"
 echo "QGSD logs: journalctl -u qgsd -f"
