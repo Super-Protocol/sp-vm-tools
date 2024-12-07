@@ -135,7 +135,7 @@ fi
 
 # Download the setup-attestation-host.sh script
 git clone -b noble-24.04 --single-branch --depth 1 --no-tags https://github.com/canonical/tdx.git "${TMP_DIR}/tdx-cannonical"
-SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/attestation/setup-tdx-host.sh
+SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/setup-tdx-host.sh
 # Check for download errors
 if [ $? -ne 0 ]; then
 echo "Failed to download the setup-tdx-host.sh script."
