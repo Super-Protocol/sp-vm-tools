@@ -17,106 +17,6 @@ print_section_header() {
     echo -e "${BLUE}$(printf '=%.0s' {1..40})${NC}"
 }
 
-check_all_bios_settings() {
-    local results=()
-    local all_passed=true
-    
-    print_section_header "BIOS Configuration Check Results"
-    echo "Checking all settings..."
-    
-    # CPU PA
-    results+=("CPU PA Settings:")
-    if true; then
-        results+=("✓ CPU PA limit properly configured")
-    else
-        results+=("✗ CPU PA limit must be disabled")
-        results+=("  Location: Uncore General Configuration")
-        all_passed=false
-    fi
-    
-    # TME Check
-    results+=("TME Settings:")
-    if rdmsr -f 0:0 0x981 2>/dev/null | grep -q "1" && \
-       rdmsr -f 0:0 0x982 2>/dev/null | grep -q "1"; then
-        results+=("✓ Memory encryption enabled")
-    else
-        results+=("✗ Memory encryption disabled")
-        all_passed=false
-    fi
-
-    # SGX Check
-    results+=("SGX Settings:")
-    if grep -q "sgx" /proc/cpuinfo && [ -c "/dev/sgx_enclave" -o -c "/dev/sgx/enclave" ]; then
-        results+=("✓ SGX enabled and configured")
-    else
-        results+=("✗ SGX not properly configured")
-        all_passed=false
-    fi
-
-    # TXT Check  
-    results+=("TXT Settings:")
-    if grep -q "smx" /proc/cpuinfo || \
-       (command -v rdmsr &> /dev/null && \
-        modprobe msr 2>/dev/null && \
-        [ "$(rdmsr 0x8B 2>/dev/null)" != "0" ]); then
-        results+=("✓ TXT supported and enabled")
-    else
-        results+=("✗ TXT not properly configured")
-        all_passed=false
-    fi
-
-    # TDX Check
-    results+=("TDX Settings:")
-    if grep -q "tdx" /proc/cpuinfo || dmesg | grep -q "TDX"; then
-        results+=("✓ TDX supported and enabled")
-    else 
-        results+=("✗ TDX not properly configured")
-        all_passed=false
-    fi
-
-    results+=("Required BIOS Configuration:")
-    results+=("• Memory Encryption:")
-    results+=("  - TME: Enable")
-    results+=("  - TME Multi-Tenant: Enable")
-    results+=("  - TME-MT keys: 31")
-    results+=("  - Key split: 1")
-    results+=("• TDX:")
-    results+=("  - TDX: Enable")
-    results+=("  - SEAM Loader: Enable")
-    results+=("  - TDX keys: 32")
-
-    print_section_header "Status"
-    printf '%s\n' "${results[@]}"
-
-    if [ "$all_passed" = true ]; then
-        echo -e "\n✓ All settings properly configured"
-        return 0
-    else
-        echo -e "\n✗ Some settings need attention"
-        return 1
-    fi
-}
-
-check_bios_settings() {
-    echo "Performing comprehensive BIOS configuration check..."
-    
-    # Install msr-tools if not present
-    if ! command -v rdmsr &> /dev/null; then
-        echo "Installing msr-tools..."
-        apt-get update && apt-get install -y msr-tools
-    fi
-
-    # Load the msr module if not loaded
-    if ! lsmod | grep -q "^msr"; then
-        echo "Loading MSR module..."
-        modprobe msr
-    fi
-
-    # Run all checks at once
-    check_all_bios_settings
-    return $?
-}
-
 detect_raid_config() {
     echo "Detecting RAID configuration..."
     
@@ -579,13 +479,6 @@ bootstrap() {
                 echo "Continuing without reboot (not recommended)..."
                 ;;
         esac
-    fi
-
-    print_section_header "BIOS Configuration Verification"
-    if ! check_bios_settings; then
-        echo -e "${RED}ERROR: Required BIOS settings are not properly configured${NC}"
-        echo "Please configure BIOS settings according to the instructions above and try again"
-        exit 1
     fi
 
     if [ -f "$(dirname "${BASH_SOURCE[0]}")/setup_tdx.sh" ]; then
