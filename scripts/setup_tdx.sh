@@ -133,6 +133,12 @@ if ! check_bios_settings; then
     exit 1
 fi
 
+if [ -d "${TMP_DIR}/tdx-cannonical" ]; then
+    echo -e "${YELLOW}Directory ${TMP_DIR}/tdx-cannonical already exists${NC}"
+    echo -e "Removing existing directory..."
+    rm -rf "${TMP_DIR}/tdx-cannonical"
+fi
+
 # Download the setup-attestation-host.sh script
 git clone -b noble-24.04 --single-branch --depth 1 --no-tags https://github.com/canonical/tdx.git "${TMP_DIR}/tdx-cannonical"
 SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/attestation/setup-attestation-host.sh
