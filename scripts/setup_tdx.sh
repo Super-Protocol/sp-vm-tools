@@ -126,12 +126,6 @@ check_bios_settings() {
 }
 
 TMP_DIR=$1
-print_section_header "BIOS Configuration Verification"
-if ! check_bios_settings; then
-    echo -e "${RED}ERROR: Required BIOS settings are not properly configured${NC}"
-    echo "Please configure BIOS settings according to the instructions above and try again"
-    exit 1
-fi
 
 if [ -d "${TMP_DIR}/tdx-cannonical" ]; then
     echo -e "${YELLOW}Directory ${TMP_DIR}/tdx-cannonical already exists${NC}"
@@ -141,18 +135,29 @@ fi
 
 # Download the setup-attestation-host.sh script
 git clone -b noble-24.04 --single-branch --depth 1 --no-tags https://github.com/canonical/tdx.git "${TMP_DIR}/tdx-cannonical"
-SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/attestation/setup-attestation-host.sh
+SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/attestation/setup-tdx-host.sh
 # Check for download errors
 if [ $? -ne 0 ]; then
-echo "Failed to download the setup-attestation-host.sh script."
+echo "Failed to download the setup-tdx-host.sh script."
 exit 1
 fi
 # Make the script executable
+echo "Running setup-tdx-host.sh..."
 chmod +x "${SCRIPT_PATH}"
-# Run the script
-echo "Running setup-attestation-host.sh..."
 "${SCRIPT_PATH}"
-  
+
+print_section_header "BIOS Configuration Verification"
+if ! check_bios_settings; then
+    echo -e "${RED}ERROR: Required BIOS settings are not properly configured${NC}"
+    echo "Please configure BIOS settings according to the instructions above and try again"
+    exit 1
+fi
+
+echo "Running setup-attestation-host.sh..."
+SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/attestation/setup-attestation-host.sh
+chmod +x "${SCRIPT_PATH}"
+"${SCRIPT_PATH}"
+
 # Function for error handling
 check_error() {
     if [ $? -ne 0 ]; then
