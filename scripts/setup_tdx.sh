@@ -1,22 +1,29 @@
 #!/bin/bash
 
+set -e
+
+# Color definitions
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Modify status indicators:
+SUCCESS="[${GREEN}✓${NC}]"
+FAILURE="[${RED}✗${NC}]"
+
+print_section_header() {
+    echo -e "\n${BLUE}=== $1 ===${NC}"
+    echo -e "${BLUE}$(printf '=%.0s' {1..40})${NC}"
+}
+
 # Configuration variables
 PCCS_API_KEY="aecd5ebb682346028d60c36131eb2d92"
 PCCS_PORT="8081"
 PCCS_PASSWORD="pccspassword123"
 # Generate SHA512 hash of the password
 USER_TOKEN=$(echo -n "${PCCS_PASSWORD}" | sha512sum | awk '{print $1}')
-
-# Colors for output
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
-print_section_header() {
-    echo -e "\n${BLUE}=== $1 ===${NC}"
-    echo -e "${BLUE}$(printf '=%.0s' {1..40})${NC}"
-}
 
 check_all_bios_settings() {
     local results=()
