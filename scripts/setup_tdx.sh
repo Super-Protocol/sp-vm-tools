@@ -329,10 +329,28 @@ systemctl start mpa_registration_tool
 
 # Check services status
 print_section_header "Checking services status..."
-for service in pccs qgsd mpa_registration_tool; do
+# Check PCCS and QGSD status
+for service in pccs qgsd; do
     echo -e "\n${YELLOW}${service} Status:${NC}"
-    systemctl status $service --no-pager
+    if ! systemctl is-active --quiet $service; then
+        echo -e "${RED}Error: $service is not running${NC}"
+        systemctl status $service --no-pager
+        exit 1
+    else
+        echo -e "${GREEN}$service is running${NC}"
+        systemctl status $service --no-pager
+    fi
 done
+
+# Separately handle mpa_registration_tool since it's expected to exit
+echo -e "\n${YELLOW}mpa_registration_tool Status:${NC}"
+if systemctl is-enabled --quiet mpa_registration_tool; then
+    echo -e "${GREEN}mpa_registration_tool was properly configured${NC}"
+    systemctl status mpa_registration_tool --no-pager || true
+else
+    echo -e "${RED}Error: mpa_registration_tool is not properly configured${NC}"
+    exit 1
+fi
 
 print_section_header "Installation and setup completed!"
 echo -e "${YELLOW}To check logs use:${NC}"
