@@ -61,24 +61,40 @@ check_all_bios_settings() {
         all_passed=false
     fi
 
-    # TXT Check  
+    # Enhanced TXT Check  
     results+=("TXT Settings:")
-    if grep -q "smx" /proc/cpuinfo || \
-       (command -v rdmsr &> /dev/null && \
-        modprobe msr 2>/dev/null && \
-        [ "$(rdmsr 0x8B 2>/dev/null)" != "0" ]); then
-        results+=("✓ TXT supported and enabled")
+    local txt_msr=$(rdmsr 0x3a 2>/dev/null || echo "0")
+    if [ "$txt_msr" != "0" ] && [ "$((0x$txt_msr & 0x1))" -eq 1 ]; then
+        results+=("✓ TXT supported and enabled (MSR 0x3a: $txt_msr)")
     else
-        results+=("✗ TXT not properly configured")
+        results+=("✗ TXT not properly configured (MSR 0x3a: $txt_msr)")
+        results+=("  Required: Enable TXT in BIOS")
         all_passed=false
     fi
 
-    # TDX Check
+    # Enhanced SEAM Check
+    results+=("SEAM Settings:")
+    local tdx_cap_msr=$(rdmsr 0x982 2>/dev/null || echo "0")
+    # Проверяем бит 40 (SEAM loader)
+    if [ "$((0x$tdx_cap_msr & 0x10000000000))" -ne 0 ]; then
+        results+=("✓ SEAM loader enabled (MSR 0x982: $tdx_cap_msr)")
+    else
+        results+=("✗ SEAM loader not enabled (MSR 0x982: $tdx_cap_msr)")
+        results+=("  Required: Enable SEAM Loader in BIOS")
+        all_passed=false
+    fi
+
+    # Enhanced TDX Check with PAMT allocation verification
     results+=("TDX Settings:")
-    if grep -q "tdx" /proc/cpuinfo || dmesg | grep -q "TDX"; then
-        results+=("✓ TDX supported and enabled")
+    local tdx_init=$(dmesg | grep -i "virt/tdx: module initialized" || echo "")
+    local pamt_alloc=$(dmesg | grep -i "KB allocated for PAMT" || echo "")
+    if [ ! -z "$tdx_init" ] && [ ! -z "$pamt_alloc" ]; then
+        results+=("✓ TDX supported and initialized")
+        results+=("✓ PAMT allocation successful: $(echo $pamt_alloc | grep -o '[0-9]* KB')")
     else 
-        results+=("✗ TDX not properly configured")
+        results+=("✗ TDX not properly configured or PAMT allocation failed")
+        results+=("  Required: Enable TDX in BIOS")
+        results+=("  Required: Check PAMT allocation")
         all_passed=false
     fi
 
@@ -88,8 +104,9 @@ check_all_bios_settings() {
     results+=("  - TME Multi-Tenant: Enable")
     results+=("  - TME-MT keys: 31")
     results+=("  - Key split: 1")
-    results+=("• TDX:")
+    results+=("• TDX/TXT/SEAM:")
     results+=("  - TDX: Enable")
+    results+=("  - TXT: Enable")
     results+=("  - SEAM Loader: Enable")
     results+=("  - TDX keys: 32")
 
