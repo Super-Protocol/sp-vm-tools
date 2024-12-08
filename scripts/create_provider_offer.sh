@@ -236,7 +236,7 @@ cat > slot2.json << EOF
    "usage":{
       "maxTimeMinutes":0,
       "minTimeMinutes":0,
-      "price":"167000000000000000",
+      "price":"500000000000000000",
       "priceType":"0"
    }
 }
