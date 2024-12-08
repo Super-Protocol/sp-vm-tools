@@ -131,7 +131,7 @@ fi
 gpu_info=$(lspci | grep -i "nvidia" | head -n 1)
 if [ ! -z "$gpu_info" ]; then
     gpu_present=1
-    gpu_cores=1000
+    gpu_cores=1
     gpu_name=$(extract_gpu_name "$gpu_info")
     # Default VRAM for H100
     if echo "$gpu_info" | grep -q "H100"; then
@@ -159,7 +159,12 @@ else
     description="CPU: $cpu_model, $adjusted_cores cores, $adjusted_ram_gb GB RAM, $adjusted_disk_gb GB disk, 1 Gbps network"
 fi
 
-# Function to floor a division of large numbers
+floor_divide_precision() {
+    local dividend=$1
+    local divisor=$2
+    echo "$dividend $divisor" | awk '{printf "%.3f", $1/$2}'
+}
+
 floor_divide() {
     local dividend=$1
     local divisor=$2
@@ -193,7 +198,7 @@ cat > offer.json << EOF
 EOF
 
 # Calculate values for slot1
-slot1_gpu_cores=$(floor_divide $gpu_cores $adjusted_cores)
+slot1_gpu_cores=$(floor_divide_precision $gpu_cores $adjusted_cores)
 slot1_disk=$(floor_divide $disk_bytes $adjusted_cores)
 slot1_ram=$(floor_divide $ram_bytes $adjusted_cores)
 slot1_vram=$(floor_divide $vram_bytes $adjusted_cores)
@@ -218,7 +223,7 @@ cat > slot1.json << EOF
 EOF
 
 # Calculate values for slot2
-slot2_gpu_cores=$(floor_divide $((gpu_cores * 3)) $adjusted_cores)
+slot2_gpu_cores=$(floor_divide_precision $((gpu_cores * 3)) $adjusted_cores)
 slot2_disk=$(floor_divide $((disk_bytes * 3)) $adjusted_cores)
 slot2_ram=$(floor_divide $((ram_bytes * 3)) $adjusted_cores)
 slot2_vram=$(floor_divide $((vram_bytes * 3)) $adjusted_cores)
