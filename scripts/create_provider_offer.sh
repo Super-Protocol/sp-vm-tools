@@ -34,31 +34,59 @@ get_largest_disk_size() {
     local max_size=0
     local size
     
-    # Read lsblk output and look for all mounted volumes
+    # Read lsblk output and look for mounted volumes
     while IFS= read -r line; do
         # Skip empty lines and loop devices
         [[ -z "$line" ]] && continue
         [[ "$line" =~ ^loop ]] && continue
         
-        # Get size and convert to GB if needed
-        if [[ "$line" =~ [0-9]+(\.[0-9]+)?T ]]; then
-            # Convert TB to GB
-            size=$(echo "$line" | awk '{print $2}' | sed 's/T//')
-            size=$(calc "$size * 1024")
-        elif [[ "$line" =~ [0-9]+(\.[0-9]+)?G ]]; then
-            # Already in GB
-            size=$(echo "$line" | awk '{print $2}' | sed 's/G//')
-        else
-            continue
+        # Extract size and unit
+        if [[ "$line" =~ ([0-9]+(\.[0-9]+)?)(T|G) ]]; then
+            size="${BASH_REMATCH[1]}"
+            unit="${BASH_REMATCH[3]}"
+            
+            # Convert to GB if needed
+            if [ "$unit" = "T" ]; then
+                size=$(calc "$size * 1024")
+            fi
+            
+            # Update max_size if current size is larger
+            if (( $(echo "$size > $max_size" | bc -l) )); then
+                max_size=$size
+            fi
         fi
-        
-        # Compare and update max_size if current size is larger
-        if (( $(echo "$size > $max_size" | bc -l) )); then
-            max_size=$size
-        fi
-    done < <(lsblk -o SIZE,TYPE,MOUNTPOINTS | grep -v "^$")
+    done < <(lsblk -b -o SIZE,TYPE,MOUNTPOINTS | grep -vE '^$|^loop')
+    
+    # Ensure we have a positive number
+    if (( $(echo "$max_size == 0" | bc -l) )); then
+        # Fallback to df if lsblk didn't give us good results
+        max_size=$(df -BG | grep -vE '^tmpfs|^udev|^/dev/loop' | awk '{print $2}' | sed 's/G//' | sort -nr | head -1)
+    fi
     
     echo "$max_size"
+}
+
+# Function for safe disk size adjustment
+adjust_disk_size() {
+    local size=$1
+    local adjusted
+    
+    # Ensure minimum size is 20GB
+    if (( $(echo "$size < 20" | bc -l) )); then
+        echo "20"
+        return
+    fi
+    
+    # Calculate adjusted size (size - 20) * 0.85
+    adjusted=$(calc "($size - 20) * 0.85")
+    
+    # Ensure result is positive
+    if (( $(echo "$adjusted <= 0" | bc -l) )); then
+        echo "20"
+        return
+    fi
+    
+    echo "$adjusted"
 }
 
 # Get name from user or generate using petname
@@ -83,8 +111,7 @@ ram_bytes=$(to_bytes "$adjusted_ram_gb")
 
 # Get largest disk size in GB and adjust it
 disk_size_gb=$(get_largest_disk_size)
-adjusted_disk_gb=$(calc "$disk_size_gb - 20")
-adjusted_disk_gb=$(calc "$adjusted_disk_gb * 0.85")
+adjusted_disk_gb=$(adjust_disk_size "$disk_size_gb")
 disk_bytes=$(to_bytes "$adjusted_disk_gb")
 
 # GPU detection
