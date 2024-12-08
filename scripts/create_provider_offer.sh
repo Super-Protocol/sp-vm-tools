@@ -29,6 +29,38 @@ extract_gpu_name() {
     echo "$gpu_info" | sed -n 's/.*NVIDIA Corporation \([^(]*\).*/\1/p' | sed 's/[[:space:]]*$//'
 }
 
+# Function to get largest disk size in GB
+get_largest_disk_size() {
+    local max_size=0
+    local size
+    
+    # Read lsblk output and look for all mounted volumes
+    while IFS= read -r line; do
+        # Skip empty lines and loop devices
+        [[ -z "$line" ]] && continue
+        [[ "$line" =~ ^loop ]] && continue
+        
+        # Get size and convert to GB if needed
+        if [[ "$line" =~ [0-9]+(\.[0-9]+)?T ]]; then
+            # Convert TB to GB
+            size=$(echo "$line" | awk '{print $2}' | sed 's/T//')
+            size=$(calc "$size * 1024")
+        elif [[ "$line" =~ [0-9]+(\.[0-9]+)?G ]]; then
+            # Already in GB
+            size=$(echo "$line" | awk '{print $2}' | sed 's/G//')
+        else
+            continue
+        fi
+        
+        # Compare and update max_size if current size is larger
+        if (( $(echo "$size > $max_size" | bc -l) )); then
+            max_size=$size
+        fi
+    done < <(lsblk -o SIZE,TYPE,MOUNTPOINTS | grep -v "^$")
+    
+    echo "$max_size"
+}
+
 # Get name from user or generate using petname
 echo -n "Enter name for the configuration (press Enter for random pet name): "
 read custom_name
@@ -49,9 +81,8 @@ adjusted_ram_gb=$(calc "$total_ram_gb - 20")
 adjusted_ram_gb=$(calc "$adjusted_ram_gb * 0.9")
 ram_bytes=$(to_bytes "$adjusted_ram_gb")
 
-# Get disk size in bytes
-disk_size_bytes=$(df / --output=size -B 1 | tail -n 1)
-disk_size_gb=$(calc "$disk_size_bytes / 1024 / 1024 / 1024")
+# Get largest disk size in GB and adjust it
+disk_size_gb=$(get_largest_disk_size)
 adjusted_disk_gb=$(calc "$disk_size_gb - 20")
 adjusted_disk_gb=$(calc "$adjusted_disk_gb * 0.85")
 disk_bytes=$(to_bytes "$adjusted_disk_gb")
@@ -84,8 +115,9 @@ else
     echo "No NVIDIA GPU detected"
 fi
 
-# Get network bandwidth (assuming 1 Gbps as default)
-bandwidth=$(calc "1024 * 1024 * 1024 * 1024 / 8")
+# Calculate network bandwidth for 1 Gbps in bytes per second
+# 1 Gbps = (1000 * 1000 * 1000) / 8 bytes per second
+bandwidth=$(calc "1000 * 1000 * 1000 / 8")
 
 # Get CPU model
 cpu_model=$(grep "model name" /proc/cpuinfo | head -n 1 | cut -d':' -f2 | xargs)
@@ -186,4 +218,3 @@ EOF
 echo "offer.json has been generated successfully."
 echo "slot1.json has been generated successfully."
 echo "slot2.json has been generated successfully."
-
