@@ -533,7 +533,7 @@ bootstrap() {
 
     print_section_header "Kernel Configuration"
     echo "Configuring kernel boot parameters..."
-    if [ -n "$NEW_KERNEL_VERSION" ]; then
+    if [ "$NEW_KERNEL_VERSION" != "$CURRENT_KERNEL" ]; then
         setup_grub "$NEW_KERNEL_VERSION"
     fi
 
