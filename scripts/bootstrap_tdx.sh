@@ -298,12 +298,6 @@ setup_grub() {
     echo "GRUB configuration completed successfully for kernel ${new_kernel}"
     echo "Menu entry: $full_path"
     
-    # Add debugging information
-    echo -e "\nCurrent GRUB configuration:"
-    cat /etc/default/grub
-    echo -e "\nAvailable kernels:"
-    ls -l /boot/vmlinuz*
-    
     return 0
 }
 
