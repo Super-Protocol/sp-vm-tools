@@ -241,7 +241,7 @@ setup_grub() {
     if [ -z "$menu_line" ]; then
         echo "ERROR: Could not find menu entry for kernel ${new_kernel}"
         return 1
-    }
+    fi
 
     # Extract the exact names
     local submenu_name=$(echo "$submenu_line" | grep -o "submenu '.*'" | cut -d "'" -f 2)
