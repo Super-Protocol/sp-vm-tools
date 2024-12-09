@@ -213,47 +213,69 @@ install_debs() {
 }
 
 setup_grub() {
-  local new_kernel="$1"
-  echo "Setting up GRUB for kernel ${new_kernel}..."
-  
-  # Ensure GRUB directory exists
-  mkdir -p /boot/grub
-  
-  # Backup current GRUB config
-  if [ -f /etc/default/grub ]; then
-    cp /etc/default/grub /etc/default/grub.backup
-  fi
-  
-  # Add required kernel parameters
-  if ! grep -q 'kvm_intel.tdx=on' /etc/default/grub; then
-    sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)/\1 nohibernate kvm_intel.tdx=on/' /etc/default/grub
-  fi
-
-  # Set the new kernel as default if it exists
-  if [ -f "/boot/vmlinuz-${new_kernel}" ]; then
-    echo "GRUB_DEFAULT=\"Advanced options for Ubuntu>Ubuntu, with Linux ${new_kernel}\"" >> /etc/default/grub
-  else
-    echo "WARNING: New kernel image not found in /boot"
-    return 1
-  fi
-
-  # Force regeneration of grub.cfg
-  update-grub2 || update-grub
-
-  # Verify GRUB configuration
-  if [ -f /boot/grub/grub.cfg ]; then
-    if ! grep -q "${new_kernel}" /boot/grub/grub.cfg; then
-      echo "ERROR: New kernel not found in GRUB configuration"
-      return 1
+    local new_kernel="$1"
+    echo "Setting up GRUB for kernel ${new_kernel}..."
+    
+    # Ensure GRUB directory exists
+    mkdir -p /boot/grub
+    
+    # Backup current GRUB config
+    if [ -f /etc/default/grub ]; then
+        cp /etc/default/grub "/etc/default/grub.backup.$(date +%Y%m%d_%H%M%S)"
     fi
-  else
-    echo "ERROR: GRUB configuration file not found"
-    return 1
-  fi
-
-  echo "GRUB configuration completed successfully"
-  return 0
+    
+    # Remove any existing GRUB_DEFAULT settings to avoid conflicts
+    sed -i '/^GRUB_DEFAULT=/d' /etc/default/grub
+    
+    # Add our GRUB_DEFAULT setting at the beginning of the file
+    local grub_entry="Advanced options for Ubuntu>Ubuntu, with Linux ${new_kernel}"
+    sed -i "1i GRUB_DEFAULT=\"${grub_entry}\"" /etc/default/grub
+    
+    # Add required kernel parameters if not present
+    if ! grep -q 'kvm_intel.tdx=on' /etc/default/grub; then
+        if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub; then
+            sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)/\1 nohibernate kvm_intel.tdx=on/' /etc/default/grub
+        else
+            echo 'GRUB_CMDLINE_LINUX_DEFAULT="nohibernate kvm_intel.tdx=on"' >> /etc/default/grub
+        fi
+    fi
+    
+    # Ensure the new kernel exists
+    if [ ! -f "/boot/vmlinuz-${new_kernel}" ]; then
+        echo "ERROR: New kernel image not found in /boot"
+        return 1
+    fi
+    
+    # Set menu visibility and timeout for reliability
+    sed -i 's/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=menu/' /etc/default/grub
+    sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=1/' /etc/default/grub
+    
+    # Force regeneration of grub.cfg
+    update-initramfs -u -k "${new_kernel}"
+    update-grub2 || update-grub
+    
+    # Verify GRUB configuration
+    if [ -f /boot/grub/grub.cfg ]; then
+        if ! grep -q "${new_kernel}" /boot/grub/grub.cfg; then
+            echo "ERROR: New kernel not found in GRUB configuration"
+            return 1
+        fi
+    else
+        echo "ERROR: GRUB configuration file not found"
+        return 1
+    fi
+    
+    # Double check that the new kernel is properly referenced
+    local grub_cfg_content=$(cat /boot/grub/grub.cfg)
+    if ! echo "${grub_cfg_content}" | grep -q "${new_kernel}"; then
+        echo "WARNING: New kernel entry might not be properly configured in GRUB"
+        return 1
+    fi
+    
+    echo "GRUB configuration completed successfully for kernel ${new_kernel}"
+    return 0
 }
+
 update_tdx_module() {
   TMP_DIR=$1
   echo "Updating TDX-module..."
