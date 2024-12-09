@@ -21,6 +21,7 @@ DEFAULT_MAC_PREFIX="52:54:00:12:34"
 DEFAULT_MAC_SUFFIX="56"
 QEMU_PATH=""
 DEFAULT_DEBUG=false
+DEFAULT_ARGO_BRANCH="main"
 
 TDX_SUPPORT=$(lscpu | grep -i tdx)
 SEV_SUPPORT=$(lscpu | grep -i sev)
@@ -66,6 +67,7 @@ usage() {
     echo "  --ssh_port <port>            SSH port (default: ${DEFAULT_SSH_PORT})"
     echo "  --log_file <file>            Log file (default: no)"
     echo "  --debug <true|false>         Enable debug mode (default: ${DEFAULT_DEBUG})"
+    echo "  --argo_branch <name>         Name of argo branch for init SP components (default: ${DEFAULT_ARGO_BRANCH})"
     echo "  --release <name>             Release name (default: latest)"
     echo "  --mode <mode>                VM mode: untrusted, tdx, sev (default: ${DEFAULT_MODE})"
     echo ""
@@ -82,6 +84,7 @@ MAC_ADDRESS=${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX}
 PROVIDER_CONFIG=""
 MOUNT_CONFIG=${DEFAULT_MOUNT_CONFIG}
 DEBUG_MODE=${DEFAULT_DEBUG}
+ARGO_BRANCH=${DEFAULT_ARGO_BRANCH}
 RELEASE=""
 RELEASE_FILEPATH=""
 
@@ -404,6 +407,7 @@ check_params() {
     fi
 
     if [[ ${DEBUG_MODE} == "true" ]]; then
+        echo "   Argo branch: $ARGO_BRANCH"
         echo "   SSH Port: $SSH_PORT"
 
         if [[ -z "${LOG_FILE}" ]]; then
@@ -494,7 +498,7 @@ main() {
     
     if [[ ${DEBUG_MODE} == true ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
-        KERNEL_CMD_LINE="root=/dev/vda1 console=ttyS0 clearcpuid=mtrr systemd.log_level=trace systemd.log_target=log rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} sp-debug=true"
+        KERNEL_CMD_LINE="root=/dev/vda1 console=ttyS0 clearcpuid=mtrr systemd.log_level=trace systemd.log_target=log rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} argo_branch=${ARGO_BRANCH} sp-debug=true"
     else
         KERNEL_CMD_LINE="root=/dev/vda1 clearcpuid=mtrr rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}"
     fi
