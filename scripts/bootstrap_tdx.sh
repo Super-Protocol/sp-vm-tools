@@ -213,15 +213,47 @@ install_debs() {
 }
 
 setup_grub() {
+  local new_kernel="$1"
+  echo "Setting up GRUB for kernel ${new_kernel}..."
+  
+  # Ensure GRUB directory exists
   mkdir -p /boot/grub
   
+  # Backup current GRUB config
+  if [ -f /etc/default/grub ]; then
+    cp /etc/default/grub /etc/default/grub.backup
+  fi
+  
+  # Add required kernel parameters
   if ! grep -q 'kvm_intel.tdx=on' /etc/default/grub; then
     sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)/\1 nohibernate kvm_intel.tdx=on/' /etc/default/grub
   fi
 
-  update-grub
-}
+  # Set the new kernel as default if it exists
+  if [ -f "/boot/vmlinuz-${new_kernel}" ]; then
+    echo "GRUB_DEFAULT=\"Advanced options for Ubuntu>Ubuntu, with Linux ${new_kernel}\"" >> /etc/default/grub
+  else
+    echo "WARNING: New kernel image not found in /boot"
+    return 1
+  fi
 
+  # Force regeneration of grub.cfg
+  update-grub2 || update-grub
+
+  # Verify GRUB configuration
+  if [ -f /boot/grub/grub.cfg ]; then
+    if ! grep -q "${new_kernel}" /boot/grub/grub.cfg; then
+      echo "ERROR: New kernel not found in GRUB configuration"
+      return 1
+    fi
+  else
+    echo "ERROR: GRUB configuration file not found"
+    return 1
+  fi
+
+  echo "GRUB configuration completed successfully"
+  return 0
+}
 update_tdx_module() {
   TMP_DIR=$1
   echo "Updating TDX-module..."
@@ -454,7 +486,9 @@ bootstrap() {
 
     print_section_header "Kernel Configuration"
     echo "Configuring kernel boot parameters..."
-    setup_grub
+    if [ -n "$NEW_KERNEL_VERSION" ]; then
+        setup_grub "$NEW_KERNEL_VERSION"
+    fi
 
     print_section_header "TDX Module Update"
     echo "Updating TDX module..."
