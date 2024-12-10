@@ -31,11 +31,12 @@ check_all_bios_settings() {
     
     print_section_header "BIOS Configuration Check Results"
     echo "Checking all settings..."
-    
+
     results+=("CPU PA Settings:")
-    if dmesg | grep -i "CPU Physical Address Bit Limit: 46" || \
-       grep -i "Limit CPU PA to 46 bits.*\[Enable\]" /sys/firmware/efi/vars/* 2>/dev/null; then
-        results+=("✓ CPU PA limit properly configured to 46 bits")
+    PA_BITS=$(cpuid -l 0x80000008 | grep "maximum physical address bits" | head -n1 | awk '{print $NF}' | tr -d '()' || echo "0")
+    
+    if [ "$PA_BITS" -gt "46" ]; then
+        results+=("✓ CPU PA limit properly configured")
     else
         results+=("✗ CPU PA limit must be enabled and set to 46 bits")
         results+=("  Location: Uncore General Configuration")
@@ -144,7 +145,7 @@ check_bios_settings() {
     # Install msr-tools if not present
     if ! command -v rdmsr &> /dev/null; then
         echo "Installing msr-tools..."
-        apt-get update && apt-get install -y msr-tools
+        apt-get update && apt-get install -y msr-tools cpuid
     fi
 
     # Load the msr module if not loaded
