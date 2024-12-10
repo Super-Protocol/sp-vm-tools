@@ -42,13 +42,14 @@ check_all_bios_settings() {
         all_passed=false
     fi
     
-    # TME Check remains unchanged
+    # TME Check should verify both base TME and MT-TME
     results+=("TME Settings:")
     if rdmsr -f 0:0 0x981 2>/dev/null | grep -q "1" && \
-       rdmsr -f 0:0 0x982 2>/dev/null | grep -q "1"; then
-        results+=("✓ Memory encryption enabled")
+       [ "$(cat /sys/firmware/tme/key_bits 2>/dev/null)" = "31" ]; then
+        results+=("✓ Memory encryption enabled with correct key configuration")
     else
-        results+=("✗ Memory encryption disabled")
+        results+=("✗ Memory encryption not properly configured")
+        results+=("  Required: Enable TME and TME-MT with 31 keys")
         all_passed=false
     fi
 
@@ -84,27 +85,35 @@ check_all_bios_settings() {
         all_passed=false
     fi
 
-    # Modified TDX Check
     results+=("TDX Settings:")
-    # Check both dmesg and MSR for TDX status
-    local tdx_init=$(dmesg | grep -i "virt/tdx: module initialized" || echo "")
-    local pamt_alloc=$(dmesg | grep -i "KB allocated for PAMT" || echo "")
-    local tdx_msr=$(rdmsr 0x982 2>/dev/null || echo "0")
-    
-    # Consider TDX enabled if either dmesg shows initialization or MSR indicates it's enabled
-    if [ ! -z "$tdx_init" ] || [ "$((0x$tdx_msr & 0x1))" -ne 0 ]; then
+    # Check both kernel support and hardware capability for TDX
+    if dmesg | grep -q "INTEL-TDX: Host support detected" && \
+       [ "$(rdmsr -f 0:0 0x982 2>/dev/null)" != "0" ] && \
+       [ -e "/sys/module/tdx" ]; then
         results+=("✓ TDX supported and initialized")
+        # Check PAMT allocation if available
+        local pamt_alloc=$(dmesg | grep -i "KB allocated for PAMT" || echo "")
         if [ ! -z "$pamt_alloc" ]; then
             results+=("✓ PAMT allocation successful: $(echo $pamt_alloc | grep -o '[0-9]* KB')")
-        else
-            results+=("✓ PAMT allocation status not visible in dmesg")
         fi
-    else 
-        results+=("✗ TDX not properly configured")
-        results+=("  Required: Enable TDX in BIOS")
+    else
+        results+=("✗ TDX not properly configured on host")
+        results+=("  Required: Enable TDX in BIOS and verify kernel module loaded")
         all_passed=false
     fi
-
+    
+    # Check if tdx kernel module is loaded
+    if ! lsmod | grep -q "^tdx"; then
+        results+=("✗ TDX kernel module not loaded")
+        all_passed=false
+    fi
+    
+    # Check for TD_ENABLE bit in IA32_FEAT_CTL MSR (0x3A)
+    if ! rdmsr -f 8:8 0x3A 2>/dev/null | grep -q "1"; then
+        results+=("✗ TDX not enabled in IA32_FEAT_CTL MSR")
+        all_passed=false
+    fi
+    
     # Configuration requirements section remains unchanged
     results+=("Required BIOS Configuration:")
     results+=("• Memory Encryption:")
