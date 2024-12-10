@@ -1,0 +1,4 @@
+[submodule "sources/amd/AMDSEV"]
+	path = sources/amd/AMDSEV
+	url = https://github.com/AMDESE/AMDSEV.git
+	branch = snp-latest
