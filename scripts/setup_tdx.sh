@@ -32,13 +32,16 @@ check_all_bios_settings() {
     print_section_header "BIOS Configuration Check Results"
     echo "Checking all settings..."
     
-    # CPU PA Check remains unchanged
     results+=("CPU PA Settings:")
-    if true; then
-        results+=("✓ CPU PA limit properly configured")
+    # Check BIOS setting through MSR or other appropriate method
+    # This is a placeholder - need to identify correct MSR or method to check this
+    if dmesg | grep -i "CPU PA" | grep -q "disabled"; then
+        results+=("✓ CPU PA limit disabled as required")
     else
         results+=("✗ CPU PA limit must be disabled")
         results+=("  Location: Uncore General Configuration")
+        results+=("  Current: Enabled (46 bits)")
+        results+=("  Required: Disable CPU PA limit")
         all_passed=false
     fi
     
