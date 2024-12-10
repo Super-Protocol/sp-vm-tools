@@ -113,6 +113,7 @@ parse_args() {
             --ssh_port) SSH_PORT=$2; shift ;;
             --log_file) LOG_FILE=$2; shift ;;
             --debug) DEBUG_MODE=$2; shift ;;
+            --argo_branch) ARGO_BRANCH=$2; shift ;;
             --release) RELEASE=$2; shift ;;
             --mode) VM_MODE=$2; shift ;;
             --help) usage; exit 0;;
