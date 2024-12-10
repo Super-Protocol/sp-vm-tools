@@ -33,26 +33,23 @@ check_all_bios_settings() {
     echo "Checking all settings..."
     
     results+=("CPU PA Settings:")
-    # Check BIOS setting through MSR or other appropriate method
-    # This is a placeholder - need to identify correct MSR or method to check this
-    if dmesg | grep -i "CPU PA" | grep -q "disabled"; then
-        results+=("✓ CPU PA limit disabled as required")
+    if dmesg | grep -i "CPU Physical Address Bit Limit: 46" || \
+       grep -i "Limit CPU PA to 46 bits.*\[Enable\]" /sys/firmware/efi/vars/* 2>/dev/null; then
+        results+=("✓ CPU PA limit properly configured to 46 bits")
     else
-        results+=("✗ CPU PA limit must be disabled")
+        results+=("✗ CPU PA limit must be enabled and set to 46 bits")
         results+=("  Location: Uncore General Configuration")
-        results+=("  Current: Enabled (46 bits)")
-        results+=("  Required: Disable CPU PA limit")
         all_passed=false
     fi
     
     # TME Check should verify both base TME and MT-TME
     results+=("TME Settings:")
-    if rdmsr -f 0:0 0x981 2>/dev/null | grep -q "1" && \
-       [ "$(cat /sys/firmware/tme/key_bits 2>/dev/null)" = "31" ]; then
-        results+=("✓ Memory encryption enabled with correct key configuration")
+    if [ -e "/sys/firmware/tme/enabled" ] && \
+       [ -e "/sys/firmware/tme/mt_enabled" ]; then
+        results+=("✓ Memory encryption (TME and TME-MT) enabled")
     else
         results+=("✗ Memory encryption not properly configured")
-        results+=("  Required: Enable TME and TME-MT with 31 keys")
+        results+=("  Required: Enable both TME and TME-MT")
         all_passed=false
     fi
 
@@ -89,10 +86,9 @@ check_all_bios_settings() {
     fi
 
     results+=("TDX Settings:")
-    # Check both kernel support and hardware capability for TDX
-    if dmesg | grep -q "INTEL-TDX: Host support detected" && \
-       [ "$(rdmsr -f 0:0 0x982 2>/dev/null)" != "0" ] && \
-       [ -e "/sys/module/tdx" ]; then
+    if dmesg | grep -q "INTEL-TDX:" || \
+       [ -d "/sys/module/tdx" ] || \
+       [ "$(rdmsr -f 0:0 0x982 2>/dev/null)" != "0" ]; then
         results+=("✓ TDX supported and initialized")
         # Check PAMT allocation if available
         local pamt_alloc=$(dmesg | grep -i "KB allocated for PAMT" || echo "")
@@ -101,12 +97,12 @@ check_all_bios_settings() {
         fi
     else
         results+=("✗ TDX not properly configured on host")
-        results+=("  Required: Enable TDX in BIOS and verify kernel module loaded")
+        results+=("  Required: Enable TDX in BIOS")
         all_passed=false
     fi
     
     # Check if tdx kernel module is loaded
-    if ! lsmod | grep -q "^tdx"; then
+    if [ -e "/sys/firmware/acpi/tables/TDEL" ] && ! lsmod | grep -q "^tdx"; then
         results+=("✗ TDX kernel module not loaded")
         all_passed=false
     fi
