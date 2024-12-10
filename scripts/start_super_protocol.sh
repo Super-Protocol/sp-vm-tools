@@ -214,6 +214,8 @@ parse_and_download_release_files() {
    RELEASE_JSON=$1
    DOWNLOAD_DIR=$(dirname ${RELEASE_JSON})
 
+   echo "Parsing release JSON at: ${RELEASE_JSON}"
+   
    while read -r entry; do
        key=$(echo "$entry" | jq -r '.key')
        bucket=$(echo "$entry" | jq -r '.value.bucket')
@@ -221,13 +223,15 @@ parse_and_download_release_files() {
        filename=$(echo "$entry" | jq -r '.value.filename')
        sha256=$(echo "$entry" | jq -r '.value.sha256')
 
+       echo "Processing entry - key: ${key}, filename: ${filename}"
+       
        local_path="$DOWNLOAD_DIR/$filename"
 
        case $key in
-           rootfs) ROOTFS_PATH=$local_path ;;
-           bios) BIOS_PATH=$local_path ;;
-           root_hash) ROOTFS_HASH_PATH=$local_path;;
-           kernel) KERNEL_PATH=$local_path ;;
+           rootfs) ROOTFS_PATH=$local_path; echo "Set ROOTFS_PATH to ${local_path}" ;;
+           bios) BIOS_PATH=$local_path; echo "Set BIOS_PATH to ${local_path}" ;;
+           root_hash) ROOTFS_HASH_PATH=$local_path; echo "Set ROOTFS_HASH_PATH to ${local_path}" ;;
+           kernel) KERNEL_PATH=$local_path; echo "Set KERNEL_PATH to ${local_path}" ;;
        esac
 
        if [[ -f "$local_path" ]]; then
@@ -240,9 +244,13 @@ parse_and_download_release_files() {
            fi
        fi
 
-       echo "Downloading $filename..."
-       # Use uplink with progress display and stats
+       echo "Downloading $filename from sj://$bucket/$prefix/$filename to $local_path..."
        uplink cp --parallelism 8 --parallelism-chunk-size 32M --progress --access ${STORJ_TOKEN} "sj://$bucket/$prefix/$filename" "$local_path"
+
+       if [ $? -ne 0 ]; then
+           echo "Error: Failed to download $filename"
+           exit 1
+       fi
 
        computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
        if [[ "$computed_sha256" != "$sha256" ]]; then
