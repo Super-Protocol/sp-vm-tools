@@ -45,8 +45,9 @@ check_all_bios_settings() {
     
     # TME Check should verify both base TME and MT-TME
     results+=("TME Settings:")
-    if [ -e "/sys/firmware/tme/enabled" ] && \
-       [ -e "/sys/firmware/tme/mt_enabled" ]; then
+    if dmesg | grep -q "x86/tme: enabled by BIOS" && \
+       dmesg | grep -q "x86/mktme: enabled by BIOS" && \
+       dmesg | grep -q "KeyIDs available"; then
         results+=("✓ Memory encryption (TME and TME-MT) enabled")
     else
         results+=("✗ Memory encryption not properly configured")
@@ -74,27 +75,28 @@ check_all_bios_settings() {
         all_passed=false
     fi
 
-    # Modified SEAM Check - Updated hex mask
     results+=("SEAM Settings:")
-    local tdx_cap_msr=$(rdmsr 0x982 2>/dev/null || echo "0")
-    # Check if the SEAM loader bit is set in the correct position
-    if [ "$((0x$tdx_cap_msr & 0x7))" -ne 0 ]; then
-        results+=("✓ SEAM loader enabled (MSR 0x982: $tdx_cap_msr)")
+    local tdx_cap_msr=$(rdmsr -X 0x982 2>/dev/null || echo "0")
+    # Проверяем бит 44 (0x100000000000)
+    if [[ "$tdx_cap_msr" =~ [1-9][0-9]*[0-9]{11}B ]]; then
+        results+=("✓ SEAM loader enabled (MSR 0x982: ${tdx_cap_msr})")
     else
-        results+=("✗ SEAM loader not enabled (MSR 0x982: $tdx_cap_msr)")
+        results+=("✗ SEAM loader not enabled (MSR 0x982: ${tdx_cap_msr})")
         results+=("  Required: Enable SEAM Loader in BIOS")
         all_passed=false
     fi
 
     results+=("TDX Settings:")
-    if dmesg | grep -q "INTEL-TDX:" || \
-       [ -d "/sys/module/tdx" ] || \
-       [ "$(rdmsr -f 0:0 0x982 2>/dev/null)" != "0" ]; then
+    if dmesg | grep -q "virt/tdx: BIOS enabled"; then
         results+=("✓ TDX supported and initialized")
-        # Check PAMT allocation if available
+        
         local pamt_alloc=$(dmesg | grep -i "KB allocated for PAMT" || echo "")
         if [ ! -z "$pamt_alloc" ]; then
             results+=("✓ PAMT allocation successful: $(echo $pamt_alloc | grep -o '[0-9]* KB')")
+        fi
+        
+        if dmesg | grep -q "virt/tdx: module initialized"; then
+            results+=("✓ TDX module initialized")
         fi
     else
         results+=("✗ TDX not properly configured on host")
