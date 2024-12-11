@@ -141,7 +141,7 @@ build_main() {
 
     local scripts_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
     local root_dir=${scripts_dir}/../
-    local build_dir=${scripts_dir}/../build/sev
+    local build_dir=${scripts_dir}/../build/snp
 
     source ${root_dir}/sources/amd/AMDSEV/stable-commits
 
