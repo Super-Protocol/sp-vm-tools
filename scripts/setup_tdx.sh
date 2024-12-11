@@ -65,13 +65,12 @@ check_all_bios_settings() {
     fi
 
     results+=("TXT Settings:")
-    local txt_status=$(txt-stat | grep "TXT measured launch" | awk '{print $NF}')
-    if [ "$txt_status" = "TRUE" ]; then
-        results+=("✓ TXT enabled and measured launch verified")
+    local sinit_base=$(txt-stat | grep "SINIT.BASE:" | awk '{print $2}')
+    if [ "$sinit_base" != "0x0" ] && [ "$sinit_base" != "" ]; then
+        results+=("✓ TXT enabled (SINIT ACM present)")
     else
-        results+=("✗ TXT not properly configured")
-        results+=("  Status: Measured launch not active")
-        results+=("  Required: Enable TXT in BIOS and verify TPM configuration")
+        results+=("✗ TXT not enabled in BIOS")
+        results+=("  Required: Enable TXT in BIOS")
         all_passed=false
     fi
 
