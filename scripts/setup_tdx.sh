@@ -42,7 +42,17 @@ check_all_bios_settings() {
         results+=("  Location: Uncore General Configuration")
         all_passed=false
     fi
-    
+
+    # Add SMT check at the beginning
+    results+=("SMT Settings:")
+    if dmesg | grep -q "BIOS has enabled SMT"; then
+        results+=("${SUCCESS} SMT enabled${NC}")
+    else
+        results+=("${FAILURE} SMT not enabled in BIOS${NC}")
+        results+=("  Required: Enable SMT in BIOS")
+        all_passed=false
+    fi
+
     # TME Check should verify both base TME and MT-TME
     results+=("TME Settings:")
     if dmesg | grep -q "x86/tme: enabled by BIOS" && \
@@ -116,6 +126,7 @@ check_all_bios_settings() {
     results+=("  - CPU PA: Enable and set to 46 bits")
     results+=("  - TXT: Enable")
     results+=("  - SGX: Enable")
+    results+=("  - SMT: Enable")
     results+=("• Memory Protection:")
     results+=("  - TME: Enable")
     results+=("  - TME Multi-Tenant: Enable")
