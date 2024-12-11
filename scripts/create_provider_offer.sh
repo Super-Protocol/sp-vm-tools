@@ -23,6 +23,42 @@ format_name() {
     echo "$petname" | sed 's/[-_]/ /g' | awk '{for(i=1;i<=NF;i++)sub(/./,toupper(substr($i,1,1)),$i)}1'
 }
 
+# Function to set system hostname and update hosts file
+set_system_hostname() {
+    local new_hostname=$1
+    local old_hostname=$(hostname)
+    
+    echo "Setting system hostname to: $new_hostname"
+    
+    # Set the new hostname using hostnamectl
+    sudo hostnamectl set-hostname "$new_hostname"
+    
+    # Update /etc/hosts file
+    echo "Updating /etc/hosts..."
+    # Create backup of hosts file
+    sudo cp /etc/hosts /etc/hosts.backup
+    
+    # Replace old hostname with new hostname in /etc/hosts
+    sudo sed -i "s/\b${old_hostname}\b/${new_hostname}/g" /etc/hosts
+    
+    # Ensure localhost entries exist with new hostname
+    if ! grep -q "127.0.0.1.*${new_hostname}" /etc/hosts; then
+        sudo sed -i "1i127.0.0.1\tlocalhost ${new_hostname}" /etc/hosts
+    fi
+    if ! grep -q "::1.*${new_hostname}" /etc/hosts; then
+        sudo sed -i "2i::1\tlocalhost ${new_hostname}" /etc/hosts
+    fi
+    
+    echo "Hostname has been updated. Changes will take full effect after reboot."
+}
+# Function to format hostname
+format_hostname() {
+    local name=$1
+    # Convert to lowercase, replace spaces with hyphens, remove any special characters
+    echo "$name" | tr '[:upper:]' '[:lower:]' | sed 's/ /-/g' | sed 's/[^a-z0-9-]//g'
+}
+
+
 # Function to extract GPU name
 extract_gpu_name() {
     local gpu_info=$1
@@ -96,6 +132,10 @@ if [ -z "$custom_name" ]; then
     custom_name=$(petname)
 fi
 name="Super $(format_name "$custom_name")"
+
+# Format the hostname to be like "super-firm-toucan"
+hostname_safe=$(format_hostname "$name")
+set_system_hostname "$hostname_safe"
 
 # Get CPU cores (including HyperThreading)
 total_cores=$(nproc)
