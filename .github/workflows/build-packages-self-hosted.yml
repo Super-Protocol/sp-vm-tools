@@ -60,7 +60,7 @@ jobs:
           tag_name: "${{ env.RELEASE_NAME }}"
           release_name: "Release ${{ env.RELEASE_NAME }}"
           draft: false
-          prerelease: false
+          prerelease: true
 
       - name: Upload TDX Release Asset
         if: ${{ github.event.inputs.build_type == 'TDX' || github.event.inputs.build_type == 'BOTH' }}
