@@ -234,29 +234,21 @@ setup_grub() {
         return 1
     fi
 
-    # Get submenu and menu entry names exactly as they appear
-    local submenu_line=$(grep -B1 "menuentry '.*${new_kernel}'" "$grub_cfg" | grep "submenu '" | head -n1)
-    local menu_line=$(grep "menuentry '.*${new_kernel}'" "$grub_cfg" | grep -v "recovery mode" | head -n1)
-    
-    if [ -z "$menu_line" ]; then
+    # Get menu entry index instead of full path
+    local menu_index=$(grep -n "menuentry '.*${new_kernel}'" "$grub_cfg" | grep -v "recovery mode" | head -n1 | cut -d: -f1)
+    if [ -z "$menu_index" ]; then
         echo "ERROR: Could not find menu entry for kernel ${new_kernel}"
         return 1
     fi
 
-    # Extract the exact names
-    local submenu_name=$(echo "$submenu_line" | grep -o "submenu '.*'" | cut -d "'" -f 2)
-    local menu_name=$(echo "$menu_line" | grep -o "menuentry '.*'" | cut -d "'" -f 2)
-    
-    # Construct the full menu path
-    local full_path="\"${submenu_name}>${menu_name}\""
-    
-    echo "Found menu path: $full_path"
+    # Count how many menuentry lines appear before our target
+    local actual_index=$(($(head -n "$menu_index" "$grub_cfg" | grep -c "menuentry ') - 1))
     
     # Remove any existing GRUB_DEFAULT settings
     sed -i '/^GRUB_DEFAULT=/d' /etc/default/grub
     
-    # Add our GRUB_DEFAULT setting at the beginning of the file
-    echo "GRUB_DEFAULT=$full_path" > /etc/default/grub.new
+    # Add our GRUB_DEFAULT setting with numeric index
+    echo "GRUB_DEFAULT=$actual_index" > /etc/default/grub.new
     cat /etc/default/grub >> /etc/default/grub.new
     mv /etc/default/grub.new /etc/default/grub
     
@@ -269,34 +261,35 @@ setup_grub() {
         fi
     fi
     
-    # Set menu visibility and timeout for reliability
+    # Force menu to always show and set reasonable timeout
     sed -i 's/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=menu/' /etc/default/grub
-    sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=1/' /etc/default/grub
+    sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=5/' /etc/default/grub
+    sed -i 's/^GRUB_HIDDEN_TIMEOUT=.*//' /etc/default/grub
+    
+    # Ensure GRUB_RECORDFAIL_TIMEOUT is set
+    if ! grep -q '^GRUB_RECORDFAIL_TIMEOUT=' /etc/default/grub; then
+        echo 'GRUB_RECORDFAIL_TIMEOUT=5' >> /etc/default/grub
+    fi
     
     # Force regeneration of grub.cfg and initramfs
     update-initramfs -u -k "${new_kernel}"
     update-grub2 || update-grub
 
-    # Use both grub-set-default and grub-reboot for maximum reliability
+    # Use grub-set-default with numeric index
     if command -v grub-set-default >/dev/null 2>&1; then
-        grub-set-default "$full_path"
+        grub-set-default "$actual_index"
         echo "Set default boot entry using grub-set-default"
-    fi
-
-    if command -v grub-reboot >/dev/null 2>&1; then
-        grub-reboot "$full_path"
-        echo "Set next boot entry using grub-reboot"
     fi
 
     # Verify our changes
     echo "Verifying GRUB configuration..."
-    if ! grep -q "^GRUB_DEFAULT=$full_path" /etc/default/grub; then
+    if ! grep -q "^GRUB_DEFAULT=$actual_index" /etc/default/grub; then
         echo "ERROR: Failed to set GRUB_DEFAULT properly"
         return 1
     fi
 
     echo "GRUB configuration completed successfully for kernel ${new_kernel}"
-    echo "Menu entry: $full_path"
+    echo "Menu entry index: $actual_index"
     
     return 0
 }
