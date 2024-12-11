@@ -76,7 +76,7 @@ build_ovmf() {
     cd ovmf
     git config --global url.https://github.com/tianocore/edk2-subhook.git.insteadOf https://github.com/Zeex/subhook.git
     git submodule update --init --recursive
-     rm -rf Build
+    rm -rf Build
     make -C BaseTools
 
     set -- #workaround for source from function with arg
