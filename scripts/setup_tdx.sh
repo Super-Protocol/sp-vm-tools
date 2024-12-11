@@ -36,9 +36,9 @@ check_all_bios_settings() {
     PA_BITS=$(cpuid -l 0x80000008 | grep "maximum physical address bits" | head -n1 | awk '{print $NF}' | tr -d '()' || echo "0")
     
     if [ "$PA_BITS" -gt "46" ]; then
-        results+=("✓ CPU PA limit properly configured")
+        results+=("${SUCCESS} CPU PA limit properly configured${NC}")
     else
-        results+=("✗ CPU PA limit must be enabled and set to 46 bits")
+        results+=("${FAILURE} CPU PA limit must be enabled and set to 46 bits${NC}")
         results+=("  Location: Uncore General Configuration")
         all_passed=false
     fi
@@ -48,9 +48,9 @@ check_all_bios_settings() {
     if dmesg | grep -q "x86/tme: enabled by BIOS" && \
        dmesg | grep -q "x86/mktme: enabled by BIOS" && \
        dmesg | grep -q "KeyIDs available"; then
-        results+=("✓ Memory encryption (TME and TME-MT) enabled")
+        results+=("${SUCCESS} Memory encryption (TME and TME-MT) enabled${NC}")
     else
-        results+=("✗ Memory encryption not properly configured")
+        results+=("${FAILURE} Memory encryption not properly configured${NC}")
         results+=("  Required: Enable both TME and TME-MT")
         all_passed=false
     fi
@@ -58,18 +58,18 @@ check_all_bios_settings() {
     # SGX Check remains unchanged
     results+=("SGX Settings:")
     if grep -q "sgx" /proc/cpuinfo && [ -c "/dev/sgx_enclave" -o -c "/dev/sgx/enclave" ]; then
-        results+=("✓ SGX enabled and configured")
+        results+=("${SUCCESS} SGX enabled and configured${NC}")
     else
-        results+=("✗ SGX not properly configured")
+        results+=("${FAILURE} SGX not properly configured${NC}")
         all_passed=false
     fi
 
     results+=("TXT Settings:")
     local sinit_base=$(txt-stat | grep "SINIT.BASE:" | awk '{print $2}')
     if [ "$sinit_base" != "0x0" ] && [ "$sinit_base" != "" ]; then
-        results+=("✓ TXT enabled (SINIT ACM present)")
+        results+=("${SUCCESS} TXT enabled (SINIT ACM present)${NC}")
     else
-        results+=("✗ TXT not enabled in BIOS")
+        results+=("${FAILURE} TXT not enabled in BIOS${NC}")
         results+=("  Required: Enable TXT in BIOS")
         all_passed=false
     fi
@@ -78,39 +78,39 @@ check_all_bios_settings() {
     local tdx_cap_msr=$(rdmsr -X 0x982 2>/dev/null || echo "0")
     # Проверяем бит 44 (0x100000000000)
     if [[ "$tdx_cap_msr" =~ [1-9][0-9]*[0-9]{11}B ]]; then
-        results+=("✓ SEAM loader enabled (MSR 0x982: ${tdx_cap_msr})")
+        results+=("${SUCCESS} SEAM loader enabled (MSR 0x982: ${tdx_cap_msr})${NC}")
     else
-        results+=("✗ SEAM loader not enabled (MSR 0x982: ${tdx_cap_msr})")
+        results+=("${FAILURE} SEAM loader not enabled (MSR 0x982: ${tdx_cap_msr})${NC}")
         results+=("  Required: Enable SEAM Loader in BIOS")
         all_passed=false
     fi
 
     results+=("TDX Settings:")
     if dmesg | grep -q "virt/tdx: BIOS enabled"; then
-        results+=("✓ TDX supported and initialized")
+        results+=("${SUCCESS} TDX supported and initialized${NC}")
         
         local pamt_alloc=$(dmesg | grep -i "KB allocated for PAMT" || echo "")
         if [ ! -z "$pamt_alloc" ]; then
-            results+=("✓ PAMT allocation successful: $(echo $pamt_alloc | grep -o '[0-9]* KB')")
+            results+=("${SUCCESS} PAMT allocation successful: $(echo $pamt_alloc | grep -o '[0-9]* KB')${NC}")
         fi
         
         if dmesg | grep -q "virt/tdx: module initialized"; then
-            results+=("✓ TDX module initialized")
+            results+=("${SUCCESS} TDX module initialized${NC}")
         fi
     else
-        results+=("✗ TDX not properly configured on host")
+        results+=("${FAILURE} TDX not properly configured on host${NC}")
         results+=("  Required: Enable TDX in BIOS")
         all_passed=false
     fi
     
     # Check if tdx kernel module is loaded
     if [ -e "/sys/firmware/acpi/tables/TDEL" ] && ! lsmod | grep -q "^tdx"; then
-        results+=("✗ TDX kernel module not loaded")
+        results+=("${FAILURE} TDX kernel module not loaded${NC}")
         all_passed=false
     fi
         
     # Configuration requirements section remains unchanged
-    results+=("Required BIOS Configuration:")
+    results+=("${GREEN}$Required BIOS Configuration:${NC}")
     results+=("• Memory Encryption:")
     results+=("  - TME: Enable")
     results+=("  - TME Multi-Tenant: Enable")
@@ -126,10 +126,10 @@ check_all_bios_settings() {
     printf '%s\n' "${results[@]}"
 
     if [ "$all_passed" = true ]; then
-        echo -e "\n✓ All settings properly configured"
+        echo -e "\n${SUCCESS} All settings properly configured${NC}"
         return 0
     else
-        echo -e "\n✗ Some settings need attention"
+        echo -e "\n${FAILURE} Some settings need attention${NC}"
         return 1
     fi
 }
