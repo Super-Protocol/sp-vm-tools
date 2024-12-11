@@ -124,12 +124,14 @@ build_qemu() {
 
 packaging() {
     local build_dir=$1
+    local root_dir=$2
     pushd ${build_dir}
     rm -rf ./package
     mkdir -p package
     find ./ -type f -name "*.deb" ! -name "*dbg*.deb" -exec cp -fv {} package/ \;
     cp -fv qemu/sp-qemu-snp*.deb package/
     cp -fv ovmf/Build/OvmfX64/RELEASE_GCC5/FV/OVMF.fd package/
+    cp -fv ${root_dir}/sources/amd/AMDSEV/kvm.conf package/
     cd package
     tar -czvf ../package-snp.tar.gz .
     popd
@@ -156,8 +158,8 @@ build_main() {
     config_file_abs=$(readlink -f "${config_file}")
     popd
 
-    build_kernel_packages ${build_dir} ${config_file_abs}
+    #build_kernel_packages ${build_dir} ${config_file_abs}
     build_qemu ${build_dir}
     build_ovmf ${build_dir}
-    packaging ${build_dir}
+    packaging ${build_dir} ${root_dir}
 }
