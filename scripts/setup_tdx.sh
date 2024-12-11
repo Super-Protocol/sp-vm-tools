@@ -139,13 +139,9 @@ check_all_bios_settings() {
 
 check_bios_settings() {
     echo "Performing comprehensive BIOS configuration check..."
+    echo "Installing components..."
+    apt-get update && apt-get install -y msr-tools cpuid tboot
     
-    # Install msr-tools if not present
-    if ! command -v rdmsr &> /dev/null; then
-        echo "Installing msr-tools..."
-        apt-get update && apt-get install -y msr-tools cpuid tboot
-    fi
-
     # Load the msr module if not loaded
     if ! lsmod | grep -q "^msr"; then
         echo "Loading MSR module..."
