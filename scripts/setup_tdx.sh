@@ -111,16 +111,17 @@ check_all_bios_settings() {
         
     # Configuration requirements section remains unchanged
     results+=("${YELLOW}Required BIOS Configuration:${NC}")
-    results+=("• Memory Encryption:")
+    results+=("• Core Security:")
+    results+=("  - CPU PA: Enable and set to 46 bits")
+    results+=("  - TXT: Enable")
+    results+=("  - SGX: Enable")
+    results+=("• Memory Protection:")
     results+=("  - TME: Enable")
     results+=("  - TME Multi-Tenant: Enable")
-    results+=("  - TME-MT keys: 31")
-    results+=("  - Key split: 1")
-    results+=("• TDX/TXT/SEAM:")
+    results+=("  - KeyIDs configuration: Present")
+    results+=("• TDX Components:")
     results+=("  - TDX: Enable")
-    results+=("  - TXT: Enable")
     results+=("  - SEAM Loader: Enable")
-    results+=("  - TDX keys: 32")
 
     print_section_header "Status"
     for result in "${results[@]}"; do
