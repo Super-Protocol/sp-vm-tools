@@ -75,12 +75,13 @@ check_all_bios_settings() {
     fi
 
     results+=("SEAM Settings:")
-    local tdx_cap_msr=$(rdmsr -X 0x982 2>/dev/null || echo "0")
-    # Проверяем бит 44 (0x100000000000)
-    if [[ "$tdx_cap_msr" =~ [1-9][0-9]*[0-9]{11}B ]]; then
-        results+=("${SUCCESS} SEAM loader enabled (MSR 0x982: ${tdx_cap_msr})${NC}")
+    if dmesg | grep -q "virt/tdx: module initialized" && \
+       dmesg | grep -q "virt/tdx: BIOS enabled"; then
+        results+=("${SUCCESS} SEAM loader enabled and functioning${NC}")
+        local tdx_cap_msr=$(rdmsr -X 0x982 2>/dev/null || echo "0")
+        results+=("  MSR 0x982: ${tdx_cap_msr} (for reference only)")
     else
-        results+=("${FAILURE} SEAM loader not enabled (MSR 0x982: ${tdx_cap_msr})${NC}")
+        results+=("${FAILURE} SEAM loader not enabled or not functioning properly${NC}")
         results+=("  Required: Enable SEAM Loader in BIOS")
         all_passed=false
     fi
