@@ -254,11 +254,14 @@ if [ -z "$cpu_model" ]; then
     cpu_model="Unknown CPU"
 fi
 
+# Get network speed in Gbps (convert from Mbps)
+network_speed_gbps=$(calc "$network_speed / 1000")
+
 # Create description
 if [ $gpu_present -eq 1 ]; then
-    description="CPU: $cpu_model, $adjusted_cores cores, $adjusted_ram_gb GB RAM, GPU: $gpu_name, $adjusted_disk_gb GB disk, 1 Gbps network"
+    description="CPU: $cpu_model, $adjusted_cores cores, $adjusted_ram_gb GB RAM, GPU: $gpu_name, $adjusted_disk_gb GB disk, ${network_speed_gbps} Gbps network"
 else
-    description="CPU: $cpu_model, $adjusted_cores cores, $adjusted_ram_gb GB RAM, $adjusted_disk_gb GB disk, 1 Gbps network"
+    description="CPU: $cpu_model, $adjusted_cores cores, $adjusted_ram_gb GB RAM, $adjusted_disk_gb GB disk, ${network_speed_gbps} Gbps network"
 fi
 
 floor_divide_precision() {
