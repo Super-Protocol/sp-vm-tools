@@ -234,21 +234,27 @@ setup_grub() {
         return 1
     fi
 
-    # Get menu entry index instead of full path
-    local menu_index=$(grep -n "menuentry '.*${new_kernel}'" "$grub_cfg" | grep -v "recovery mode" | head -n1 | cut -d: -f1)
-    if [ -z "$menu_index" ]; then
+    # Get menu entry index and calculate actual index
+    local menu_count=0
+    while IFS= read -r line; do
+        if [[ $line == *"menuentry '"* ]]; then
+            if [[ $line == *"$new_kernel"* ]] && [[ $line != *"recovery mode"* ]]; then
+                break
+            fi
+            ((menu_count++))
+        fi
+    done < "$grub_cfg"
+    
+    if [ $menu_count -eq 0 ]; then
         echo "ERROR: Could not find menu entry for kernel ${new_kernel}"
         return 1
     fi
-
-    # Count how many menuentry lines appear before our target
-    local actual_index=$(($(head -n "$menu_index" "$grub_cfg" | grep -c "menuentry ') - 1))
     
     # Remove any existing GRUB_DEFAULT settings
     sed -i '/^GRUB_DEFAULT=/d' /etc/default/grub
     
     # Add our GRUB_DEFAULT setting with numeric index
-    echo "GRUB_DEFAULT=$actual_index" > /etc/default/grub.new
+    echo "GRUB_DEFAULT=$menu_count" > /etc/default/grub.new
     cat /etc/default/grub >> /etc/default/grub.new
     mv /etc/default/grub.new /etc/default/grub
     
@@ -277,19 +283,19 @@ setup_grub() {
 
     # Use grub-set-default with numeric index
     if command -v grub-set-default >/dev/null 2>&1; then
-        grub-set-default "$actual_index"
+        grub-set-default "$menu_count"
         echo "Set default boot entry using grub-set-default"
     fi
 
     # Verify our changes
     echo "Verifying GRUB configuration..."
-    if ! grep -q "^GRUB_DEFAULT=$actual_index" /etc/default/grub; then
+    if ! grep -q "^GRUB_DEFAULT=$menu_count" /etc/default/grub; then
         echo "ERROR: Failed to set GRUB_DEFAULT properly"
         return 1
     fi
 
     echo "GRUB configuration completed successfully for kernel ${new_kernel}"
-    echo "Menu entry index: $actual_index"
+    echo "Menu entry index: $menu_count"
     
     return 0
 }
