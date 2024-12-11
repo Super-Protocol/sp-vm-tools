@@ -73,13 +73,13 @@ jobs:
           asset_name: package-tdx.tar.gz
           asset_content_type: application/gzip
       
-      - name: Upload TDX Release Asset
+      - name: Upload SNP Release Asset
         if: ${{ github.event.inputs.build_type == 'SNP' || github.event.inputs.build_type == 'BOTH' }}
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./build/tdx/package-snp.tar.gz
+          asset_path: ./build/snp/package-snp.tar.gz
           asset_name: package-snp.tar.gz
           asset_content_type: application/gzip
