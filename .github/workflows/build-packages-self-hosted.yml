@@ -22,7 +22,9 @@ jobs:
 
       - name: Set build type
         id: set-build-type
-        run: echo "BUILD_TYPE=${{ github.event.inputs.build_type }}" >> $GITHUB_ENV
+        run: | 
+          echo "BUILD_TYPE=${{ github.event.inputs.build_type }}" >> $GITHUB_ENV
+          echo "RUNNER_ID=${{ github.run_number }} >> $GITHUB_ENV
         
       - name: Run TDX docker build
         if: ${{ github.event.inputs.build_type == 'TDX' || github.event.inputs.build_type == 'BOTH' }}
@@ -41,7 +43,7 @@ jobs:
             echo "RELEASE_NAME=$(echo ${RUNNER_ID})-tdx+snp" >> $GITHUB_ENV
           elif [[ "${BUILD_TYPE}" == "TDX" ]]; then
             echo "RELEASE_NAME=$(echo ${RUNNER_ID})-tdx" >> $GITHUB_ENV
-          else
+          elif [[ "${BUILD_TYPE}" == "SNP" ]]; then
             echo "RELEASE_NAME=$(echo ${RUNNER_ID})-snp" >> $GITHUB_ENV
 
       - name: Create GitHub Release
