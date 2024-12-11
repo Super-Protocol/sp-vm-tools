@@ -24,7 +24,7 @@ jobs:
 
       - name: Run docker build
         run: |
-          NON_INTERACTIVE=1 FORCE_REBUILD_CONTAINER=1 ./build_in_docker.sh
+          NON_INTERACTIVE=1 FORCE_REBUILD_CONTAINER=1 ./build_in_docker.sh tdx
 
       - name: Create GitHub Release
         id: create_release
@@ -44,6 +44,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./build/package.tar.gz
-          asset_name: package.tar.gz
+          asset_path: ./build/tdx/package-tdx.tar.gz
+          asset_name: package-tdx.tar.gz
           asset_content_type: application/gzip
