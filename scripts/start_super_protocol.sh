@@ -217,6 +217,15 @@ parse_and_download_release_files() {
 
    echo "Parsing release JSON at: ${RELEASE_JSON}"
    
+   # First, validate that we can read all required entries from JSON
+   required_keys=("rootfs" "bios" "root_hash" "kernel")
+   for key in "${required_keys[@]}"; do
+       if ! jq -e ".${key}" "${RELEASE_JSON}" > /dev/null; then
+           echo "Error: Required key '${key}' not found in release JSON"
+           exit 1
+       fi
+   done
+   
    while read -r entry; do
        key=$(echo "$entry" | jq -r '.key')
        bucket=$(echo "$entry" | jq -r '.value.bucket')
@@ -233,8 +242,10 @@ parse_and_download_release_files() {
            bios) BIOS_PATH=$local_path; echo "Set BIOS_PATH to ${local_path}" ;;
            root_hash) ROOTFS_HASH_PATH=$local_path; echo "Set ROOTFS_HASH_PATH to ${local_path}" ;;
            kernel) KERNEL_PATH=$local_path; echo "Set KERNEL_PATH to ${local_path}" ;;
+           *) echo "Warning: Unknown key ${key} in release JSON" ;;
        esac
 
+       # Check existing file
        if [[ -f "$local_path" ]]; then
            computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
            if [[ "$computed_sha256" == "$sha256" ]]; then
@@ -242,6 +253,7 @@ parse_and_download_release_files() {
                continue
            else
                echo "Warning: Checksum mismatch for existing file $filename. Downloading again."
+               rm -f "$local_path"
            fi
        fi
 
@@ -261,6 +273,16 @@ parse_and_download_release_files() {
            echo "Successfully downloaded and verified $filename."
        fi
    done < <(jq -c 'to_entries[]' "$RELEASE_JSON")
+
+   # Verify that all required paths are set
+   if [[ -z "${ROOTFS_PATH}" ]] || [[ -z "${BIOS_PATH}" ]] || [[ -z "${ROOTFS_HASH_PATH}" ]] || [[ -z "${KERNEL_PATH}" ]]; then
+       echo "Error: Not all required files were processed successfully"
+       echo "ROOTFS_PATH: ${ROOTFS_PATH}"
+       echo "BIOS_PATH: ${BIOS_PATH}"
+       echo "ROOTFS_HASH_PATH: ${ROOTFS_HASH_PATH}"
+       echo "KERNEL_PATH: ${KERNEL_PATH}"
+       exit 1
+   fi
 }
 
 check_packages() {
