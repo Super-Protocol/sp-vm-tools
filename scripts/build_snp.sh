@@ -158,7 +158,7 @@ build_main() {
     config_file_abs=$(readlink -f "${config_file}")
     popd
 
-    #build_kernel_packages ${build_dir} ${config_file_abs}
+    build_kernel_packages ${build_dir} ${config_file_abs}
     build_qemu ${build_dir}
     build_ovmf ${build_dir}
     packaging ${build_dir} ${root_dir}

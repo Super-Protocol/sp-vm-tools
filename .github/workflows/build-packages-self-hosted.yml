@@ -24,7 +24,7 @@ jobs:
         id: set-build-type
         run: | 
           echo "BUILD_TYPE=${{ github.event.inputs.build_type }}" >> $GITHUB_ENV
-          echo "RUNNER_ID=${{ github.run_number }} >> $GITHUB_ENV
+          echo "RUNNER_ID=${{ github.run_number }}" >> $GITHUB_ENV
         
       - name: Run TDX docker build
         if: ${{ github.event.inputs.build_type == 'TDX' || github.event.inputs.build_type == 'BOTH' }}
