@@ -125,6 +125,69 @@ adjust_disk_size() {
     echo "$adjusted"
 }
 
+# Function to get maximum network speed in Mbps
+get_max_network_speed() {
+    local max_speed=0
+    local current_speed
+    
+    # Check all network interfaces except loopback and virtual interfaces
+    for interface in /sys/class/net/*; do
+        # Skip if not a physical or bond interface
+        if [[ ! -d "$interface" ]] || [[ "$(basename $interface)" == "lo" ]] || 
+           [[ "$(basename $interface)" == virbr* ]] || 
+           [[ "$(basename $interface)" == bonding_masters ]]; then
+            continue
+        fi
+        
+        # Get interface name
+        iface=$(basename $interface)
+        
+        # Get speed from interface
+        if [[ -f "$interface/speed" ]]; then
+            current_speed=$(cat "$interface/speed" 2>/dev/null || echo 0)
+            
+            # Convert invalid speeds to 0
+            if [[ $current_speed -lt 0 ]]; then
+                current_speed=0
+            fi
+            
+            # Update max_speed if current_speed is higher
+            if [[ $current_speed -gt $max_speed ]]; then
+                max_speed=$current_speed
+            fi
+        fi
+    done
+    
+    # If no speed was found, check ethtool output for active interfaces
+    if [[ $max_speed -eq 0 ]]; then
+        for iface in $(ip link show up | grep -v 'lo:' | awk -F: '{print $2}' | tr -d ' '); do
+            if command -v ethtool >/dev/null 2>&1; then
+                current_speed=$(ethtool $iface 2>/dev/null | grep 'Speed:' | awk '{print $2}' | sed 's/[^0-9]//g')
+                if [[ ! -z "$current_speed" && $current_speed -gt $max_speed ]]; then
+                    max_speed=$current_speed
+                fi
+            fi
+        done
+    fi
+    
+    # Default to 1000 if no speed could be determined
+    if [[ $max_speed -eq 0 ]]; then
+        max_speed=1000
+    fi
+    
+    echo $max_speed
+}
+
+# Function to extract GPU VRAM size
+extract_gpu_vram() {
+    local gpu_info=$1
+    if [[ $gpu_info =~ ([0-9]+)GB ]]; then
+        echo "${BASH_REMATCH[1]}"
+    else
+        echo "0"  # Return 0 if no GB value found
+    fi
+}
+
 # Get name from user or generate using petname
 echo -n "Enter name for the configuration (press Enter for random pet name): "
 read custom_name
@@ -173,18 +236,17 @@ if [ ! -z "$gpu_info" ]; then
     gpu_present=1
     gpu_cores=1
     gpu_name=$(extract_gpu_name "$gpu_info")
-    # Default VRAM for H100
-    if echo "$gpu_info" | grep -q "H100"; then
-        vram_bytes=$(to_bytes "80")  # 80GB for H100
-    fi
-    echo "Detected GPU: $gpu_info"
+    vram_gb=$(extract_gpu_vram "$gpu_info")
+    vram_bytes=$(to_bytes "$vram_gb")
+    echo "Detected GPU: $gpu_info with ${vram_gb}GB VRAM"
 else
     echo "No NVIDIA GPU detected"
 fi
 
-# Calculate network bandwidth for 1 Gbps in bytes per second
-# 1 Gbps = (1000 * 1000 * 1000) / 8 bytes per second
-bandwidth=$(calc "1000 * 1000 * 1000 / 8")
+# Calculate network bandwidth for detected speed in bytes per second
+# Speed in Mbps = (speed * 1000 * 1000) / 8 bytes per second
+network_speed=$(get_max_network_speed)
+bandwidth=$(calc "$network_speed * 1000 * 1000 / 8")
 
 # Get CPU model
 cpu_model=$(grep "model name" /proc/cpuinfo | head -n 1 | cut -d':' -f2 | xargs)
