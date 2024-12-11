@@ -110,7 +110,7 @@ check_all_bios_settings() {
     fi
         
     # Configuration requirements section remains unchanged
-    results+=("${GREEN}$Required BIOS Configuration:${NC}")
+    results+=("${YELLOW}Required BIOS Configuration:${NC}")
     results+=("• Memory Encryption:")
     results+=("  - TME: Enable")
     results+=("  - TME Multi-Tenant: Enable")
