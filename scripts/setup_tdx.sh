@@ -123,8 +123,9 @@ check_all_bios_settings() {
     results+=("  - TDX keys: 32")
 
     print_section_header "Status"
-    printf '%s\n' "${results[@]}"
-
+    for result in "${results[@]}"; do
+        echo -e "$result"
+    done
     if [ "$all_passed" = true ]; then
         echo -e "\n${SUCCESS} All settings properly configured${NC}"
         return 0
