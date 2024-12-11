@@ -64,14 +64,14 @@ check_all_bios_settings() {
         all_passed=false
     fi
 
-    # Enhanced TXT Check remains unchanged
     results+=("TXT Settings:")
-    local txt_msr=$(rdmsr 0x3a 2>/dev/null || echo "0")
-    if [ "$txt_msr" != "0" ] && [ "$((0x$txt_msr & 0x1))" -eq 1 ]; then
-        results+=("✓ TXT supported and enabled (MSR 0x3a: $txt_msr)")
+    local txt_status=$(txt-stat | grep "TXT measured launch" | awk '{print $NF}')
+    if [ "$txt_status" = "TRUE" ]; then
+        results+=("✓ TXT enabled and measured launch verified")
     else
-        results+=("✗ TXT not properly configured (MSR 0x3a: $txt_msr)")
-        results+=("  Required: Enable TXT in BIOS")
+        results+=("✗ TXT not properly configured")
+        results+=("  Status: Measured launch not active")
+        results+=("  Required: Enable TXT in BIOS and verify TPM configuration")
         all_passed=false
     fi
 
@@ -141,7 +141,7 @@ check_bios_settings() {
     # Install msr-tools if not present
     if ! command -v rdmsr &> /dev/null; then
         echo "Installing msr-tools..."
-        apt-get update && apt-get install -y msr-tools cpuid
+        apt-get update && apt-get install -y msr-tools cpuid tboot
     fi
 
     # Load the msr module if not loaded
