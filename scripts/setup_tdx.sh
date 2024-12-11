@@ -43,9 +43,9 @@ check_all_bios_settings() {
         all_passed=false
     fi
 
-    # Add SMT check at the beginning
+    # SMT check
     results+=("SMT Settings:")
-    if dmesg | grep -q "BIOS has enabled SMT"; then
+    if [ "$(cat /sys/devices/system/cpu/smt/active)" = "1" ]; then
         results+=("${SUCCESS} SMT enabled${NC}")
     else
         results+=("${FAILURE} SMT not enabled in BIOS${NC}")
