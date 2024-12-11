@@ -109,13 +109,7 @@ check_all_bios_settings() {
         results+=("✗ TDX kernel module not loaded")
         all_passed=false
     fi
-    
-    # Check for TD_ENABLE bit in IA32_FEAT_CTL MSR (0x3A)
-    if ! rdmsr -f 8:8 0x3A 2>/dev/null | grep -q "1"; then
-        results+=("✗ TDX not enabled in IA32_FEAT_CTL MSR")
-        all_passed=false
-    fi
-    
+        
     # Configuration requirements section remains unchanged
     results+=("Required BIOS Configuration:")
     results+=("• Memory Encryption:")
