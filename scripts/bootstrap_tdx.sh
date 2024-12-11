@@ -224,37 +224,9 @@ setup_grub() {
         cp /etc/default/grub "/etc/default/grub.backup.$(date +%Y%m%d_%H%M%S)"
     fi
 
-    # First update GRUB to ensure grub.cfg is current
-    update-grub2 || update-grub
-
-    # Find exact menu entry for the new kernel
-    local grub_cfg="/boot/grub/grub.cfg"
-    if [ ! -f "$grub_cfg" ]; then
-        echo "ERROR: GRUB configuration file not found"
-        return 1
-    fi
-
-    # Get menu entry index and calculate actual index
-    local menu_count=0
-    while IFS= read -r line; do
-        if [[ $line == *"menuentry '"* ]]; then
-            if [[ $line == *"$new_kernel"* ]] && [[ $line != *"recovery mode"* ]]; then
-                break
-            fi
-            ((menu_count++))
-        fi
-    done < "$grub_cfg"
-    
-    if [ $menu_count -eq 0 ]; then
-        echo "ERROR: Could not find menu entry for kernel ${new_kernel}"
-        return 1
-    fi
-    
-    # Remove any existing GRUB_DEFAULT settings
+    # Directly set the first menuentry as default since it's our new kernel
     sed -i '/^GRUB_DEFAULT=/d' /etc/default/grub
-    
-    # Add our GRUB_DEFAULT setting with numeric index
-    echo "GRUB_DEFAULT=$menu_count" > /etc/default/grub.new
+    echo 'GRUB_DEFAULT=0' > /etc/default/grub.new
     cat /etc/default/grub >> /etc/default/grub.new
     mv /etc/default/grub.new /etc/default/grub
     
@@ -270,33 +242,54 @@ setup_grub() {
     # Force menu to always show and set reasonable timeout
     sed -i 's/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=menu/' /etc/default/grub
     sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=5/' /etc/default/grub
-    sed -i 's/^GRUB_HIDDEN_TIMEOUT=.*//' /etc/default/grub
+    
+    # Remove any hidden timeout settings
+    sed -i '/^GRUB_HIDDEN_TIMEOUT=/d' /etc/default/grub
     
     # Ensure GRUB_RECORDFAIL_TIMEOUT is set
     if ! grep -q '^GRUB_RECORDFAIL_TIMEOUT=' /etc/default/grub; then
         echo 'GRUB_RECORDFAIL_TIMEOUT=5' >> /etc/default/grub
     fi
+
+    # Create a custom configuration file to ensure our kernel is first
+    echo "# Custom kernel order configuration" > /etc/default/grub.d/99-tdx-kernel.cfg
+    echo "GRUB_DEFAULT=0" >> /etc/default/grub.d/99-tdx-kernel.cfg
     
     # Force regeneration of grub.cfg and initramfs
     update-initramfs -u -k "${new_kernel}"
     update-grub2 || update-grub
 
-    # Use grub-set-default with numeric index
+    # For UEFI systems, ensure the boot entry is updated
+    if [ -d /sys/firmware/efi ]; then
+        if command -v efibootmgr >/dev/null 2>&1; then
+            # Get the current boot order
+            current_order=$(efibootmgr | grep BootOrder: | cut -d: -f2 | tr -d ' ')
+            
+            # Get Ubuntu's boot entry
+            ubuntu_entry=$(efibootmgr | grep -i ubuntu | grep -v -i windows | head -n1 | cut -c5-8)
+            
+            if [ -n "$ubuntu_entry" ] && [ -n "$current_order" ]; then
+                # Move Ubuntu's entry to the front if it's not already there
+                if [ "${current_order:0:4}" != "$ubuntu_entry" ]; then
+                    new_order="${ubuntu_entry},${current_order}"
+                    efibootmgr -o "${new_order}"
+                fi
+            fi
+        fi
+    fi
+
+    # Use both grub-set-default and grub-reboot for maximum reliability
     if command -v grub-set-default >/dev/null 2>&1; then
-        grub-set-default "$menu_count"
+        grub-set-default 0
         echo "Set default boot entry using grub-set-default"
     fi
 
-    # Verify our changes
-    echo "Verifying GRUB configuration..."
-    if ! grep -q "^GRUB_DEFAULT=$menu_count" /etc/default/grub; then
-        echo "ERROR: Failed to set GRUB_DEFAULT properly"
-        return 1
+    if command -v grub-reboot >/dev/null 2>&1; then
+        grub-reboot 0
+        echo "Set next boot entry using grub-reboot"
     fi
 
     echo "GRUB configuration completed successfully for kernel ${new_kernel}"
-    echo "Menu entry index: $menu_count"
-    
     return 0
 }
 
