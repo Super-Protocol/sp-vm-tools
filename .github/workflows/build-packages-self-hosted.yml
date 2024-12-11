@@ -40,11 +40,15 @@ jobs:
         id: release-name
         run: |
           if [[ "${BUILD_TYPE}" == "BOTH" ]]; then
-            echo "RELEASE_NAME=$(echo ${RUNNER_ID})-tdx+snp" >> $GITHUB_ENV
+            echo "RELEASE_NAME=${RUNNER_ID}-tdx+snp" >> $GITHUB_ENV
           elif [[ "${BUILD_TYPE}" == "TDX" ]]; then
-            echo "RELEASE_NAME=$(echo ${RUNNER_ID})-tdx" >> $GITHUB_ENV
+            echo "RELEASE_NAME=${RUNNER_ID}-tdx" >> $GITHUB_ENV
           elif [[ "${BUILD_TYPE}" == "SNP" ]]; then
-            echo "RELEASE_NAME=$(echo ${RUNNER_ID})-snp" >> $GITHUB_ENV
+            echo "RELEASE_NAME=${RUNNER_ID}-snp" >> $GITHUB_ENV
+          else
+            echo "Error: Unknown BUILD_TYPE ${BUILD_TYPE}" >&2
+            exit 1
+          fi
 
       - name: Create GitHub Release
         id: create_release
