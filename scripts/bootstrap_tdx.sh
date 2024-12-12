@@ -432,7 +432,7 @@ download_latest_release() {
     return 0
   fi
 
-  DOWNLOAD_URL="https://github.com/Super-Protocol/sp-vm-tools/releases/download/${LATEST_TAG}/package.tar.gz"
+  DOWNLOAD_URL="https://github.com/Super-Protocol/sp-vm-tools/releases/download/${LATEST_TAG}/package-tdx.tar.gz"
   
   echo "Downloading version ${LATEST_TAG}..." >&2
 
