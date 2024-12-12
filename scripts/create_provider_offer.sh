@@ -203,7 +203,7 @@ set_system_hostname "$hostname_safe"
 
 # Get CPU cores (including HyperThreading) and calculate reserved cores
 total_cores=$(nproc)
-reserved_cores=$(( total_cores / 10 ))  # 10% of cores
+reserved_cores=$(( total_cores / 12 ))
 # Ensure at least 1 core is reserved
 [[ $reserved_cores -lt 1 ]] && reserved_cores=1
 adjusted_cores=$((total_cores - reserved_cores))
@@ -287,7 +287,6 @@ cat > offer.json << EOF
    "teeType": "0",
    "subType": "2",
    "properties": "0",
-   "argsPublicKey": "{\"algo\":\"ECIES\",\"encoding\":\"base64\",\"key\":\"BJvkdBht6dQFOfkNYxBqtpUnvnresjyypuzOfmW0RUOi1qmWoEfXvHUnLxD9U1YrkukXJPxQH58atsPd2s8cEeo=\"}",
    "hardwareInfo": {
       "slotInfo": {
          "cpuCores": $adjusted_cores,
