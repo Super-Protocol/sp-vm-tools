@@ -246,7 +246,7 @@ set_system_hostname "$hostname_safe"
 
 # Get CPU cores (including HyperThreading) and calculate reserved cores
 total_cores=$(nproc)
-reserved_cores=$(( total_cores / 12 ))
+reserved_cores=$(( total_cores / 16 ))
 # Ensure at least 1 core is reserved
 # Ensure at least 1 core is reserved and no more than 6
 [[ $reserved_cores -lt 1 ]] && reserved_cores=1
