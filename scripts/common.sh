@@ -423,8 +423,8 @@ setup_grub() {
     fi
 
     if [[ "$type" == "snp" ]]; then
-        if grep -q '\biommu=pt\b' "$GRUB_FILE"; then
-            sed -i 's/\biommu=pt\b//g' /etc/default/grub
+        if grep -q '^GRUB_CMDLINE_LINUX=".*\biommu=pt\b.*"' /etc/default/grub; then
+            sed -i '/^GRUB_CMDLINE_LINUX=".*"/ s/\biommu=pt\b//' /etc/default/grub
         fi
     fi
     
