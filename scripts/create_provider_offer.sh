@@ -58,7 +58,6 @@ format_hostname() {
     echo "$name" | tr '[:upper:]' '[:lower:]' | sed 's/ /-/g' | sed 's/[^a-z0-9-]//g'
 }
 
-
 # Function to extract GPU name
 extract_gpu_name() {
     local gpu_info=$1
@@ -193,17 +192,21 @@ echo -n "Enter name for the configuration (press Enter for random pet name): "
 read custom_name
 if [ -z "$custom_name" ]; then
     custom_name=$(petname)
+    name="Super $(format_name "$custom_name")"
+else
+    name="$(format_name "$custom_name")"
 fi
-name="Super $(format_name "$custom_name")"
 
 # Format the hostname to be like "super-firm-toucan"
 hostname_safe=$(format_hostname "$name")
 set_system_hostname "$hostname_safe"
 
-# Get CPU cores (including HyperThreading)
+# Get CPU cores (including HyperThreading) and calculate reserved cores
 total_cores=$(nproc)
-adjusted_cores=$((total_cores - 6))
-[[ $adjusted_cores -lt 1 ]] && adjusted_cores=1
+reserved_cores=$(( total_cores / 10 ))  # 10% of cores
+# Ensure at least 1 core is reserved
+[[ $reserved_cores -lt 1 ]] && reserved_cores=1
+adjusted_cores=$((total_cores - reserved_cores))
 
 # Get total RAM in bytes
 total_ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
