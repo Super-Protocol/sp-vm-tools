@@ -189,19 +189,36 @@ extract_gpu_vram() {
 
 # Function to get CPU frequency in GHz
 get_cpu_freq() {
-    local freq
-    # Try to get the current frequency from cpuinfo
-    freq=$(grep "cpu MHz" /proc/cpuinfo | head -n 1 | awk '{printf "%.1f", $4/1000}')
-    if [ -z "$freq" ]; then
-        # Fallback to max frequency if available
-        freq=$(grep "model name" /proc/cpuinfo | head -n 1 | grep -o "[0-9.]\+GHz" | grep -o "[0-9.]\+" || echo "")
+    local freq=""
+    
+    # Try to get max frequency from cpufreq
+    if [ -d "/sys/devices/system/cpu/cpu0/cpufreq" ]; then
+        freq=$(cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq 2>/dev/null)
+        if [ -n "$freq" ]; then
+            # Convert kHz to GHz
+            freq=$(echo "scale=1; $freq/1000000" | bc)
+            echo "$freq"
+            return
+        fi
     fi
     
+    # Try to get from model name
+    freq=$(grep "model name" /proc/cpuinfo | head -n 1 | grep -o "@[[:space:]]*[0-9.]*[[:space:]]*GHz" | grep -o "[0-9.]*" || echo "")
     if [ -n "$freq" ]; then
         echo "$freq"
-    else
-        echo "Unknown"
+        return
     fi
+    
+    # Try to get from lscpu
+    if command -v lscpu >/dev/null 2>&1; then
+        freq=$(lscpu | grep "CPU max MHz" | awk '{printf "%.1f", $4/1000}')
+        if [ -n "$freq" ]; then
+            echo "$freq"
+            return
+        fi
+    fi
+    
+    echo "Unknown"
 }
 
 get_disk_type() {
