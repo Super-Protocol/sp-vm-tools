@@ -187,6 +187,49 @@ extract_gpu_vram() {
     fi
 }
 
+# Function to get CPU frequency in GHz
+get_cpu_freq() {
+    local freq
+    # Try to get the current frequency from cpuinfo
+    freq=$(grep "cpu MHz" /proc/cpuinfo | head -n 1 | awk '{printf "%.1f", $4/1000}')
+    if [ -z "$freq" ]; then
+        # Fallback to max frequency if available
+        freq=$(grep "model name" /proc/cpuinfo | head -n 1 | grep -o "[0-9.]\+GHz" | grep -o "[0-9.]\+" || echo "")
+    fi
+    
+    if [ -n "$freq" ]; then
+        echo "$freq"
+    else
+        echo "Unknown"
+    fi
+}
+
+get_disk_type() {
+    local disk_type="HDD"
+    for device in $(lsblk -d -o name | grep -v "loop\|sr"); do
+        if [ -f "/sys/block/$device/queue/rotational" ]; then
+            if [ "$(cat /sys/block/$device/queue/rotational)" -eq 0 ]; then
+                disk_type="SSD"
+                break
+            fi
+        fi
+    done
+    echo "$disk_type"
+}
+
+get_ram_type() {
+    if command -v dmidecode >/dev/null 2>&1; then
+        local ram_type=$(sudo dmidecode -t memory | grep -i "DDR" | head -n 1 | grep -o "DDR[0-9]*" || echo "")
+        if [ -n "$ram_type" ]; then
+            echo "$ram_type"
+        else
+            echo "RAM"  # Fallback если не удалось определить тип
+        fi
+    else
+        echo "RAM"  # Fallback если нет dmidecode
+    fi
+}
+
 # Get name from user or generate using petname
 echo -n "Enter name for the configuration (press Enter for random pet name): "
 read custom_name
@@ -205,8 +248,17 @@ set_system_hostname "$hostname_safe"
 total_cores=$(nproc)
 reserved_cores=$(( total_cores / 12 ))
 # Ensure at least 1 core is reserved
+# Ensure at least 1 core is reserved and no more than 6
 [[ $reserved_cores -lt 1 ]] && reserved_cores=1
+[[ $reserved_cores -gt 6 ]] && reserved_cores=6
 adjusted_cores=$((total_cores - reserved_cores))
+
+# Get CPU frequency
+cpu_freq=$(get_cpu_freq)
+freq_text=""
+if [ "$cpu_freq" != "Unknown" ]; then
+    freq_text=" @ ${cpu_freq}GHz"
+fi
 
 # Get total RAM in bytes
 total_ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
@@ -219,6 +271,10 @@ ram_bytes=$(to_bytes "$adjusted_ram_gb")
 disk_size_gb=$(get_largest_disk_size)
 adjusted_disk_gb=$(adjust_disk_size "$disk_size_gb")
 disk_bytes=$(to_bytes "$adjusted_disk_gb")
+
+# Get RAM and disk types
+ram_type=$(get_ram_type)
+disk_type=$(get_disk_type)
 
 # GPU detection
 gpu_present=0
@@ -260,11 +316,11 @@ fi
 # Get network speed in Gbps (convert from Mbps)
 network_speed_gbps=$(calc "$network_speed / 1000")
 
-# Create description
+# Create description in English with CPU frequency
 if [ $gpu_present -eq 1 ]; then
-    description="CPU: $cpu_model, $adjusted_cores cores, $adjusted_ram_gb GB RAM, GPU: $gpu_name, $adjusted_disk_gb GB disk, ${network_speed_gbps} Gbps network"
+    description="CPU: $cpu_model${freq_text}, $adjusted_cores cores, $adjusted_ram_gb GB ${ram_type}, GPU: $gpu_name, $adjusted_disk_gb GB ${disk_type}, ${network_speed_gbps} Gbps network"
 else
-    description="CPU: $cpu_model, $adjusted_cores cores, $adjusted_ram_gb GB RAM, $adjusted_disk_gb GB disk, ${network_speed_gbps} Gbps network"
+    description="CPU: $cpu_model${freq_text}, $adjusted_cores cores, $adjusted_ram_gb GB ${ram_type}, $adjusted_disk_gb GB ${disk_type}, ${network_speed_gbps} Gbps network"
 fi
 
 floor_divide_precision() {
