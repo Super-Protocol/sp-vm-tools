@@ -389,42 +389,23 @@ EOF
 
 download_latest_release() {
   # Check and install required tools
-  if ! command -v curl &> /dev/null || ! command -v git &> /dev/null; then
-    apt-get update && apt-get install -y curl git || return 1
+  if ! command -v curl &> /dev/null || ! command -v jq &> /dev/null; then
+    apt-get update && apt-get install -y curl jq || return 1
   fi
-  
+
   # Form file name and paths
-  SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
-  
-  # Create temporary directory for download
-  TMP_DOWNLOAD=$(mktemp -d)
-  pushd "${TMP_DOWNLOAD}" > /dev/null
+  SCRIPT_DIR=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 
-  # Clone repository to get tags info
-  if ! git clone -q --filter=blob:none --no-checkout https://github.com/Super-Protocol/sp-vm-tools.git; then
-    echo "Failed to access repository" >&2
-    popd > /dev/null
-    rm -rf "${TMP_DOWNLOAD}"
-    return 1
-  fi
-
-  cd sp-vm-tools
-  
   # Get latest tag
-  LATEST_TAG=$(git describe --tags $(git rev-list --tags --max-count=1 2>/dev/null) 2>/dev/null)
-  if [ -z "${LATEST_TAG}" ]; then
+  LATEST_TAG=$(curl -s https://api.github.com/repos/Super-Protocol/sp-vm-tools/releases/latest | jq -r '.tag_name')
+  if [[ -z "${LATEST_TAG}" ]]; then
     echo "No tags found in repository" >&2
-    popd > /dev/null
-    rm -rf "${TMP_DOWNLOAD}"
     return 1
   fi
 
   # Form file name
   ARCHIVE_NAME="package_${LATEST_TAG}.tar.gz"
   ARCHIVE_PATH="${SCRIPT_DIR}/${ARCHIVE_NAME}"
-  
-  popd > /dev/null
-  rm -rf "${TMP_DOWNLOAD}"
 
   # Check if file already exists
   if [ -f "${ARCHIVE_PATH}" ]; then
@@ -432,22 +413,34 @@ download_latest_release() {
     return 0
   fi
 
-  DOWNLOAD_URL="https://github.com/Super-Protocol/sp-vm-tools/releases/download/${LATEST_TAG}/package.tar.gz"
-  
-  echo "Downloading version ${LATEST_TAG}..." >&2
+  DOWNLOAD_URLS=(
+  "https://github.com/Super-Protocol/sp-vm-tools/releases/download/${LATEST_TAG}/package.tar.gz"
+  "https://github.com/Super-Protocol/sp-vm-tools/releases/download/${LATEST_TAG}/package-tdx.tar.gz"
+  )
 
-  # Download archive directly to target directory
-  if ! curl -L -o "${ARCHIVE_PATH}" "${DOWNLOAD_URL}"; then
-    echo "Failed to download release" >&2
+  echo "Downloading version ${LATEST_TAG}..." >&2
+  
+  DOWNLOAD_SUCCESS=false
+  for URL in "${DOWNLOAD_URLS[@]}"; do
+  echo "Trying to download from ${URL}..." >&2
+  if curl -f -L -o "${ARCHIVE_PATH}" "${URL}"; then
+    echo "Successfully downloaded from ${URL}" >&2
+    DOWNLOAD_SUCCESS=true
+    break
+  else
+    echo "Failed to download from ${URL}" >&2
+  fi
+  done
+
+  if ! $DOWNLOAD_SUCCESS; then
+    echo "Failed to download release from all URLs" >&2
     rm -f "${ARCHIVE_PATH}"
     return 1
   fi
 
-  echo "Successfully downloaded ${ARCHIVE_NAME}" >&2
-  
   # Return the path only if everything was successful
   printf "%s" "${ARCHIVE_PATH}"
-  return 0  
+  return 0
 }
 
 check_os_version() {
