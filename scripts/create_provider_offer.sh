@@ -377,6 +377,19 @@ cat > offer.json << EOF
 }
 EOF
 
+# Define base prices
+base_price_slot1="167000000000000000"
+base_price_slot2="500000000000000000"
+
+# Calculate final prices based on GPU presence
+if [ $gpu_present -eq 1 ]; then
+    slot1_price=$(calc "$base_price_slot1 * 4")
+    slot2_price=$(calc "$base_price_slot2 * 4")
+else
+    slot1_price=$base_price_slot1
+    slot2_price=$base_price_slot2
+fi
+
 # Calculate values for slot1
 slot1_gpu_cores=$(floor_divide_precision $gpu_cores $adjusted_cores)
 slot1_disk=$(floor_divide $disk_bytes $adjusted_cores)
@@ -396,7 +409,7 @@ cat > slot1.json << EOF
    "usage":{
       "maxTimeMinutes":0,
       "minTimeMinutes":0,
-      "price":"167000000000000000",
+      "price":"$slot1_price",
       "priceType":"0"
    }
 }
@@ -421,7 +434,7 @@ cat > slot2.json << EOF
    "usage":{
       "maxTimeMinutes":0,
       "minTimeMinutes":0,
-      "price":"500000000000000000",
+      "price":"$slot2_price",
       "priceType":"0"
    }
 }
