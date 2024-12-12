@@ -15,8 +15,9 @@ update_snp_firmware() {
     echo "Updating SEV firmware..."
     pushd "${TMP_DIR}"
     local firmware_name="amd_sev_fam19h_model0xh_1.55.21"
-    wget "${firmware_name}.zip"
+    wget "https://download.amd.com/developer/eula/sev/${firmware_name}.zip"
     mkdir -p /lib/firmware/amd
+    unzip "${firmware_name}.zip"
     cp -vf "${firmware_name}.sbin" /lib/firmware/amd/amd_sev_fam19h_model0xh.sbin
     popd
 }
