@@ -6,16 +6,19 @@ source_common() {
     source ${script_dir}/common.sh
 }
 
-update_tdx_module() {
-  TMP_DIR=$1
-  echo "Updating TDX-module..."
-  pushd "${TMP_DIR}"
-  wget https://github.com/intel/tdx-module/releases/download/TDX_1.5.05/intel_tdx_module.tar.gz
-  tar -xvzf intel_tdx_module.tar.gz
-  mkdir -p /boot/efi/EFI/TDX/
-  cp -vf TDX-Module/intel_tdx_module.so /boot/efi/EFI/TDX/TDX-SEAM.so
-  cp -vf TDX-Module/intel_tdx_module.so.sigstruct /boot/efi/EFI/TDX/TDX-SEAM.so.sigstruct
-  popd
+
+update_snp_firmware() {
+    TMP_DIR=$1
+    if ! command -v unzip &> /dev/null ; then
+        apt-get update && apt-get install -y unzip || return 1
+    fi
+    echo "Updating SEV firmware..."
+    pushd "${TMP_DIR}"
+    local firmware_name="amd_sev_fam19h_model0xh_1.55.21"
+    wget "${firmware_name}.zip"
+    mkdir -p /lib/firmware/amd
+    cp -vf "${firmware_name}.sbin" /lib/firmware/amd/amd_sev_fam19h_model0xh.sbin
+    popd
 }
 
 bootstrap() {
@@ -33,7 +36,7 @@ bootstrap() {
     ARCHIVE_PATH=""
     if [ "$#" -ne 1 ]; then
         echo "No archive provided, downloading latest release..."
-        ARCHIVE_PATH=$(download_latest_release tdx) || {
+        ARCHIVE_PATH=$(download_latest_release snp) || {
             echo "Failed to download release"
             exit 1
         }
@@ -66,12 +69,12 @@ bootstrap() {
     print_section_header "Kernel Configuration"
     echo "Configuring kernel boot parameters..."
     if [ "$NEW_KERNEL_VERSION" != "$CURRENT_KERNEL" ]; then
-        setup_grub "$NEW_KERNEL_VERSION" "tdx"
+        setup_grub "$NEW_KERNEL_VERSION" "snp"
     fi
 
-    print_section_header "TDX Module Update"
-    echo "Updating TDX module..."
-    update_tdx_module "${TMP_DIR}"
+    print_section_header "SNP Firmware Update"
+    echo "Updating SNP firmware..."
+    update_snp_firmware "${TMP_DIR}"
 
     # Check if kernel was actually installed
     print_section_header "System State Check"
@@ -94,19 +97,19 @@ bootstrap() {
         esac
     fi
 
-    if [ -f "$(dirname "${BASH_SOURCE[0]}")/setup_tdx.sh" ]; then
-        echo "Running TDX setup script..."
-        cp "$(dirname "${BASH_SOURCE[0]}")/setup_tdx.sh" "${TMP_DIR}/"
-        chmod +x "${TMP_DIR}/setup_tdx.sh"
-        "${TMP_DIR}/setup_tdx.sh"
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}ERROR: TDX setup failed${NC}"
-            exit 1
-        fi
-    else 
-        echo echo -e "${RED}ERROR: setup_tdx.sh not found${NC}"
-        exit 1
-    fi
+    # if [ -f "$(dirname "${BASH_SOURCE[0]}")/setup_tdx.sh" ]; then
+    #     echo "Running TDX setup script..."
+    #     cp "$(dirname "${BASH_SOURCE[0]}")/setup_tdx.sh" "${TMP_DIR}/"
+    #     chmod +x "${TMP_DIR}/setup_tdx.sh"
+    #     "${TMP_DIR}/setup_tdx.sh"
+    #     if [ $? -ne 0 ]; then
+    #         echo -e "${RED}ERROR: TDX setup failed${NC}"
+    #         exit 1
+    #     fi
+    # else 
+    #     echo echo -e "${RED}ERROR: setup_tdx.sh not found${NC}"
+    #     exit 1
+    # fi
 
     print_section_header "Hardware Configuration"
     if command -v lspci >/dev/null; then
@@ -126,10 +129,6 @@ bootstrap() {
     if [ "$NEW_KERNEL_VERSION" != "$CURRENT_KERNEL" ] && [ "$choice" = "2" ]; then
         echo "NOTE: A system reboot is still required to activate all changes."
     fi
-}
-
-test() {
-    print_section_header "TDX Module Update"
 }
 
 source_common
