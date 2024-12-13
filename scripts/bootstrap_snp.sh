@@ -103,11 +103,13 @@ bootstrap() {
 
     if [ -f "${SNP_HOST_FILE}" ] && [ -f "${LIBSEV_FILE}" ]; then
         echo "Running configuration check..."
-        ./"${SNP_HOST_FILE}" ok
+        pushd $DEB_DIR
+        ./snphost ok
         if [ $? -ne 0 ]; then
             echo -e "${RED}ERROR: some checks failed${NC}"
             exit 1
         fi
+        popd
     else
         echo -e "${RED}ERROR: snphost or or its components not found${NC}"
         exit 1
