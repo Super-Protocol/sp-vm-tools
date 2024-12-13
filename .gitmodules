@@ -2,3 +2,6 @@
 	path = sources/amd/AMDSEV
 	url = https://github.com/AMDESE/AMDSEV.git
 	branch = snp-latest
+[submodule "sources/amd/snphost"]
+	path = sources/amd/snphost
+	url = https://github.com/virtee/snphost.git
