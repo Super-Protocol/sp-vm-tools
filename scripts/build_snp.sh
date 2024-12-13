@@ -122,6 +122,16 @@ build_qemu() {
     popd
 }
 
+build_snphost() {
+    local build_dir=$1
+    local root_dir=$2
+    cp -fvr ${root_dir}/sources/amd/snphost ${build_dir}/
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    source "$HOME/.cargo/env"
+    pushd ${build_dir}/snphost
+    cargo build -r
+}
+
 packaging() {
     local build_dir=$1
     local root_dir=$2
@@ -132,6 +142,7 @@ packaging() {
     cp -fv qemu/sp-qemu-snp*.deb package/
     cp -fv ovmf/Build/OvmfX64/RELEASE_GCC5/FV/OVMF.fd package/
     cp -fv ${root_dir}/sources/amd/AMDSEV/kvm.conf package/
+    cp -fv snphost/target/release/{libsev.so,snphost} package/
     cd package
     tar -czvf ../package-snp.tar.gz .
     popd
@@ -161,5 +172,6 @@ build_main() {
     build_kernel_packages ${build_dir} ${config_file_abs}
     build_qemu ${build_dir}
     build_ovmf ${build_dir}
+    build_snphost ${build_dir} ${root_dir}
     packaging ${build_dir} ${root_dir}
 }
