@@ -9,21 +9,62 @@ source_common() {
 
 update_snp_firmware() {
     TMP_DIR=$1
+    local model=$2
+
+    local firmware_name=""
+    local destination_filename=""
+    if [[ "$model" == "Milan" ]]; then
+        firmware_name="amd_sev_fam19h_model0xh_1.55.21"
+        destination_filename="amd_sev_fam19h_model0xh.sbin"
+    elif [[ "$model" == "Genoa" ]]; then
+        firmware_name="amd_sev_fam19h_model1xh_1.55.37"
+        destination_filename="amd_sev_fam19h_model1xh.sbin"
+    else
+        echo "Skipping firmware update: Model is not Milan or Genoa."
+        return 0
+    fi
+
     if ! command -v unzip &> /dev/null ; then
         apt-get update && apt-get install -y unzip || return 1
     fi
-    echo "Updating SEV firmware..."
+
     pushd "${TMP_DIR}"
-    local firmware_name="amd_sev_fam19h_model0xh_1.55.21"
     wget "https://download.amd.com/developer/eula/sev/${firmware_name}.zip"
+    if [ $? -ne 0 ]; then
+        echo "Failed to download ${firmware_name}.zip"
+        return 1
+    fi
     mkdir -p /lib/firmware/amd
     unzip "${firmware_name}.zip"
-    cp -vf "${firmware_name}.sbin" /lib/firmware/amd/amd_sev_fam19h_model0xh.sbin
+    cp -vf "${firmware_name}.sbin" "/lib/firmware/amd/${destination_filename}"
     popd
 }
 
 bootstrap() {
     check_os_version
+
+    CPU_MODEL=$(lscpu | grep "^Model name:" | sed 's/Model name: *//')
+
+    if [[ ! "$CPU_MODEL" =~ "AMD" ]]; then
+        echo "ERROR: This script is only intended for AMD processors."
+        exit 1
+    fi
+
+    AMD_GEN="unknown"
+    if [[ "$CPU_MODEL" =~ ^AMD[[:space:]]*EPYC[[:space:]]*7[0-9]{2}3.*$ ]]; then
+        echo "AMD Milan CPU Found"
+        AMD_GEN="Milan"
+    elif [[ "$CPU_MODEL" =~ ^AMD[[:space:]]*EPYC[[:space:]]*9[0-9]{2}4.*$ ]]; then
+        echo "This processor is AMD Genoa."
+        AMD_GEN="Genoa"
+    else
+        echo "Unknown CPU model: <$CPU_MODEL>"
+        read -p "Do you want to continue? (y/n): " choice
+        if [[ "$choice" != "y" ]]; then
+            echo "Exiting script."
+            exit 1
+        fi
+    fi
 
     # Check if the script is running as root
     print_section_header "Privilege Check"
@@ -75,7 +116,7 @@ bootstrap() {
 
     print_section_header "SNP Firmware Update"
     echo "Updating SNP firmware..."
-    update_snp_firmware "${TMP_DIR}"
+    update_snp_firmware "${TMP_DIR}" ${AMD_GEN}
 
     # Check if kernel was actually installed
     print_section_header "System State Check"
@@ -104,11 +145,13 @@ bootstrap() {
     if [ -f "${SNP_HOST_FILE}" ] && [ -f "${LIBSEV_FILE}" ]; then
         echo "Running configuration check..."
         pushd $DEB_DIR
+        set +e
         ./snphost ok
         if [ $? -ne 0 ]; then
             echo -e "${RED}ERROR: some checks failed${NC}"
             exit 1
         fi
+        set -e
         popd
     else
         echo -e "${RED}ERROR: snphost or or its components not found${NC}"
