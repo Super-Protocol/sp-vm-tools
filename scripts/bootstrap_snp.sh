@@ -98,19 +98,20 @@ bootstrap() {
         esac
     fi
 
-    # if [ -f "$(dirname "${BASH_SOURCE[0]}")/setup_tdx.sh" ]; then
-    #     echo "Running TDX setup script..."
-    #     cp "$(dirname "${BASH_SOURCE[0]}")/setup_tdx.sh" "${TMP_DIR}/"
-    #     chmod +x "${TMP_DIR}/setup_tdx.sh"
-    #     "${TMP_DIR}/setup_tdx.sh"
-    #     if [ $? -ne 0 ]; then
-    #         echo -e "${RED}ERROR: TDX setup failed${NC}"
-    #         exit 1
-    #     fi
-    # else 
-    #     echo echo -e "${RED}ERROR: setup_tdx.sh not found${NC}"
-    #     exit 1
-    # fi
+    SNP_HOST_FILE="$(dirname "${BASH_SOURCE[0]}")/snphost"
+    LIBSEV_FILE="$(dirname "${BASH_SOURCE[0]}")/libsev.so"
+
+    if [ -f "${SNP_HOST_FILE}" ] && [ -f "${LIBSEV_FILE}" ]; then
+        echo "Running configuration check..."
+        ./"${SNP_HOST_FILE}" ok
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}ERROR: some checks failed${NC}"
+            exit 1
+        fi
+    else
+        echo -e "${RED}ERROR: snphost or or its components not found${NC}"
+        exit 1
+    fi
 
     print_section_header "Hardware Configuration"
     if command -v lspci >/dev/null; then
