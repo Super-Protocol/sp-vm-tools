@@ -98,8 +98,8 @@ bootstrap() {
         esac
     fi
 
-    SNP_HOST_FILE="$(dirname "${BASH_SOURCE[0]}")/snphost"
-    LIBSEV_FILE="$(dirname "${BASH_SOURCE[0]}")/libsev.so"
+    SNP_HOST_FILE="$DEB_DIR/snphost"
+    LIBSEV_FILE="$DEB_DIR/libsev.so"
 
     if [ -f "${SNP_HOST_FILE}" ] && [ -f "${LIBSEV_FILE}" ]; then
         echo "Running configuration check..."
