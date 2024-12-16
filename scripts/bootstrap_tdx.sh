@@ -128,10 +128,6 @@ bootstrap() {
     fi
 }
 
-test() {
-    print_section_header "TDX Module Update"
-}
-
 source_common
 
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
