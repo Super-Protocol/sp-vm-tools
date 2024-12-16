@@ -1,5 +1,12 @@
 #!/bin/bash
 
+# Check if the script is running on Linux
+if [ "$(uname -s)" != "Linux" ]; then
+    echo "Error: This script only supports Linux operating system"
+    echo "Your current OS is: $(uname -s)"
+    exit 1
+fi
+
 # Default values
 SCRIPT_DIR=$( cd "$( dirname "$0" )" && pwd )
 
@@ -70,6 +77,7 @@ usage() {
     echo "  --argo_branch <name>         Name of argo branch for init SP components (default: ${DEFAULT_ARGO_BRANCH})"
     echo "  --release <name>             Release name (default: latest)"
     echo "  --mode <mode>                VM mode: untrusted, tdx, sev (default: ${DEFAULT_MODE})"
+    echo "  --build_dir <path>          Path to local build directory (default: download from remote)"
     echo ""
 }
 
@@ -98,6 +106,12 @@ ROOTFS_HASH_PATH=""
 KERNEL_PATH=""
 
 parse_args() {
+    # Check if no arguments provided
+    if [[ "$#" -eq 0 ]]; then
+        usage
+        exit 0
+    fi
+
     # Parse arguments
     while [[ "$#" -gt 0 ]]; do
         case $1 in
@@ -116,6 +130,7 @@ parse_args() {
             --argo_branch) ARGO_BRANCH=$2; shift ;;
             --release) RELEASE=$2; shift ;;
             --mode) VM_MODE=$2; shift ;;
+            --build_dir) BUILD_DIR=$2; shift ;;
             --help) usage; exit 0;;
             *) echo "Unknown parameter: $1"; usage ; exit 1 ;;
         esac
@@ -137,7 +152,7 @@ find_qemu_path() {
 
     # First try using which
     QEMU_PATH=$(which qemu-system-x86_64 2>/dev/null)
-    
+
     if [[ -x "$QEMU_PATH" ]]; then
         echo "Found QEMU at: $QEMU_PATH"
         return 0
@@ -456,6 +471,37 @@ check_params() {
     echo "• VM Mode: ${VM_MODE}"
 }
 
+initialize_paths() {
+    if [[ -n "${BUILD_DIR}" ]]; then
+        if [[ ! -f "${BUILD_DIR}/OVMF.fd" ]] || \
+           [[ ! -f "${BUILD_DIR}/rootfs.img" ]] || \
+           [[ ! -f "${BUILD_DIR}/root_hash.txt" ]] || \
+           [[ ! -f "${BUILD_DIR}/vmlinuz" ]]; then
+            echo "Error: Build directory is missing required files"
+            echo "Required files: OVMF.fd, rootfs.img, root_hash.txt, vmlinuz"
+            exit 1
+        fi
+
+        BIOS_PATH="${BUILD_DIR}/OVMF.fd"
+        ROOTFS_PATH="${BUILD_DIR}/rootfs.img"
+        ROOTFS_HASH_PATH="${BUILD_DIR}/root_hash.txt"
+        KERNEL_PATH="${BUILD_DIR}/vmlinuz"
+
+        if [[ -f "${BUILD_DIR}/state.qcow2" ]]; then
+            STATE_DISK_PATH="${BUILD_DIR}/state.qcow2"
+        fi
+
+        echo "Using local files from build directory: ${BUILD_DIR}"
+        return 0
+    fi
+
+
+    mkdir -p "${CACHE}"
+    download_release "${RELEASE}" "${RELEASE_ASSET}" "${CACHE}" "${RELEASE_REPO}"
+    parse_and_download_release_files ${RELEASE_FILEPATH}
+}
+
+
 main() {
     check_params
     check_packages
@@ -463,9 +509,10 @@ main() {
     # Find QEMU path before using it
     find_qemu_path
 
-    mkdir -p "${CACHE}"
-    download_release "${RELEASE}" "${RELEASE_ASSET}" "${CACHE}" "${RELEASE_REPO}"
-    parse_and_download_release_files ${RELEASE_FILEPATH}
+    initialize_paths
+#    mkdir -p "${CACHE}"
+#    download_release "${RELEASE}" "${RELEASE_ASSET}" "${CACHE}" "${RELEASE_REPO}"
+#    parse_and_download_release_files ${RELEASE_FILEPATH}
 
     # Prepare QEMU command with GPU passthrough and chassis increment
     GPU_PASSTHROUGH=""
@@ -486,7 +533,7 @@ main() {
         GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,string=262144"
         CHASSIS=$((CHASSIS + 1))
     done
-        
+
     # Initialize machine parameters based on mode
     MACHINE_PARAMS=""
     CPU_PARAMS="-cpu host"
@@ -526,7 +573,7 @@ main() {
     DEBUG_PARAMS=""
     KERNEL_CMD_LINE=""
     ROOT_HASH=$(grep 'Root hash' "${ROOTFS_HASH_PATH}" | awk '{print $3}')
-    
+
     if [[ ${DEBUG_MODE} == true ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
         KERNEL_CMD_LINE="root=/dev/vda1 console=ttyS0 clearcpuid=mtrr systemd.log_level=trace systemd.log_target=log rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} argo_branch=${ARGO_BRANCH} sp-debug=true"
