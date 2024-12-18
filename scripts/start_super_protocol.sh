@@ -324,63 +324,36 @@ check_params() {
     # Collect system info
     TOTAL_CPUS=$(nproc)
     TOTAL_RAM=$(free -g | awk '/^Mem:/{print $2}')
-    USED_CPUS=0  # Add logic to calculate used CPUs by VM
-    USED_RAM=0   # Add logic to calculate used RAM by VM
+    
+    # Get list of all NVIDIA GPUs
     AVAILABLE_GPUS=($(lspci -nnk -d 10de: | grep -E '3D controller' | awk '{print $1}'))
     echo "Debug: Found all GPUs: ${AVAILABLE_GPUS[@]}"
-    IFS=' ' read -r -a AVAILABLE_GPUS_ARRAY <<< "$AVAILABLE_GPUS"
-
-    if [ "$VM_CPU" -gt "$TOTAL_CPUS" ]; then
-        echo "Error: VM_CPU ($VM_CPU) cannot exceed TOTAL_CPUS ($TOTAL_CPUS)."
-        exit 1
-    fi
-    echo "• Used / total CPUs on host: $VM_CPU / $TOTAL_CPUS"
-    echo "• Available confidential mode by CPU: ${TDX_SUPPORT:+TDX enabled} ${SEV_SUPPORT:+SEV enabled}"
-
-    if [ "$VM_RAM" -gt "$TOTAL_RAM" ]; then
-        echo "Error: VM_RAM ($VM_RAM GB) cannot exceed TOTAL_RAM ($TOTAL_RAM GB)."
-        exit 1
-    fi
-    echo "• Used RAM for VM / total RAM on host: $VM_RAM GB / $TOTAL_RAM GB"
-
+    
+    # Process GPU list
     if [[ " ${USED_GPUS[@]} " =~ " none " ]]; then
         USED_GPUS=()
     elif [[ ${#USED_GPUS[@]} -eq 0 ]]; then
-        USED_GPUS=(${AVAILABLE_GPUS_ARRAY[@]})
+        USED_GPUS=("${AVAILABLE_GPUS[@]}")
     fi
-
+    
+    # Remove duplicates efficiently
     declare -A UNIQUE_GPUS
     for GPU in "${USED_GPUS[@]}"; do
         UNIQUE_GPUS["$GPU"]=1
     done
-
-    # Convert the unique associative array back to a regular array
-    declare -a UNIQUE_GPU_LIST
-    for UNIQUE_GPU in "${!UNIQUE_GPUS[@]}"; do
-        UNIQUE_GPU_LIST+=("$UNIQUE_GPU")
-    done
-
-    # Now, replace the initial user list with unique values
-    USED_GPUS=("${UNIQUE_GPU_LIST[@]}")
-
-    for USER_GPU in "${USED_GPUS[@]}"; do
-        echo "Debug: Checking GPU: $USER_GPU"
-        found=0
-        for AVAIL_GPU in "${AVAILABLE_GPUS[@]}"; do
-            if [[ "$USER_GPU" == "$AVAIL_GPU" ]]; then
-                found=1
-                break
-            fi
-        done
-        if [[ $found -eq 1 ]]; then
-            echo "GPU $USER_GPU is available."
+    USED_GPUS=("${!UNIQUE_GPUS[@]}")
+    
+    # Verify GPUs
+    for GPU in "${USED_GPUS[@]}"; do
+        if [[ " ${AVAILABLE_GPUS[*]} " =~ " ${GPU} " ]]; then
+            echo "GPU $GPU is available."
         else
-            echo "GPU $USER_GPU is NOT available."
+            echo "GPU $GPU is NOT available."
             exit 1
         fi
     done
-
-    echo "• Used GPUs for VM / available GPUs on host: ${USED_GPUS[@]:-None} / $AVAILABLE_GPUS"
+    
+    echo "• Used GPUs for VM / available GPUs on host: ${USED_GPUS[@]:-None} / ${AVAILABLE_GPUS[*]}"
 
     if [[ -z "$STATE_DISK_PATH" ]]; then
         STATE_DISK_PATH="$CACHE/state.qcow2"
@@ -480,6 +453,9 @@ main() {
     # Prepare QEMU command with GPU passthrough and chassis increment
     GPU_PASSTHROUGH=""
     CHASSIS=1
+    # Debug output
+    echo "Debug: Processing GPUs for passthrough: ${USED_GPUS[@]}"
+    
     for GPU in "${USED_GPUS[@]}"; do
         echo "Debug: Adding GPU to QEMU: $GPU with chassis $CHASSIS"
         if [[ "${VM_MODE}" == "tdx" ]]; then
@@ -491,14 +467,9 @@ main() {
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS"
         fi
         GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,string=262144"
+        echo "Debug: Added GPU $GPU with chassis $CHASSIS"
         CHASSIS=$((CHASSIS + 1))
-    done
-
-    echo "Debug: Found GPUs: ${USED_GPUS[@]}"
-    for GPU in "${USED_GPUS[@]}"; do
-        echo "Debug: Adding GPU: $GPU"
-    done
-        
+    done        
     # Initialize machine parameters based on mode
     MACHINE_PARAMS=""
     CPU_PARAMS="-cpu host"
