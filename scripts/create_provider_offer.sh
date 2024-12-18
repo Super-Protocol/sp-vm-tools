@@ -180,7 +180,7 @@ get_max_network_speed() {
 # Function to extract GPU VRAM size
 extract_gpu_vram() {
     local gpu_info=$1
-    if [[ $gpu_info =~ ([0-9]+)GB ]]; then
+    if [[ $gpu_info =~ [^0-9]([0-9]+)GB ]]; then
         echo "${BASH_REMATCH[1]}"
     else
         echo "0"  # Return 0 if no GB value found
