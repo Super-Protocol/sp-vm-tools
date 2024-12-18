@@ -450,11 +450,12 @@ main() {
     download_release "${RELEASE}" "${RELEASE_ASSET}" "${CACHE}" "${RELEASE_REPO}"
     parse_and_download_release_files ${RELEASE_FILEPATH}
 
-    # Prepare QEMU command with GPU passthrough and chassis increment
+    # Prepare QEMU command with GPU passthrough
     GPU_PASSTHROUGH=""
     CHASSIS=1
-    # Debug output
-    echo "Debug: Processing GPUs for passthrough: ${USED_GPUS[@]}"
+    
+    # Add single fw_cfg setting before GPU loop
+    GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,string=262144"
     
     for GPU in "${USED_GPUS[@]}"; do
         echo "Debug: Adding GPU to QEMU: $GPU with chassis $CHASSIS"
@@ -466,10 +467,9 @@ main() {
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS"
         fi
-        GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,string=262144"
-        echo "Debug: Added GPU $GPU with chassis $CHASSIS"
         CHASSIS=$((CHASSIS + 1))
-    done        
+    done
+
     # Initialize machine parameters based on mode
     MACHINE_PARAMS=""
     CPU_PARAMS="-cpu host"
