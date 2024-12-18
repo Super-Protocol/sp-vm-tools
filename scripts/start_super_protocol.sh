@@ -326,7 +326,8 @@ check_params() {
     TOTAL_RAM=$(free -g | awk '/^Mem:/{print $2}')
     USED_CPUS=0  # Add logic to calculate used CPUs by VM
     USED_RAM=0   # Add logic to calculate used RAM by VM
-    AVAILABLE_GPUS=$(lspci -nnk -d 10de: | grep -E '3D controller' | awk '{print $1}')
+    AVAILABLE_GPUS=($(lspci -nnk -d 10de: | grep -E '3D controller' | awk '{print $1}'))
+    echo "Debug: Found all GPUs: ${AVAILABLE_GPUS[@]}"
     IFS=' ' read -r -a AVAILABLE_GPUS_ARRAY <<< "$AVAILABLE_GPUS"
 
     if [ "$VM_CPU" -gt "$TOTAL_CPUS" ]; then
@@ -363,13 +364,22 @@ check_params() {
     USED_GPUS=("${UNIQUE_GPU_LIST[@]}")
 
     for USER_GPU in "${USED_GPUS[@]}"; do
-        if [[ $AVAILABLE_GPUS == *"$USER_GPU"* ]]; then
+        echo "Debug: Checking GPU: $USER_GPU"
+        found=0
+        for AVAIL_GPU in "${AVAILABLE_GPUS[@]}"; do
+            if [[ "$USER_GPU" == "$AVAIL_GPU" ]]; then
+                found=1
+                break
+            fi
+        done
+        if [[ $found -eq 1 ]]; then
             echo "GPU $USER_GPU is available."
         else
             echo "GPU $USER_GPU is NOT available."
             exit 1
         fi
     done
+
     echo "• Used GPUs for VM / available GPUs on host: ${USED_GPUS[@]:-None} / $AVAILABLE_GPUS"
 
     if [[ -z "$STATE_DISK_PATH" ]]; then
@@ -470,16 +480,13 @@ main() {
     # Prepare QEMU command with GPU passthrough and chassis increment
     GPU_PASSTHROUGH=""
     CHASSIS=1
-
-    # Set up GPU passthrough based on VM mode
     for GPU in "${USED_GPUS[@]}"; do
+        echo "Debug: Adding GPU to QEMU: $GPU with chassis $CHASSIS"
         if [[ "${VM_MODE}" == "tdx" ]]; then
-            # Original TDX configuration
             GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
         else
-            # Configuration for untrusted and sev modes
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS"
         fi
