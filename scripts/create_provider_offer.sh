@@ -317,10 +317,11 @@ if [ ! -z "$gpu_list" ]; then
     first_gpu=$(echo "$gpu_list" | head -n 1)
     first_gpu_id=$(echo "$first_gpu" | cut -d' ' -f1)
     
-    # Get GPU name from lspci
-    gpu_info=$(lspci -v -s "$first_gpu_id" | grep -o "NVIDIA.*\[[^]]*\]")
+    # Get full GPU name from lspci
+    gpu_info=$(lspci -v -s "$first_gpu_id" | grep "NVIDIA Corporation")
     if [ ! -z "$gpu_info" ]; then
-        gpu_name=$(echo "$gpu_info" | sed -n 's/.*NVIDIA Corporation \([^[]*\).*/\1/p' | sed 's/[[:space:]]*$//')
+        # Extract full name including "NVIDIA Corporation"
+        gpu_name=$(echo "$gpu_info" | sed -n 's/.*\(NVIDIA Corporation.*\[[^]]*\]\).*/\1/p' | sed 's/[[:space:]]*$//')
     fi
     
     # Get VRAM size from GPU name
@@ -330,13 +331,11 @@ if [ ! -z "$gpu_list" ]; then
         vram_bytes=$(to_bytes "$total_vram_gb")
     fi
     
-    # Format GPU name with count for description
-    if [ $gpu_cores -gt 1 ]; then
-        gpu_name="${gpu_cores}x${gpu_name}"
-    fi
+    # Format GPU description with new format
+    description="GPUs: ${gpu_cores} x ${gpu_name}"
     
-    echo "Detected GPUs: $gpu_name with total VRAM: $((vram_bytes / 1024 / 1024 / 1024))GB"
-    echo "Individual GPU memory: ${vram_gb}GB"
+    echo "$description"
+    echo "Total VRAM: $((vram_bytes / 1024 / 1024 / 1024))GB"
 else
     echo "No NVIDIA GPU detected"
 fi
