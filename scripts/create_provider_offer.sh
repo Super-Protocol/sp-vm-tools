@@ -177,14 +177,14 @@ get_max_network_speed() {
     echo $max_speed
 }
 
-# Function to extract GPU VRAM size
-extract_gpu_vram() {
-    local gpu_info=$1
-    if [[ $gpu_info =~ [^0-9]([0-9]+)GB ]]; then
+get_gpu_memory_from_name() {
+    local gpu_name=$1
+    # Try to extract memory size from GPU name (e.g., "H200 SXM 141GB" or "H100 PCIe 80GB")
+    if [[ $gpu_name =~ [^0-9]([0-9]+)GB ]]; then
         echo "${BASH_REMATCH[1]}"
-    else
-        echo "0"  # Return 0 if no GB value found
+        return 0
     fi
+    return 1
 }
 
 # Function to get CPU frequency in GHz
@@ -311,27 +311,23 @@ fi
 gpu_list=$(lspci -nnk -d 10de: | grep -E '3D controller' || true)
 if [ ! -z "$gpu_list" ]; then
     gpu_present=1
-    # Count number of GPUs
     gpu_cores=$(echo "$gpu_list" | wc -l)
     
-    # Get first GPU info for name template
+    # Get first GPU info for name
     first_gpu=$(echo "$gpu_list" | head -n 1)
-    gpu_name=$(echo "$first_gpu" | sed -n 's/.*NVIDIA Corporation \([^[]*\).*/\1/p' | sed 's/[[:space:]]*$//')
+    first_gpu_id=$(echo "$first_gpu" | cut -d' ' -f1)
     
-    # Extract VRAM size from nvidia-smi if available
-    if command -v nvidia-smi &> /dev/null; then
-        vram_per_gpu=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n 1)
-        if [ ! -z "$vram_per_gpu" ]; then
-            total_vram_gb=$((vram_per_gpu * gpu_cores / 1024))
-            vram_bytes=$(to_bytes "$total_vram_gb")
-        fi
-    else
-        # If nvidia-smi not available, try to extract from device name
-        if [[ $gpu_name =~ ([0-9]+)GB ]]; then
-            vram_per_gpu="${BASH_REMATCH[1]}"
-            total_vram_gb=$((vram_per_gpu * gpu_cores))
-            vram_bytes=$(to_bytes "$total_vram_gb")
-        fi
+    # Get GPU name from lspci
+    gpu_info=$(lspci -v -s "$first_gpu_id" | grep -o "NVIDIA.*\[[^]]*\]")
+    if [ ! -z "$gpu_info" ]; then
+        gpu_name=$(echo "$gpu_info" | sed -n 's/.*NVIDIA Corporation \([^[]*\).*/\1/p' | sed 's/[[:space:]]*$//')
+    fi
+    
+    # Get VRAM size from GPU name
+    vram_gb=$(get_gpu_memory_from_name "$gpu_info")
+    if [ $? -eq 0 ] && [ $vram_gb -gt 0 ]; then
+        total_vram_gb=$((vram_gb * gpu_cores))
+        vram_bytes=$(to_bytes "$total_vram_gb")
     fi
     
     # Format GPU name with count for description
@@ -340,6 +336,7 @@ if [ ! -z "$gpu_list" ]; then
     fi
     
     echo "Detected GPUs: $gpu_name with total VRAM: $((vram_bytes / 1024 / 1024 / 1024))GB"
+    echo "Individual GPU memory: ${vram_gb}GB"
 else
     echo "No NVIDIA GPU detected"
 fi
