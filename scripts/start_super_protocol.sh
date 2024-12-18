@@ -324,7 +324,10 @@ check_packages() {
 prepare_gpus_for_vfio() {
     local gpu_ids=("$@")
     
-    # Load required modules
+    echo "Unloading NVIDIA modules..."
+    modprobe -r nvidia_uvm nvidia_drm nvidia_modeset nvidia
+    
+    echo "Loading VFIO modules..."
     modprobe vfio
     modprobe vfio-pci
     
@@ -337,31 +340,42 @@ prepare_gpus_for_vfio() {
         
         # Check current driver
         local current_driver=$(lspci -k -s "$gpu" | grep "Kernel driver in use:" | awk '{print $5}')
+        echo "Current driver for GPU $gpu: $current_driver"
         
         if [[ "$current_driver" != "vfio-pci" ]]; then
-            # Remove from new_id if exists
-            echo "$vendor $device" > /sys/bus/pci/drivers/vfio-pci/remove_id 2>/dev/null || true
+            # If nvidia modules are still loaded, try to remove them again
+            if [[ "$current_driver" == "nvidia" ]]; then
+                echo "Forcing removal of NVIDIA modules..."
+                rmmod -f nvidia_uvm nvidia_drm nvidia_modeset nvidia 2>/dev/null || true
+            fi
             
             # Unbind from current driver if bound
-            if [[ -n "$current_driver" ]]; then
-                echo "Unbinding from $current_driver"
-                echo "0000:$gpu" > /sys/bus/pci/devices/0000:$gpu/driver/unbind 2>/dev/null || true
+            if [[ -e "/sys/bus/pci/devices/0000:$gpu/driver" ]]; then
+                echo "Unbinding from current driver"
+                echo "0000:$gpu" > /sys/bus/pci/devices/0000:$gpu/driver/unbind
             fi
             
             # Add to vfio-pci
-            echo "$vendor $device" > /sys/bus/pci/drivers/vfio-pci/new_id 2>/dev/null || true
-            
-            # Force bind if needed
-            echo "0000:$gpu" > /sys/bus/pci/drivers/vfio-pci/bind 2>/dev/null || true
+            echo "Adding device to vfio-pci"
+            echo "vfio-pci" > /sys/bus/pci/devices/0000:$gpu/driver_override
+            echo "0000:$gpu" > /sys/bus/pci/drivers/vfio-pci/bind
         else
             echo "GPU $gpu is already bound to vfio-pci"
         fi
         
         # Verify binding
-        if ! lspci -k -s "$gpu" | grep -q "Kernel driver in use: vfio-pci"; then
-            echo "Error: Failed to bind GPU $gpu to vfio-pci"
+        current_driver=$(lspci -k -s "$gpu" | grep "Kernel driver in use:" | awk '{print $5}')
+        if [[ "$current_driver" != "vfio-pci" ]]; then
+            echo "Error: Failed to bind GPU $gpu to vfio-pci (current driver: $current_driver)"
             exit 1
         fi
+    done
+    
+    # Final verification
+    echo "Verifying GPU bindings..."
+    for gpu in "${gpu_ids[@]}"; do
+        current_driver=$(lspci -k -s "$gpu" | grep "Kernel driver in use:" | awk '{print $5}')
+        echo "GPU $gpu is using driver: $current_driver"
     done
 }
 
