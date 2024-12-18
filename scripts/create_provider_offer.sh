@@ -300,6 +300,7 @@ gpu_cores=0
 gpu_info=""
 gpu_name=""
 gpu_count=0
+gpu_description=""
 
 # First, ensure lspci is installed
 if ! command -v lspci &> /dev/null; then
@@ -332,9 +333,9 @@ if [ ! -z "$gpu_list" ]; then
     fi
     
     # Format GPU description with new format
-    description="GPUs: ${gpu_cores} x ${gpu_name}"
+    gpu_description="GPUs: ${gpu_cores} x ${gpu_name}"
     
-    echo "$description"
+    echo "$gpu_description"
     echo "Total VRAM: $((vram_bytes / 1024 / 1024 / 1024))GB"
 else
     echo "No NVIDIA GPU detected"
@@ -356,7 +357,7 @@ network_speed_gbps=$(calc "$network_speed / 1000")
 
 # Create description in English with CPU frequency
 if [ $gpu_present -eq 1 ]; then
-    description="CPU: $cpu_model${freq_text}, $adjusted_cores cores, $adjusted_ram_gb GB ${ram_type}, GPU: $gpu_name, $adjusted_disk_gb GB ${disk_type}, ${network_speed_gbps} Gbps network"
+    description="CPU: $cpu_model${freq_text}, $adjusted_cores cores, $adjusted_ram_gb GB ${ram_type}, $gpu_description, $adjusted_disk_gb GB ${disk_type}, ${network_speed_gbps} Gbps network"
 else
     description="CPU: $cpu_model${freq_text}, $adjusted_cores cores, $adjusted_ram_gb GB ${ram_type}, $adjusted_disk_gb GB ${disk_type}, ${network_speed_gbps} Gbps network"
 fi
