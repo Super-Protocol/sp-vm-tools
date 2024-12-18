@@ -486,6 +486,11 @@ main() {
         GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,string=262144"
         CHASSIS=$((CHASSIS + 1))
     done
+
+    echo "Debug: Found GPUs: ${USED_GPUS[@]}"
+    for GPU in "${USED_GPUS[@]}"; do
+        echo "Debug: Adding GPU: $GPU"
+    done
         
     # Initialize machine parameters based on mode
     MACHINE_PARAMS=""
