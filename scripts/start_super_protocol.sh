@@ -320,6 +320,34 @@ check_packages() {
     fi
 }
 
+# Function to prepare GPUs for VFIO passthrough
+prepare_gpus_for_vfio() {
+    local gpu_ids=("$@")
+    
+    # Load required modules
+    modprobe vfio
+    modprobe vfio-pci
+    
+    for gpu in "${gpu_ids[@]}"; do
+        echo "Preparing GPU $gpu for VFIO passthrough"
+        
+        # Get vendor and device IDs
+        local vendor=$(lspci -n -s "$gpu" | awk '{print $3}' | cut -d: -f1)
+        local device=$(lspci -n -s "$gpu" | awk '{print $3}' | cut -d: -f2)
+        
+        # Unbind from nvidia
+        echo 0000:$gpu > /sys/bus/pci/devices/0000:$gpu/driver/unbind 2>/dev/null || true
+        
+        # Add device IDs to vfio-pci
+        echo "$vendor $device" > /sys/bus/pci/drivers/vfio-pci/new_id || true
+        
+        # Verify binding
+        if ! lspci -k -s "$gpu" | grep -q "vfio-pci"; then
+            echo "Warning: GPU $gpu is not bound to vfio-pci"
+        fi
+    done
+}
+
 check_params() {
     # Collect system info
     TOTAL_CPUS=$(nproc)
@@ -442,6 +470,9 @@ check_params() {
 main() {
     check_params
     check_packages
+
+    # Prepare GPUs for VFIO passthrough
+    prepare_gpus_for_vfio "${USED_GPUS[@]}"
 
     # Find QEMU path before using it
     find_qemu_path
