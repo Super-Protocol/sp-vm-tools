@@ -353,6 +353,10 @@ EOF
   popd
 
   new_pci_ids=$(echo "$gpu_list" | grep -oP '\[\K[0-9a-f]{4}:[0-9a-f]{4}(?=\])' | sort -u | tr '\n' ',' | sed 's/,$//')
+  if [ -z "$new_pci_ids" ]; then
+      echo "No PCI IDs found for NVIDIA GPUs!"
+      exit 1
+  fi
 
   existing_pci_ids=""
   if [ -f /etc/modprobe.d/vfio.conf ]; then
