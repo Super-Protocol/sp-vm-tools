@@ -299,6 +299,7 @@ vram_bytes=0
 gpu_cores=0
 gpu_info=""
 gpu_name=""
+gpu_count=0
 
 # First, ensure lspci is installed
 if ! command -v lspci &> /dev/null; then
@@ -306,15 +307,39 @@ if ! command -v lspci &> /dev/null; then
     sudo apt update && sudo apt install -y pciutils
 fi
 
-# Simple GPU detection using only lspci
-gpu_info=$(lspci | grep -i "nvidia" | head -n 1)
-if [ ! -z "$gpu_info" ]; then
+# Get list of NVIDIA GPUs
+gpu_list=$(lspci -nnk -d 10de: | grep -E '3D controller' || true)
+if [ ! -z "$gpu_list" ]; then
     gpu_present=1
-    gpu_cores=1
-    gpu_name=$(extract_gpu_name "$gpu_info")
-    vram_gb=$(extract_gpu_vram "$gpu_info")
-    vram_bytes=$(to_bytes "$vram_gb")
-    echo "Detected GPU: $gpu_info with ${vram_gb}GB VRAM"
+    # Count number of GPUs
+    gpu_cores=$(echo "$gpu_list" | wc -l)
+    
+    # Get first GPU info for name template
+    first_gpu=$(echo "$gpu_list" | head -n 1)
+    gpu_name=$(echo "$first_gpu" | sed -n 's/.*NVIDIA Corporation \([^[]*\).*/\1/p' | sed 's/[[:space:]]*$//')
+    
+    # Extract VRAM size from nvidia-smi if available
+    if command -v nvidia-smi &> /dev/null; then
+        vram_per_gpu=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n 1)
+        if [ ! -z "$vram_per_gpu" ]; then
+            total_vram_gb=$((vram_per_gpu * gpu_cores / 1024))
+            vram_bytes=$(to_bytes "$total_vram_gb")
+        fi
+    else
+        # If nvidia-smi not available, try to extract from device name
+        if [[ $gpu_name =~ ([0-9]+)GB ]]; then
+            vram_per_gpu="${BASH_REMATCH[1]}"
+            total_vram_gb=$((vram_per_gpu * gpu_cores))
+            vram_bytes=$(to_bytes "$total_vram_gb")
+        fi
+    fi
+    
+    # Format GPU name with count for description
+    if [ $gpu_cores -gt 1 ]; then
+        gpu_name="${gpu_cores}x${gpu_name}"
+    fi
+    
+    echo "Detected GPUs: $gpu_name with total VRAM: $((vram_bytes / 1024 / 1024 / 1024))GB"
 else
     echo "No NVIDIA GPU detected"
 fi
