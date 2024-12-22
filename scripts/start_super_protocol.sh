@@ -418,11 +418,14 @@ check_params() {
         STATE_DISK_PATH="$CACHE/state.qcow2"
     fi
 
+    echo "Removing old state disk..."
     rm -f ${STATE_DISK_PATH}
+    echo "Creating new state disk directory..."
     mkdir -p $(dirname ${STATE_DISK_PATH})
+    echo "Initializing state disk..."
     touch ${STATE_DISK_PATH}
-
-    # Get the mount point
+    
+    echo "Checking mount point..."
     MOUNT_POINT=$(df --output=target "${STATE_DISK_PATH}" | tail -n 1)
 
     # Check if MOUNT_POINT is empty
