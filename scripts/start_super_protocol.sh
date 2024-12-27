@@ -463,11 +463,20 @@ check_params() {
 
     if [[ -d "${PROVIDER_CONFIG}" ]]; then
         echo "• Provider config: ${PROVIDER_CONFIG}"
+        
+        # Check if authorized_keys doesn't exist in provider_config
+        if [[ ! -f "${PROVIDER_CONFIG}/authorized_keys" ]]; then
+            # Create symlink if ~/.ssh/authorized_keys exists
+            if [[ -f "${HOME}/.ssh/authorized_keys" ]]; then
+                ln -s "${HOME}/.ssh/authorized_keys" "${PROVIDER_CONFIG}/authorized_keys"
+                echo "Created symlink to ~/.ssh/authorized_keys"
+            fi
+        fi
     else
         echo "Folder ${PROVIDER_CONFIG} does not exist."
         exit 1
     fi
-
+    
     if [[ "${MAC_ADDRESS}" =~ ^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$ ]]; then
          echo "• Mac address: ${MAC_ADDRESS}"
     else
