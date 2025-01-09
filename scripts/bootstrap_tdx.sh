@@ -339,9 +339,10 @@ EOF
   echo "$gpu_list"
 
   # enable cc mode
+  sudo rm -rf "${TMP_DIR}/gpu-admin-tools" 2>/dev/null || true
   git clone -b v2024.08.09 --single-branch --depth 1 --no-tags https://github.com/NVIDIA/gpu-admin-tools.git "${TMP_DIR}/gpu-admin-tools"
   pushd "${TMP_DIR}/gpu-admin-tools"
-  AVAILABLE_GPUS=$(echo ${gpu_list} | awk '{print $1}')
+  AVAILABLE_GPUS=$(echo "$gpu_list" | awk '{print $1}' | tr '\n' ' ')
   for gpu in $AVAILABLE_GPUS; do
     echo "Enable CC mode for ${gpu}"
     python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu} --set-cc-mode=on --reset-after-cc-mode-switch
