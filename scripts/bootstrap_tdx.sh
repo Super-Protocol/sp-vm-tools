@@ -146,7 +146,7 @@ install_debs() {
     fi
     
     # Install dependencies
-    apt update && DEBIAN_FRONTEND=noninteractive apt install -y libslirp0 s3cmd
+    apt update && DEBIAN_FRONTEND=noninteractive apt install -y libslirp0
     
     # Install kernel headers first
     echo "Installing kernel headers..."
