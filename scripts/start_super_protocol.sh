@@ -336,7 +336,7 @@ prepare_gpus_for_vfio() {
     local gpu_ids=("$@")
     
     echo "Unloading NVIDIA modules..."
-    modprobe -r nvidia_uvm nvidia_drm nvidia_modeset nvidia
+    modprobe -r nvidia_uvm nvidia_drm nvidia_modeset nvidia || true
     
     echo "Loading VFIO modules..."
     modprobe vfio
