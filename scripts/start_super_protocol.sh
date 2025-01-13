@@ -34,8 +34,8 @@ QEMU_PATH=""
 DEFAULT_DEBUG=false
 DEFAULT_ARGO_BRANCH="main"
 
-TDX_SUPPORT=$(lscpu | grep -i tdx)
-SEV_SUPPORT=$(lscpu | grep -i sev)
+TDX_SUPPORT=$(lscpu | grep -i tdx || echo "")
+SEV_SUPPORT=$(lscpu | grep -i sev || echo "")
 
 # Default mode
 DEFAULT_MODE="untrusted"  # Can be "untrusted", "tdx", or "sev"
