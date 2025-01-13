@@ -379,6 +379,74 @@ prepare_gpus_for_vfio() {
     done
 }
 
+validate_yaml_files() {
+    local dir="$1"
+    local has_errors=false
+    
+    # Check if python3 and PyYAML are installed
+    if ! command -v python3 &> /dev/null; then
+        echo "Error: python3 is required for YAML validation"
+        exit 1
+    fi
+    
+    if ! python3 -c "import yaml" &> /dev/null; then
+        echo "Installing PyYAML..."
+        apt-get update && apt-get install -y python3-yaml
+    fi
+    
+    # Create a temporary Python script for YAML validation
+    local tmp_script=$(mktemp)
+    cat > "$tmp_script" << 'EOF'
+import sys
+import yaml
+
+def validate_yaml(file_path):
+    try:
+        with open(file_path, 'r') as f:
+            yaml.safe_load(f)
+        return True
+    except yaml.YAMLError as e:
+        print(f"Error in {file_path}:")
+        print(e)
+        return False
+
+if __name__ == "__main__":
+    if not validate_yaml(sys.argv[1]):
+        sys.exit(1)
+EOF
+
+    # Find all yaml files recursively and validate each one
+    local yaml_files=$(find "$dir" -type f \( -name "*.yaml" -o -name "*.yml" \))
+    if [ -z "$yaml_files" ]; then
+        echo "No YAML files found in $dir"
+        rm "$tmp_script"
+        return 0
+    fi
+
+    echo "Validating YAML files in $dir..."
+    
+    while IFS= read -r file; do
+        echo "Checking $file..."
+        if ! python3 "$tmp_script" "$file"; then
+            has_errors=true
+            echo "❌ Invalid YAML: $file"
+        else
+            echo "✓ Valid YAML: $file"
+        fi
+    done <<< "$yaml_files"
+
+    # Cleanup
+    rm "$tmp_script"
+
+    if [ "$has_errors" = true ]; then
+        echo "YAML validation failed. Please fix the errors above."
+        return 1
+    fi
+    
+    echo "All YAML files are valid."
+    return 0
+}
+
 check_params() {
     # Collect system info
     TOTAL_CPUS=$(nproc)
@@ -463,6 +531,9 @@ check_params() {
 
     if [[ -d "${PROVIDER_CONFIG}" ]]; then
         echo "• Provider config: ${PROVIDER_CONFIG}"
+
+        # Validate all yamls
+        validate_yaml_files "${PROVIDER_CONFIG}"
         
         # Check if authorized_keys doesn't exist in provider_config
         if [[ ! -f "${PROVIDER_CONFIG}/authorized_keys" ]]; then
