@@ -1,6 +1,16 @@
 #!/bin/bash
 set -e
 
+# Add error handler
+trap 'exit_handler $? $LINENO' ERR
+
+exit_handler() {
+    local exit_code=$1
+    local line_number=$2
+    echo "Error on line $line_number: Command exited with status $exit_code"
+    exit $exit_code
+}
+
 # Default values
 SCRIPT_DIR=$( cd "$( dirname "$0" )" && pwd )
 
