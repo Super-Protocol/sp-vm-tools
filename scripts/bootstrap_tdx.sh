@@ -319,9 +319,13 @@ setup_nvidia_gpus() {
   tee /etc/modprobe.d/blacklist-nvidia.conf << EOF
 blacklist nvidia
 blacklist nvidia_drm
-blacklist nvidia_uvm
-blacklist nvidia_modeset
 blacklist nouveau
+EOF
+
+  tee /etc/modprobe.d/nvidia.conf << EOF
+options nvidia NVreg_EnableStreamMemOPs=1
+options nvidia NVreg_UsePageAttributeTable=1
+options nvidia NVreg_EnablePCIeGen3=1
 EOF
 
   # Remove Nouveau from modules if present
@@ -342,9 +346,21 @@ EOF
   sudo rm -rf "${TMP_DIR}/gpu-admin-tools" 2>/dev/null || true
   git clone -b v2024.08.09 --single-branch --depth 1 --no-tags https://github.com/NVIDIA/gpu-admin-tools.git "${TMP_DIR}/gpu-admin-tools"
   pushd "${TMP_DIR}/gpu-admin-tools"
+
+  nvswitch_list=$(lspci -nnk -d 10de: | grep -E 'NVSwitch' || true)
+  if [ -n "$nvswitch_list" ]; then
+    echo "Found NVSwitch devices:"
+    echo "$nvswitch_list"
+    
+    for nvswitch in $(echo "$nvswitch_list" | awk '{print $1}'); do
+      echo "Configuring NVSwitch ${nvswitch}"
+      python3 ./nvidia_gpu_tools.py --gpu-bdf=${nvswitch} --query-module-name
+    done
+  fi
+
   AVAILABLE_GPUS=$(echo "$gpu_list" | awk '{print $1}' | tr '\n' ' ')
   for gpu in $AVAILABLE_GPUS; do
-    echo "Enable CC mode for ${gpu}"
+    echo "Enable CC mode for ${gpu} with NVSwitch support"
     python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu} --set-cc-mode=on --reset-after-cc-mode-switch
     if [ $? -ne 0 ]; then
       echo "Failed to enable cc-mode for GPU ${gpu}"
