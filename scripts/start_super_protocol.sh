@@ -331,9 +331,12 @@ check_packages() {
     fi
 }
 
-# Function to prepare GPUs for VFIO passthrough
 prepare_gpus_for_vfio() {
     local gpu_ids=("$@")
+    
+    # Detect NVSwitch devices
+    local nvswitch_ids=($(lspci -nnk -d 10de:22a3 | awk '{print $1}'))
+    echo "Debug: Found NVSwitch devices: ${nvswitch_ids[@]}"
     
     echo "Unloading NVIDIA modules..."
     modprobe -r nvidia_uvm nvidia_drm nvidia_modeset nvidia || true
@@ -342,51 +345,65 @@ prepare_gpus_for_vfio() {
     modprobe vfio
     modprobe vfio-pci
     
-    for gpu in "${gpu_ids[@]}"; do
-        echo "Preparing GPU $gpu for VFIO passthrough"
+    # Function to bind device to vfio-pci
+    bind_to_vfio() {
+        local device=$1
+        local device_type=$2
         
-        # Get vendor and device IDs
-        local vendor=$(lspci -n -s "$gpu" | awk '{print $3}' | cut -d: -f1)
-        local device=$(lspci -n -s "$gpu" | awk '{print $3}' | cut -d: -f2)
+        echo "Preparing $device_type $device for VFIO passthrough"
         
         # Check current driver
-        local current_driver=$(lspci -k -s "$gpu" | grep "Kernel driver in use:" | awk '{print $5}')
-        echo "Current driver for GPU $gpu: $current_driver"
+        local current_driver=$(lspci -k -s "$device" | grep "Kernel driver in use:" | awk '{print $5}')
+        echo "Current driver for $device_type $device: $current_driver"
         
         if [[ "$current_driver" != "vfio-pci" ]]; then
-            # If nvidia modules are still loaded, try to remove them again
+            # If nvidia modules are still loaded, try to remove them
             if [[ "$current_driver" == "nvidia" ]]; then
                 echo "Forcing removal of NVIDIA modules..."
                 rmmod -f nvidia_uvm nvidia_drm nvidia_modeset nvidia 2>/dev/null || true
             fi
             
             # Unbind from current driver if bound
-            if [[ -e "/sys/bus/pci/devices/0000:$gpu/driver" ]]; then
+            if [[ -e "/sys/bus/pci/devices/0000:$device/driver" ]]; then
                 echo "Unbinding from current driver"
-                echo "0000:$gpu" > /sys/bus/pci/devices/0000:$gpu/driver/unbind
+                echo "0000:$device" > /sys/bus/pci/devices/0000:$device/driver/unbind
             fi
             
             # Add to vfio-pci
             echo "Adding device to vfio-pci"
-            echo "vfio-pci" > /sys/bus/pci/devices/0000:$gpu/driver_override
-            echo "0000:$gpu" > /sys/bus/pci/drivers/vfio-pci/bind
+            echo "vfio-pci" > /sys/bus/pci/devices/0000:$device/driver_override
+            echo "0000:$device" > /sys/bus/pci/drivers/vfio-pci/bind
         else
-            echo "GPU $gpu is already bound to vfio-pci"
+            echo "$device_type $device is already bound to vfio-pci"
         fi
         
         # Verify binding
-        current_driver=$(lspci -k -s "$gpu" | grep "Kernel driver in use:" | awk '{print $5}')
+        current_driver=$(lspci -k -s "$device" | grep "Kernel driver in use:" | awk '{print $5}')
         if [[ "$current_driver" != "vfio-pci" ]]; then
-            echo "Error: Failed to bind GPU $gpu to vfio-pci (current driver: $current_driver)"
+            echo "Error: Failed to bind $device_type $device to vfio-pci (current driver: $current_driver)"
             exit 1
         fi
+    }
+    
+    # Process GPUs
+    for gpu in "${gpu_ids[@]}"; do
+        bind_to_vfio "$gpu" "GPU"
+    done
+
+    # Process NVSwitch devices
+    for nvswitch in "${nvswitch_ids[@]}"; do
+        bind_to_vfio "$nvswitch" "NVSwitch"
     done
     
     # Final verification
-    echo "Verifying GPU bindings..."
+    echo "Verifying device bindings..."
     for gpu in "${gpu_ids[@]}"; do
         current_driver=$(lspci -k -s "$gpu" | grep "Kernel driver in use:" | awk '{print $5}')
         echo "GPU $gpu is using driver: $current_driver"
+    done
+    for nvswitch in "${nvswitch_ids[@]}"; do
+        current_driver=$(lspci -k -s "$nvswitch" | grep "Kernel driver in use:" | awk '{print $5}')
+        echo "NVSwitch $nvswitch is using driver: $current_driver"
     done
 }
 
@@ -462,10 +479,12 @@ check_params() {
     # Collect system info
     TOTAL_CPUS=$(nproc)
     TOTAL_RAM=$(free -g | awk '/^Mem:/{print $2}')
-    
-    # Get list of all NVIDIA GPUs
+        
+    # Get list of all NVIDIA GPUs and NVSwitch devices
     AVAILABLE_GPUS=($(lspci -nnk -d 10de: | grep -E '3D controller' | awk '{print $1}'))
-    echo "Debug: Found all GPUs: ${AVAILABLE_GPUS[@]}"
+    AVAILABLE_NVSWITCHES=($(lspci -nnk -d 10de: | grep -E 'Bridge.*NVSwitch' | awk '{print $1}'))
+    
+    echo "Debug: Found GPUs: ${AVAILABLE_GPUS[@]}"
     
     # Process GPU list
     if [[ " ${USED_GPUS[@]} " =~ " none " ]]; then
@@ -612,6 +631,7 @@ main() {
     # Add single fw_cfg setting before GPU loop
     GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,string=262144"
     
+    # Add GPUs
     for GPU in "${USED_GPUS[@]}"; do
         echo "Debug: Adding GPU to QEMU: $GPU with chassis $CHASSIS"
         if [[ "${VM_MODE}" == "tdx" ]]; then
@@ -624,7 +644,21 @@ main() {
         fi
         CHASSIS=$((CHASSIS + 1))
     done
-
+    
+    # Add NVSwitch devices
+    for NVSWITCH in "${AVAILABLE_NVSWITCHES[@]}"; do
+        echo "Debug: Adding NVSwitch to QEMU: $NVSWITCH with chassis $CHASSIS"
+        if [[ "${VM_MODE}" == "tdx" ]]; then
+            GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
+            GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
+            GPU_PASSTHROUGH+=" -device vfio-pci,host=$NVSWITCH,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
+        else
+            GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
+            GPU_PASSTHROUGH+=" -device vfio-pci,host=$NVSWITCH,bus=pci.$CHASSIS"
+        fi
+        CHASSIS=$((CHASSIS + 1))
+    done
+    
     # Initialize machine parameters based on mode
     MACHINE_PARAMS=""
     CPU_PARAMS="-cpu host"
