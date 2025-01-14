@@ -320,12 +320,8 @@ setup_nvidia_gpus() {
 blacklist nvidia
 blacklist nvidia_drm
 blacklist nouveau
-EOF
-
-  tee /etc/modprobe.d/nvidia.conf << EOF
-options nvidia NVreg_EnableStreamMemOPs=1
-options nvidia NVreg_UsePageAttributeTable=1
-options nvidia NVreg_EnablePCIeGen3=1
+blacklist nvidia_uvm
+blacklist nvidia_modeset
 EOF
 
   # Remove Nouveau from modules if present
