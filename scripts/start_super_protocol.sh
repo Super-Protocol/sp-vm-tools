@@ -482,7 +482,7 @@ check_params() {
         
     # Get list of all NVIDIA GPUs and NVSwitch devices
     AVAILABLE_GPUS=($(lspci -nnk -d 10de: | grep -E '3D controller' | awk '{print $1}'))
-    AVAILABLE_NVSWITCHES=($(lspci -nnk -d 10de: | grep -E 'Bridge.*NVSwitch' | awk '{print $1}'))
+    AVAILABLE_NVSWITCHES=($(lspci -nnk -d 10de:22a3 | awk '{print $1}'))
     
     echo "Debug: Found GPUs: ${AVAILABLE_GPUS[@]}"
     
