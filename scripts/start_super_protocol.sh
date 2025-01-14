@@ -335,7 +335,7 @@ prepare_gpus_for_vfio() {
     local gpu_ids=("$@")
     
     # Detect NVSwitch devices
-    local nvswitch_ids=($(lspci -nnk -d 10de:22a3 | awk '{print $1}'))
+    local nvswitch_ids=($(lspci -mm -n -d 10de:22a3 | cut -d' ' -f1))
     echo "Debug: Found NVSwitch devices: ${nvswitch_ids[@]}"
     
     echo "Unloading NVIDIA modules..."
@@ -482,7 +482,7 @@ check_params() {
         
     # Get list of all NVIDIA GPUs and NVSwitch devices
     AVAILABLE_GPUS=($(lspci -nnk -d 10de: | grep -E '3D controller' | awk '{print $1}'))
-    AVAILABLE_NVSWITCHES=$(lspci -mm -n -d 10de:22a3 | cut -d' ' -f1)
+    AVAILABLE_NVSWITCHES=($(lspci -mm -n -d 10de:22a3 | cut -d' ' -f1))
     
     echo "Debug: Found GPUs: ${AVAILABLE_GPUS[@]}"
     
