@@ -33,6 +33,7 @@ DEFAULT_MAC_SUFFIX="56"
 QEMU_PATH=""
 DEFAULT_DEBUG=false
 DEFAULT_ARGO_BRANCH="main"
+DEFAULT_ARGO_SP_ENV="default"
 
 TDX_SUPPORT=$(lscpu | grep -i tdx || echo "")
 SEV_SUPPORT=$(lscpu | grep -i sev || echo "")
@@ -79,6 +80,7 @@ usage() {
     echo "  --log_file <file>            Log file (default: no)"
     echo "  --debug <true|false>         Enable debug mode (default: ${DEFAULT_DEBUG})"
     echo "  --argo_branch <name>         Name of argo branch for init SP components (default: ${DEFAULT_ARGO_BRANCH})"
+    echo "  --argo_sp_env <name>         Name of argo environment for init SP components (default: ${DEFAULT_ARGO_SP_ENV})"
     echo "  --release <name>             Release name (default: latest)"
     echo "  --mode <mode>                VM mode: untrusted, tdx, sev (default: ${DEFAULT_MODE})"
     echo ""
@@ -96,6 +98,7 @@ PROVIDER_CONFIG=""
 MOUNT_CONFIG=${DEFAULT_MOUNT_CONFIG}
 DEBUG_MODE=${DEFAULT_DEBUG}
 ARGO_BRANCH=${DEFAULT_ARGO_BRANCH}
+ARGO_SP_ENV=${DEFAULT_ARGO_SP_ENV}
 RELEASE=""
 RELEASE_FILEPATH=""
 
@@ -125,6 +128,7 @@ parse_args() {
             --log_file) LOG_FILE=$2; shift ;;
             --debug) DEBUG_MODE=$2; shift ;;
             --argo_branch) ARGO_BRANCH=$2; shift ;;
+            --argo_sp_env) ARGO_SP_ENV=$2; shift ;;
             --release) RELEASE=$2; shift ;;
             --mode) VM_MODE=$2; shift ;;
             --help) usage; exit 0;;
@@ -593,6 +597,7 @@ check_params() {
 
     if [[ ${DEBUG_MODE} == "true" ]]; then
         echo "   Argo branch: $ARGO_BRANCH"
+        echo "   Argo SP env: $ARGO_SP_ENV"
         echo "   SSH Port: $SSH_PORT"
 
         if [[ -z "${LOG_FILE}" ]]; then
@@ -701,7 +706,7 @@ main() {
     
     if [[ ${DEBUG_MODE} == true ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
-        KERNEL_CMD_LINE="root=/dev/vda1 console=ttyS0 clearcpuid=mtrr systemd.log_level=trace systemd.log_target=log rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} argo_branch=${ARGO_BRANCH} sp-debug=true"
+        KERNEL_CMD_LINE="root=/dev/vda1 console=ttyS0 clearcpuid=mtrr systemd.log_level=trace systemd.log_target=log rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} sp-debug=true"
     else
         KERNEL_CMD_LINE="root=/dev/vda1 clearcpuid=mtrr rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}"
     fi
