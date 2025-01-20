@@ -26,6 +26,7 @@ DEFAULT_CACHE="${HOME}/.cache/superprotocol" # Default cache path
 DEFAULT_MOUNT_CONFIG="/sp"
 
 DEFAULT_SSH_PORT=2222
+DEFAULT_GUEST_CID=3
 
 LOG_FILE=""
 DEFAULT_MAC_PREFIX="52:54:00:12:34"
@@ -83,6 +84,7 @@ usage() {
     echo "  --argo_sp_env <name>         Name of argo environment for init SP components (default: ${DEFAULT_ARGO_SP_ENV})"
     echo "  --release <name>             Release name (default: latest)"
     echo "  --mode <mode>                VM mode: untrusted, tdx, sev (default: ${DEFAULT_MODE})"
+    echo "  --guest-cid <id>             Guest CID for vsock (default: ${DEFAULT_GUEST_CID})"
     echo ""
 }
 
@@ -90,6 +92,7 @@ usage() {
 VM_CPU=${DEFAULT_CORES}
 VM_RAM=${DEFAULT_MEM}
 USED_GPUS=() # List of used GPUs (to be filled dynamically)
+GUEST_CID=${DEFAULT_GUEST_CID}
 CACHE=${DEFAULT_CACHE}
 STATE_DISK_PATH=""
 STATE_DISK_SIZE=0
@@ -131,6 +134,7 @@ parse_args() {
             --argo_sp_env) ARGO_SP_ENV=$2; shift ;;
             --release) RELEASE=$2; shift ;;
             --mode) VM_MODE=$2; shift ;;
+            --guest-cid) GUEST_CID=$2; shift ;;
             --help) usage; exit 0;;
             *) echo "Unknown parameter: $1"; usage ; exit 1 ;;
         esac
@@ -732,7 +736,7 @@ main() {
     -vga none \
     -nodefaults \
     -serial stdio \
-    -device vhost-vsock-pci,guest-cid=3 \
+    -device vhost-vsock-pci,guest-cid=${GUEST_CID} \
     ${GPU_PASSTHROUGH} \
     "
 
