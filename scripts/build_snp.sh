@@ -72,9 +72,13 @@ build_kernel_packages() {
 build_ovmf() {
     local build_dir=$1
     pushd ${build_dir}
-    git clone --single-branch -b ${OVMF_BRANCH} ${OVMF_GIT_URL} ovmf
+
+    git clone --single-branch --depth 1 --branch edk2-stable202411 https://github.com/tianocore/edk2.git ovmf
     cd ovmf
-    git config --global url.https://github.com/tianocore/edk2-subhook.git.insteadOf https://github.com/Zeex/subhook.git
+    git fetch origin 8b87eb9dfba054331ed16204f36c4885aefc3c94
+    git checkout -b fix-build edk2-stable202411
+    git cherry-pick 8b87eb9dfba054331ed16204f36c4885aefc3c94
+
     git submodule update --init --recursive
     rm -rf Build
     make -C BaseTools
@@ -83,7 +87,7 @@ build_ovmf() {
     source edksetup.sh
 
     cat <<-EOF > Conf/target.txt
-ACTIVE_PLATFORM = OvmfPkg/OvmfPkgX64.dsc
+ACTIVE_PLATFORM = OvmfPkg/AmdSev/AmdSevX64.dsc
 TARGET = RELEASE
 TARGET_ARCH = X64
 TOOL_CHAIN_CONF = Conf/tools_def.txt
@@ -91,10 +95,12 @@ TOOL_CHAIN_TAG = GCC5
 BUILD_RULE_CONF = Conf/build_rule.txt
 MAX_CONCURRENT_THREAD_NUMBER = $(nproc)
 EOF
+    #required for building AmdSev package without grub
+    touch OvmfPkg/AmdSev/Grub/grub.efi
 
     build clean
     build
-    if [ ! -f Build/OvmfX64/RELEASE_GCC5/FV/OVMF.fd ]; then
+    if [ ! -f Build/AmdSev/RELEASE_GCC5/FV/OVMF.fd ]; then
         echo "Build failed, OVMF.fd not found"
         return 1
     fi
@@ -140,7 +146,7 @@ packaging() {
     mkdir -p package
     find ./ -type f -name "*.deb" ! -name "*dbg*.deb" -exec cp -fv {} package/ \;
     cp -fv qemu/sp-qemu-snp*.deb package/
-    cp -fv ovmf/Build/OvmfX64/RELEASE_GCC5/FV/OVMF.fd package/
+    cp -fv ovmf/Build/AmdSev/RELEASE_GCC5/FV/OVMF.fd package/
     cp -fv ${root_dir}/sources/amd/AMDSEV/kvm.conf package/
     cp -fv snphost/target/release/{libsev.so,snphost} package/
     cd package
