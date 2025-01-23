@@ -34,7 +34,7 @@ DEFAULT_MAC_SUFFIX="56"
 QEMU_PATH=""
 DEFAULT_DEBUG=false
 DEFAULT_ARGO_BRANCH="main"
-DEFAULT_ARGO_SP_ENV="default"
+DEFAULT_ARGO_SP_ENV="main"
 
 TDX_SUPPORT=$(lscpu | grep -i tdx || echo "")
 SEV_SUPPORT=$(lscpu | grep -i sev || echo "")
