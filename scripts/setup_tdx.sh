@@ -36,20 +36,31 @@ check_all_bios_settings() {
     PA_BITS=$(cpuid -l 0x80000008 | grep "maximum physical address bits" | head -n1 | awk '{print $NF}' | tr -d '()' || echo "0")
     
     if [ "$PA_BITS" -gt "46" ]; then
-        results+=("✓ CPU PA limit properly configured")
+        results+=("${SUCCESS} CPU PA limit properly configured${NC}")
     else
-        results+=("✗ CPU PA limit must be enabled and set to 46 bits")
+        results+=("${FAILURE} CPU PA limit to 46 bit must be disabled${NC}")
         results+=("  Location: Uncore General Configuration")
         all_passed=false
     fi
-    
+
+    # SMT check
+    results+=("SMT Settings:")
+    if [ "$(cat /sys/devices/system/cpu/smt/active)" = "1" ]; then
+        results+=("${SUCCESS} SMT enabled${NC}")
+    else
+        results+=("${FAILURE} SMT not enabled in BIOS${NC}")
+        results+=("  Required: Enable SMT in BIOS")
+        all_passed=false
+    fi
+
     # TME Check should verify both base TME and MT-TME
     results+=("TME Settings:")
-    if [ -e "/sys/firmware/tme/enabled" ] && \
-       [ -e "/sys/firmware/tme/mt_enabled" ]; then
-        results+=("✓ Memory encryption (TME and TME-MT) enabled")
+    if dmesg | grep -q "x86/tme: enabled by BIOS" && \
+       dmesg | grep -q "x86/mktme: enabled by BIOS" && \
+       dmesg | grep -q "KeyIDs available"; then
+        results+=("${SUCCESS} Memory encryption (TME and TME-MT) enabled${NC}")
     else
-        results+=("✗ Memory encryption not properly configured")
+        results+=("${FAILURE} Memory encryption not properly configured${NC}")
         results+=("  Required: Enable both TME and TME-MT")
         all_passed=false
     fi
@@ -57,97 +68,91 @@ check_all_bios_settings() {
     # SGX Check remains unchanged
     results+=("SGX Settings:")
     if grep -q "sgx" /proc/cpuinfo && [ -c "/dev/sgx_enclave" -o -c "/dev/sgx/enclave" ]; then
-        results+=("✓ SGX enabled and configured")
+        results+=("${SUCCESS} SGX enabled and configured${NC}")
     else
-        results+=("✗ SGX not properly configured")
+        results+=("${FAILURE} SGX not properly configured${NC}")
         all_passed=false
     fi
 
-    # Enhanced TXT Check remains unchanged
     results+=("TXT Settings:")
-    local txt_msr=$(rdmsr 0x3a 2>/dev/null || echo "0")
-    if [ "$txt_msr" != "0" ] && [ "$((0x$txt_msr & 0x1))" -eq 1 ]; then
-        results+=("✓ TXT supported and enabled (MSR 0x3a: $txt_msr)")
+    local sinit_base=$(txt-stat | grep "SINIT.BASE:" | awk '{print $2}')
+    if [ "$sinit_base" != "0x0" ] && [ "$sinit_base" != "" ]; then
+        results+=("${SUCCESS} TXT enabled (SINIT ACM present)${NC}")
     else
-        results+=("✗ TXT not properly configured (MSR 0x3a: $txt_msr)")
+        results+=("${FAILURE} TXT not enabled in BIOS${NC}")
         results+=("  Required: Enable TXT in BIOS")
         all_passed=false
     fi
 
-    # Modified SEAM Check - Updated hex mask
     results+=("SEAM Settings:")
-    local tdx_cap_msr=$(rdmsr 0x982 2>/dev/null || echo "0")
-    # Check if the SEAM loader bit is set in the correct position
-    if [ "$((0x$tdx_cap_msr & 0x7))" -ne 0 ]; then
-        results+=("✓ SEAM loader enabled (MSR 0x982: $tdx_cap_msr)")
+    if dmesg | grep -q "virt/tdx: module initialized" && \
+       dmesg | grep -q "virt/tdx: BIOS enabled"; then
+        results+=("${SUCCESS} SEAM loader enabled and functioning${NC}")
+        local tdx_cap_msr=$(rdmsr -X 0x982 2>/dev/null || echo "0")
+        results+=("  MSR 0x982: ${tdx_cap_msr} (for reference only)")
     else
-        results+=("✗ SEAM loader not enabled (MSR 0x982: $tdx_cap_msr)")
+        results+=("${FAILURE} SEAM loader not enabled or not functioning properly${NC}")
         results+=("  Required: Enable SEAM Loader in BIOS")
         all_passed=false
     fi
 
     results+=("TDX Settings:")
-    if dmesg | grep -q "INTEL-TDX:" || \
-       [ -d "/sys/module/tdx" ] || \
-       [ "$(rdmsr -f 0:0 0x982 2>/dev/null)" != "0" ]; then
-        results+=("✓ TDX supported and initialized")
-        # Check PAMT allocation if available
+    if dmesg | grep -q "virt/tdx: BIOS enabled"; then
+        results+=("${SUCCESS} TDX supported and initialized${NC}")
+        
         local pamt_alloc=$(dmesg | grep -i "KB allocated for PAMT" || echo "")
         if [ ! -z "$pamt_alloc" ]; then
-            results+=("✓ PAMT allocation successful: $(echo $pamt_alloc | grep -o '[0-9]* KB')")
+            results+=("${SUCCESS} PAMT allocation successful: $(echo $pamt_alloc | grep -o '[0-9]* KB')${NC}")
+        fi
+        
+        if dmesg | grep -q "virt/tdx: module initialized"; then
+            results+=("${SUCCESS} TDX module initialized${NC}")
         fi
     else
-        results+=("✗ TDX not properly configured on host")
+        results+=("${FAILURE} TDX not properly configured on host${NC}")
         results+=("  Required: Enable TDX in BIOS")
         all_passed=false
     fi
     
     # Check if tdx kernel module is loaded
     if [ -e "/sys/firmware/acpi/tables/TDEL" ] && ! lsmod | grep -q "^tdx"; then
-        results+=("✗ TDX kernel module not loaded")
+        results+=("${FAILURE} TDX kernel module not loaded${NC}")
         all_passed=false
     fi
-    
-    # Check for TD_ENABLE bit in IA32_FEAT_CTL MSR (0x3A)
-    if ! rdmsr -f 8:8 0x3A 2>/dev/null | grep -q "1"; then
-        results+=("✗ TDX not enabled in IA32_FEAT_CTL MSR")
-        all_passed=false
-    fi
-    
+        
     # Configuration requirements section remains unchanged
-    results+=("Required BIOS Configuration:")
-    results+=("• Memory Encryption:")
+    results+=("${YELLOW}Required BIOS Configuration:${NC}")
+    results+=("• Core Security:")
+    results+=("  - CPU PA: Limit to 46 bits Disable")
+    results+=("  - TXT: Enable")
+    results+=("  - SGX: Enable")
+    results+=("  - SMT: Enable")
+    results+=("• Memory Protection:")
     results+=("  - TME: Enable")
     results+=("  - TME Multi-Tenant: Enable")
-    results+=("  - TME-MT keys: 31")
-    results+=("  - Key split: 1")
-    results+=("• TDX/TXT/SEAM:")
+    results+=("  - KeyIDs configuration: Present")
+    results+=("• TDX Components:")
     results+=("  - TDX: Enable")
-    results+=("  - TXT: Enable")
     results+=("  - SEAM Loader: Enable")
-    results+=("  - TDX keys: 32")
 
     print_section_header "Status"
-    printf '%s\n' "${results[@]}"
-
+    for result in "${results[@]}"; do
+        echo -e "$result"
+    done
     if [ "$all_passed" = true ]; then
-        echo -e "\n✓ All settings properly configured"
+        echo -e "\n${SUCCESS} All settings properly configured${NC}"
         return 0
     else
-        echo -e "\n✗ Some settings need attention"
+        echo -e "\n${FAILURE} Some settings need attention${NC}"
         return 1
     fi
 }
 
 check_bios_settings() {
     echo "Performing comprehensive BIOS configuration check..."
+    echo "Installing components..."
+    apt-get update && apt-get install -y msr-tools cpuid tboot
     
-    # Install msr-tools if not present
-    if ! command -v rdmsr &> /dev/null; then
-        echo "Installing msr-tools..."
-        apt-get update && apt-get install -y msr-tools cpuid
-    fi
-
     # Load the msr module if not loaded
     if ! lsmod | grep -q "^msr"; then
         echo "Loading MSR module..."

@@ -146,7 +146,7 @@ install_debs() {
     fi
     
     # Install dependencies
-    apt update && DEBIAN_FRONTEND=noninteractive apt install -y libslirp0 s3cmd
+    apt update && DEBIAN_FRONTEND=noninteractive apt install -y libslirp0
     
     # Install kernel headers first
     echo "Installing kernel headers..."
@@ -224,39 +224,9 @@ setup_grub() {
         cp /etc/default/grub "/etc/default/grub.backup.$(date +%Y%m%d_%H%M%S)"
     fi
 
-    # First update GRUB to ensure grub.cfg is current
-    update-grub2 || update-grub
-
-    # Find exact menu entry for the new kernel
-    local grub_cfg="/boot/grub/grub.cfg"
-    if [ ! -f "$grub_cfg" ]; then
-        echo "ERROR: GRUB configuration file not found"
-        return 1
-    fi
-
-    # Get submenu and menu entry names exactly as they appear
-    local submenu_line=$(grep -B1 "menuentry '.*${new_kernel}'" "$grub_cfg" | grep "submenu '" | head -n1)
-    local menu_line=$(grep "menuentry '.*${new_kernel}'" "$grub_cfg" | grep -v "recovery mode" | head -n1)
-    
-    if [ -z "$menu_line" ]; then
-        echo "ERROR: Could not find menu entry for kernel ${new_kernel}"
-        return 1
-    fi
-
-    # Extract the exact names
-    local submenu_name=$(echo "$submenu_line" | grep -o "submenu '.*'" | cut -d "'" -f 2)
-    local menu_name=$(echo "$menu_line" | grep -o "menuentry '.*'" | cut -d "'" -f 2)
-    
-    # Construct the full menu path
-    local full_path="\"${submenu_name}>${menu_name}\""
-    
-    echo "Found menu path: $full_path"
-    
-    # Remove any existing GRUB_DEFAULT settings
+    # Directly set the first menuentry as default since it's our new kernel
     sed -i '/^GRUB_DEFAULT=/d' /etc/default/grub
-    
-    # Add our GRUB_DEFAULT setting at the beginning of the file
-    echo "GRUB_DEFAULT=$full_path" > /etc/default/grub.new
+    echo 'GRUB_DEFAULT=0' > /etc/default/grub.new
     cat /etc/default/grub >> /etc/default/grub.new
     mv /etc/default/grub.new /etc/default/grub
     
@@ -269,35 +239,57 @@ setup_grub() {
         fi
     fi
     
-    # Set menu visibility and timeout for reliability
+    # Force menu to always show and set reasonable timeout
     sed -i 's/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=menu/' /etc/default/grub
-    sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=1/' /etc/default/grub
+    sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=5/' /etc/default/grub
+    
+    # Remove any hidden timeout settings
+    sed -i '/^GRUB_HIDDEN_TIMEOUT=/d' /etc/default/grub
+    
+    # Ensure GRUB_RECORDFAIL_TIMEOUT is set
+    if ! grep -q '^GRUB_RECORDFAIL_TIMEOUT=' /etc/default/grub; then
+        echo 'GRUB_RECORDFAIL_TIMEOUT=5' >> /etc/default/grub
+    fi
+
+    # Create a custom configuration file to ensure our kernel is first
+    echo "# Custom kernel order configuration" > /etc/default/grub.d/99-tdx-kernel.cfg
+    echo "GRUB_DEFAULT=0" >> /etc/default/grub.d/99-tdx-kernel.cfg
     
     # Force regeneration of grub.cfg and initramfs
     update-initramfs -u -k "${new_kernel}"
     update-grub2 || update-grub
 
+    # For UEFI systems, ensure the boot entry is updated
+    if [ -d /sys/firmware/efi ]; then
+        if command -v efibootmgr >/dev/null 2>&1; then
+            # Get the current boot order
+            current_order=$(efibootmgr | grep BootOrder: | cut -d: -f2 | tr -d ' ')
+            
+            # Get Ubuntu's boot entry
+            ubuntu_entry=$(efibootmgr | grep -i ubuntu | grep -v -i windows | head -n1 | cut -c5-8)
+            
+            if [ -n "$ubuntu_entry" ] && [ -n "$current_order" ]; then
+                # Move Ubuntu's entry to the front if it's not already there
+                if [ "${current_order:0:4}" != "$ubuntu_entry" ]; then
+                    new_order="${ubuntu_entry},${current_order}"
+                    efibootmgr -o "${new_order}"
+                fi
+            fi
+        fi
+    fi
+
     # Use both grub-set-default and grub-reboot for maximum reliability
     if command -v grub-set-default >/dev/null 2>&1; then
-        grub-set-default "$full_path"
+        grub-set-default 0
         echo "Set default boot entry using grub-set-default"
     fi
 
     if command -v grub-reboot >/dev/null 2>&1; then
-        grub-reboot "$full_path"
+        grub-reboot 0
         echo "Set next boot entry using grub-reboot"
     fi
 
-    # Verify our changes
-    echo "Verifying GRUB configuration..."
-    if ! grep -q "^GRUB_DEFAULT=$full_path" /etc/default/grub; then
-        echo "ERROR: Failed to set GRUB_DEFAULT properly"
-        return 1
-    fi
-
     echo "GRUB configuration completed successfully for kernel ${new_kernel}"
-    echo "Menu entry: $full_path"
-    
     return 0
 }
 
@@ -327,9 +319,9 @@ setup_nvidia_gpus() {
   tee /etc/modprobe.d/blacklist-nvidia.conf << EOF
 blacklist nvidia
 blacklist nvidia_drm
+blacklist nouveau
 blacklist nvidia_uvm
 blacklist nvidia_modeset
-blacklist nouveau
 EOF
 
   # Remove Nouveau from modules if present
@@ -347,11 +339,24 @@ EOF
   echo "$gpu_list"
 
   # enable cc mode
+  sudo rm -rf "${TMP_DIR}/gpu-admin-tools" 2>/dev/null || true
   git clone -b v2024.08.09 --single-branch --depth 1 --no-tags https://github.com/NVIDIA/gpu-admin-tools.git "${TMP_DIR}/gpu-admin-tools"
   pushd "${TMP_DIR}/gpu-admin-tools"
-  AVAILABLE_GPUS=$(echo ${gpu_list} | awk '{print $1}')
+
+  nvswitch_list=$(lspci -nnk -d 10de: | grep -E 'NVSwitch' || true)
+  if [ -n "$nvswitch_list" ]; then
+    echo "Found NVSwitch devices:"
+    echo "$nvswitch_list"
+    
+    for nvswitch in $(echo "$nvswitch_list" | awk '{print $1}'); do
+      echo "Configuring NVSwitch ${nvswitch}"
+      python3 ./nvidia_gpu_tools.py --gpu-bdf=${nvswitch} --query-module-name
+    done
+  fi
+
+  AVAILABLE_GPUS=$(echo "$gpu_list" | awk '{print $1}' | tr '\n' ' ')
   for gpu in $AVAILABLE_GPUS; do
-    echo "Enable CC mode for ${gpu}"
+    echo "Enable CC mode for ${gpu} with NVSwitch support"
     python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu} --set-cc-mode=on --reset-after-cc-mode-switch
     if [ $? -ne 0 ]; then
       echo "Failed to enable cc-mode for GPU ${gpu}"
@@ -361,6 +366,10 @@ EOF
   popd
 
   new_pci_ids=$(echo "$gpu_list" | grep -oP '\[\K[0-9a-f]{4}:[0-9a-f]{4}(?=\])' | sort -u | tr '\n' ',' | sed 's/,$//')
+  if [ -z "$new_pci_ids" ]; then
+      echo "No PCI IDs found for NVIDIA GPUs!"
+      exit 1
+  fi
 
   existing_pci_ids=""
   if [ -f /etc/modprobe.d/vfio.conf ]; then
@@ -397,42 +406,23 @@ EOF
 
 download_latest_release() {
   # Check and install required tools
-  if ! command -v curl &> /dev/null || ! command -v git &> /dev/null; then
-    apt-get update && apt-get install -y curl git || return 1
+  if ! command -v curl &> /dev/null || ! command -v jq &> /dev/null; then
+    apt-get update && apt-get install -y curl jq || return 1
   fi
-  
+
   # Form file name and paths
-  SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
-  
-  # Create temporary directory for download
-  TMP_DOWNLOAD=$(mktemp -d)
-  pushd "${TMP_DOWNLOAD}" > /dev/null
+  SCRIPT_DIR=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 
-  # Clone repository to get tags info
-  if ! git clone -q --filter=blob:none --no-checkout https://github.com/Super-Protocol/sp-vm-tools.git; then
-    echo "Failed to access repository" >&2
-    popd > /dev/null
-    rm -rf "${TMP_DOWNLOAD}"
-    return 1
-  fi
-
-  cd sp-vm-tools
-  
   # Get latest tag
-  LATEST_TAG=$(git describe --tags $(git rev-list --tags --max-count=1 2>/dev/null) 2>/dev/null)
-  if [ -z "${LATEST_TAG}" ]; then
+  LATEST_TAG=$(curl -s https://api.github.com/repos/Super-Protocol/sp-vm-tools/releases/latest | jq -r '.tag_name')
+  if [[ -z "${LATEST_TAG}" ]]; then
     echo "No tags found in repository" >&2
-    popd > /dev/null
-    rm -rf "${TMP_DOWNLOAD}"
     return 1
   fi
 
   # Form file name
   ARCHIVE_NAME="package_${LATEST_TAG}.tar.gz"
   ARCHIVE_PATH="${SCRIPT_DIR}/${ARCHIVE_NAME}"
-  
-  popd > /dev/null
-  rm -rf "${TMP_DOWNLOAD}"
 
   # Check if file already exists
   if [ -f "${ARCHIVE_PATH}" ]; then
@@ -440,22 +430,34 @@ download_latest_release() {
     return 0
   fi
 
-  DOWNLOAD_URL="https://github.com/Super-Protocol/sp-vm-tools/releases/download/${LATEST_TAG}/package.tar.gz"
-  
-  echo "Downloading version ${LATEST_TAG}..." >&2
+  DOWNLOAD_URLS=(
+  "https://github.com/Super-Protocol/sp-vm-tools/releases/download/${LATEST_TAG}/package.tar.gz"
+  "https://github.com/Super-Protocol/sp-vm-tools/releases/download/${LATEST_TAG}/package-tdx.tar.gz"
+  )
 
-  # Download archive directly to target directory
-  if ! curl -L -o "${ARCHIVE_PATH}" "${DOWNLOAD_URL}"; then
-    echo "Failed to download release" >&2
+  echo "Downloading version ${LATEST_TAG}..." >&2
+  
+  DOWNLOAD_SUCCESS=false
+  for URL in "${DOWNLOAD_URLS[@]}"; do
+  echo "Trying to download from ${URL}..." >&2
+  if curl -f -L -o "${ARCHIVE_PATH}" "${URL}"; then
+    echo "Successfully downloaded from ${URL}" >&2
+    DOWNLOAD_SUCCESS=true
+    break
+  else
+    echo "Failed to download from ${URL}" >&2
+  fi
+  done
+
+  if ! $DOWNLOAD_SUCCESS; then
+    echo "Failed to download release from all URLs" >&2
     rm -f "${ARCHIVE_PATH}"
     return 1
   fi
 
-  echo "Successfully downloaded ${ARCHIVE_NAME}" >&2
-  
   # Return the path only if everything was successful
   printf "%s" "${ARCHIVE_PATH}"
-  return 0  
+  return 0
 }
 
 check_os_version() {
