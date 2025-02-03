@@ -24,7 +24,7 @@ jobs:
           submodules: recursive
 
 
-      - name: Set build type
+      - name: Set build type and runner ID
         id: set-build-type
         run: | 
           echo "BUILD_TYPE=${{ github.event.inputs.build_type }}" >> $GITHUB_ENV

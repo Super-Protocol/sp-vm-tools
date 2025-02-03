@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 build_kernel_packages() {
     local build_dir=$1
@@ -131,9 +132,14 @@ build_qemu() {
 build_snphost() {
     local build_dir=$1
     local root_dir=$2
+    
     cp -fvr ${root_dir}/sources/amd/snphost ${build_dir}/
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    curl --proto '=https' --tlsv1.2 -sSf -o rustup-init.sh https://sh.rustup.rs
+    chmod +x rustup-init.sh
+    ./rustup-init.sh -y --default-toolchain 1.83.0
+    rm rustup-init.sh
     source "$HOME/.cargo/env"
+
     pushd ${build_dir}/snphost
     cargo build -r
 }
@@ -157,10 +163,10 @@ packaging() {
 build_main() {
 
     local scripts_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-    local root_dir=${scripts_dir}/../
-    local build_dir=${scripts_dir}/../build/snp
+    local root_dir="${scripts_dir}/../"
+    local build_dir="${scripts_dir}/../build/snp"
 
-    source ${root_dir}/sources/amd/AMDSEV/stable-commits
+    source "${root_dir}/sources/amd/AMDSEV/stable-commits"
 
     rm -rf ${build_dir}
     mkdir -p ${build_dir}
@@ -175,9 +181,10 @@ build_main() {
     config_file_abs=$(readlink -f "${config_file}")
     popd
 
-    build_kernel_packages ${build_dir} ${config_file_abs}
-    build_qemu ${build_dir}
-    build_ovmf ${build_dir}
-    build_snphost ${build_dir} ${root_dir}
-    packaging ${build_dir} ${root_dir}
+    build_kernel_packages "${build_dir}" "${config_file_abs}" || { echo "Error in build_kernel_packages"; exit 1; }
+    build_qemu "${build_dir}" || { echo "Error in build_qemu"; exit 1; }
+    build_ovmf "${build_dir}" || { echo "Error in build_ovmf"; exit 1; }
+    build_snphost "${build_dir}" "${root_dir}" || { echo "Error in build_snphost"; exit 1; }
+    packaging "${build_dir}" "${root_dir}" || { echo "Error in packaging"; exit 1; }
+
 }

@@ -114,8 +114,8 @@ packaging() {
 
 build_main() {
     local scripts_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-    local root_dir=${scripts_dir}/../
-    local build_dir=${scripts_dir}/../build/tdx
+    local root_dir="${scripts_dir}/../"
+    local build_dir="${scripts_dir}/../build/tdx"
 
     rm -rf ${build_dir}
     mkdir -p ${build_dir}
