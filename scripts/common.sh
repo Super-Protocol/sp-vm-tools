@@ -15,85 +15,102 @@ print_section_header() {
 }
 
 setup_nvidia_gpus() {
-    TMP_DIR=$1
+  TMP_DIR=$1
 
-    echo "Checking for NVIDIA GPUs..."
-    if ! command -v lspci >/dev/null; then
-        echo "lspci not found, skipping NVIDIA GPU configuration"
-        return 0
-    fi
+  echo "Checking for NVIDIA GPUs..."
+  if ! command -v lspci >/dev/null; then
+    echo "lspci not found, skipping NVIDIA GPU configuration"
+    return 0
+  fi
 
-    # Blacklist both NVIDIA and Nouveau drivers
-    echo "Blacklisting NVIDIA and Nouveau drivers..."
-    tee /etc/modprobe.d/blacklist-nvidia.conf << EOF
+  # Blacklist both NVIDIA and Nouveau drivers
+  echo "Blacklisting NVIDIA and Nouveau drivers..."
+  tee /etc/modprobe.d/blacklist-nvidia.conf << EOF
 blacklist nvidia
 blacklist nvidia_drm
+blacklist nouveau
 blacklist nvidia_uvm
 blacklist nvidia_modeset
-blacklist nouveau
 EOF
 
-    # Remove Nouveau from modules if present
-    sed -i '/nouveau/d' /etc/modules
+  # Remove Nouveau from modules if present
+  sed -i '/nouveau/d' /etc/modules
 
-    echo "Determining PCI IDs for your NVIDIA GPU(s)..."
-    gpu_list=$(lspci -nnk -d 10de: | grep -E '3D controller' || true)
+  echo "Determining PCI IDs for your NVIDIA GPU(s)..."
+  gpu_list=$(lspci -nnk -d 10de: | grep -E '3D controller' || true)
 
-    if [ -z "$gpu_list" ]; then
+  if [ -z "$gpu_list" ]; then
     echo "No NVIDIA GPU found, skipping configuration"
     return 0
-    fi
+  fi
 
-    echo "The following NVIDIA GPUs were found:"
-    echo "$gpu_list"
+  echo "The following NVIDIA GPUs were found:"
+  echo "$gpu_list"
 
-    # enable cc mode
-    git clone -b v2024.08.09 --single-branch --depth 1 --no-tags https://github.com/NVIDIA/gpu-admin-tools.git "${TMP_DIR}/gpu-admin-tools"
-    pushd "${TMP_DIR}/gpu-admin-tools"
-    AVAILABLE_GPUS=$(echo ${gpu_list} | awk '{print $1}')
-    for gpu in $AVAILABLE_GPUS; do
-    echo "Enable CC mode for ${gpu}"
+  # enable cc mode
+  sudo rm -rf "${TMP_DIR}/gpu-admin-tools" 2>/dev/null || true
+  git clone -b v2024.08.09 --single-branch --depth 1 --no-tags https://github.com/NVIDIA/gpu-admin-tools.git "${TMP_DIR}/gpu-admin-tools"
+  pushd "${TMP_DIR}/gpu-admin-tools"
+
+  nvswitch_list=$(lspci -nnk -d 10de: | grep -E 'NVSwitch' || true)
+  if [ -n "$nvswitch_list" ]; then
+    echo "Found NVSwitch devices:"
+    echo "$nvswitch_list"
+    
+    for nvswitch in $(echo "$nvswitch_list" | awk '{print $1}'); do
+      echo "Configuring NVSwitch ${nvswitch}"
+      python3 ./nvidia_gpu_tools.py --gpu-bdf=${nvswitch} --query-module-name
+    done
+  fi
+
+  AVAILABLE_GPUS=$(echo "$gpu_list" | awk '{print $1}' | tr '\n' ' ')
+  for gpu in $AVAILABLE_GPUS; do
+    echo "Enable CC mode for ${gpu} with NVSwitch support"
     python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu} --set-cc-mode=on --reset-after-cc-mode-switch
     if [ $? -ne 0 ]; then
-        echo "Failed to enable cc-mode for GPU ${gpu}"
-        exit 1
+      echo "Failed to enable cc-mode for GPU ${gpu}"
+      exit 1
     fi
-    done
-    popd
+  done
+  popd
 
-    new_pci_ids=$(echo "$gpu_list" | grep -oP '\[\K[0-9a-f]{4}:[0-9a-f]{4}(?=\])' | sort -u | tr '\n' ',' | sed 's/,$//')
+  new_pci_ids=$(echo "$gpu_list" | grep -oP '\[\K[0-9a-f]{4}:[0-9a-f]{4}(?=\])' | sort -u | tr '\n' ',' | sed 's/,$//')
+  if [ -z "$new_pci_ids" ]; then
+      echo "No PCI IDs found for NVIDIA GPUs!"
+      exit 1
+  fi
 
-    existing_pci_ids=""
-    if [ -f /etc/modprobe.d/vfio.conf ]; then
-        existing_pci_ids=$(grep -oP '(?<=ids=)[^ ]+' /etc/modprobe.d/vfio.conf | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
-    fi
+  existing_pci_ids=""
+  if [ -f /etc/modprobe.d/vfio.conf ]; then
+    existing_pci_ids=$(grep -oP '(?<=ids=)[^ ]+' /etc/modprobe.d/vfio.conf | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+  fi
 
-    if [ -n "$existing_pci_ids" ]; then
-        combined_pci_ids=$(echo -e "${existing_pci_ids}\n${new_pci_ids}" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+  if [ -n "$existing_pci_ids" ]; then
+    combined_pci_ids=$(echo -e "${existing_pci_ids}\n${new_pci_ids}" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+  else
+    combined_pci_ids="$new_pci_ids"
+  fi
+
+  echo "Updating kernel module for VFIO-PCI with IDs: $combined_pci_ids"
+  sudo bash -c "echo 'options vfio-pci ids=$combined_pci_ids' > /etc/modprobe.d/vfio.conf"
+
+  echo "Ensuring the VFIO-PCI module is added to /etc/modules-load.d/vfio-pci.conf..."
+  if [ ! -f /etc/modules-load.d/vfio-pci.conf ]; then
+    sudo bash -c "echo 'vfio-pci' > /etc/modules-load.d/vfio-pci.conf"
+    echo "Created /etc/modules-load.d/vfio-pci.conf and added 'vfio-pci' module."
+  else
+    if ! grep -q '^vfio-pci$' /etc/modules-load.d/vfio-pci.conf; then
+      sudo bash -c "echo 'vfio-pci' >> /etc/modules-load.d/vfio-pci.conf"
+      echo "'vfio-pci' module added to /etc/modules-load.d/vfio-pci.conf."
     else
-        combined_pci_ids="$new_pci_ids"
+      echo "'vfio-pci' module is already present in /etc/modules-load.d/vfio-pci.conf."
     fi
+  fi
 
-    echo "Updating kernel module for VFIO-PCI with IDs: $combined_pci_ids"
-    sudo bash -c "echo 'options vfio-pci ids=$combined_pci_ids' > /etc/modprobe.d/vfio.conf"
+  echo "Regenerating kernel initramfs..."
+  sudo update-initramfs -u
 
-    echo "Ensuring the VFIO-PCI module is added to /etc/modules-load.d/vfio-pci.conf..."
-    if [ ! -f /etc/modules-load.d/vfio-pci.conf ]; then
-        sudo bash -c "echo 'vfio-pci' > /etc/modules-load.d/vfio-pci.conf"
-        echo "Created /etc/modules-load.d/vfio-pci.conf and added 'vfio-pci' module."
-    else
-        if ! grep -q '^vfio-pci$' /etc/modules-load.d/vfio-pci.conf; then
-            sudo bash -c "echo 'vfio-pci' >> /etc/modules-load.d/vfio-pci.conf"
-            echo "'vfio-pci' module added to /etc/modules-load.d/vfio-pci.conf."
-        else
-            echo "'vfio-pci' module is already present in /etc/modules-load.d/vfio-pci.conf."
-        fi
-    fi
-
-    echo "Regenerating kernel initramfs..."
-    sudo update-initramfs -u
-
-    echo "VFIO-PCI setup is complete."
+  echo "VFIO-PCI setup is complete."
 }
 
 detect_raid_config() {
@@ -167,7 +184,7 @@ setup_raid_modules() {
 get_kernel_version() {
     local deb_file="$1"
     local version=""
-    local basename_file=$(basename "$deb_file")
+    local basename_file="$(basename "$deb_file")"
 
     # Method 1: Extract from linux-image-VERSION_something format
     if [[ $basename_file =~ linux-image-([0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+\+) ]]; then
@@ -281,6 +298,7 @@ check_os_version() {
     fi
 }
 
+# Main installation function
 install_debs() {
     local DEB_DIR="$1"
     echo "Checking current kernel installation..."

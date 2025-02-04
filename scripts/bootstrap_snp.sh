@@ -6,7 +6,6 @@ source_common() {
     source "${script_dir}/common.sh"
 }
 
-
 update_snp_firmware() {
     TMP_DIR=$1
     local model=$2
@@ -78,7 +77,7 @@ bootstrap() {
     ARCHIVE_PATH=""
     if [ "$#" -ne 1 ]; then
         echo "No archive provided, downloading latest release..."
-        ARCHIVE_PATH=$(download_latest_release snp) || {
+        ARCHIVE_PATH=$(download_latest_release "snp") || {
             echo "Failed to download release"
             exit 1
         }
