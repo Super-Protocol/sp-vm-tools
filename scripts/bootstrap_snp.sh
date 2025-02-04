@@ -2,8 +2,8 @@
 set -e
 
 source_common() {
-    local script_dir=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
-    source ${script_dir}/common.sh
+    local script_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+    source "${script_dir}/common.sh"
 }
 
 
@@ -116,7 +116,7 @@ bootstrap() {
 
     print_section_header "SNP Firmware Update"
     echo "Updating SNP firmware..."
-    update_snp_firmware "${TMP_DIR}" ${AMD_GEN}
+    update_snp_firmware "${TMP_DIR}" "${AMD_GEN}"
 
     # Check if kernel was actually installed
     print_section_header "System State Check"
@@ -183,5 +183,5 @@ source_common
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
   echo "Script was sourced"
 else
-  bootstrap $@
+  bootstrap "$@"
 fi

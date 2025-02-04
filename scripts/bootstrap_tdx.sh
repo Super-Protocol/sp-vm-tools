@@ -2,7 +2,7 @@
 set -e
 
 source_common() {
-    local script_dir=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+    local script_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
     source ${script_dir}/common.sh
 }
 
