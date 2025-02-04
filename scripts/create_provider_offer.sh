@@ -177,14 +177,14 @@ get_max_network_speed() {
     echo $max_speed
 }
 
-# Function to extract GPU VRAM size
-extract_gpu_vram() {
-    local gpu_info=$1
-    if [[ $gpu_info =~ ([0-9]+)GB ]]; then
+get_gpu_memory_from_name() {
+    local gpu_name=$1
+    # Try to extract memory size from GPU name (e.g., "H200 SXM 141GB" or "H100 PCIe 80GB")
+    if [[ $gpu_name =~ [^0-9]([0-9]+)GB ]]; then
         echo "${BASH_REMATCH[1]}"
-    else
-        echo "0"  # Return 0 if no GB value found
+        return 0
     fi
+    return 1
 }
 
 # Function to get CPU frequency in GHz
@@ -299,6 +299,8 @@ vram_bytes=0
 gpu_cores=0
 gpu_info=""
 gpu_name=""
+gpu_count=0
+gpu_description=""
 
 # First, ensure lspci is installed
 if ! command -v lspci &> /dev/null; then
@@ -306,15 +308,35 @@ if ! command -v lspci &> /dev/null; then
     sudo apt update && sudo apt install -y pciutils
 fi
 
-# Simple GPU detection using only lspci
-gpu_info=$(lspci | grep -i "nvidia" | head -n 1)
-if [ ! -z "$gpu_info" ]; then
+# Get list of NVIDIA GPUs
+gpu_list=$(lspci -nnk -d 10de: | grep -E '3D controller' || true)
+if [ ! -z "$gpu_list" ]; then
     gpu_present=1
-    gpu_cores=1
-    gpu_name=$(extract_gpu_name "$gpu_info")
-    vram_gb=$(extract_gpu_vram "$gpu_info")
-    vram_bytes=$(to_bytes "$vram_gb")
-    echo "Detected GPU: $gpu_info with ${vram_gb}GB VRAM"
+    gpu_cores=$(echo "$gpu_list" | wc -l)
+    
+    # Get first GPU info for name
+    first_gpu=$(echo "$gpu_list" | head -n 1)
+    first_gpu_id=$(echo "$first_gpu" | cut -d' ' -f1)
+    
+    # Get full GPU name from lspci
+    gpu_info=$(lspci -v -s "$first_gpu_id" | grep "NVIDIA Corporation")
+    if [ ! -z "$gpu_info" ]; then
+        # Extract full name including "NVIDIA Corporation"
+        gpu_name=$(echo "$gpu_info" | sed -n 's/.*\(NVIDIA Corporation.*\[[^]]*\]\).*/\1/p' | sed 's/[[:space:]]*$//')
+    fi
+    
+    # Get VRAM size from GPU name
+    vram_gb=$(get_gpu_memory_from_name "$gpu_info")
+    if [ $? -eq 0 ] && [ $vram_gb -gt 0 ]; then
+        total_vram_gb=$((vram_gb * gpu_cores))
+        vram_bytes=$(to_bytes "$total_vram_gb")
+    fi
+    
+    # Format GPU description with new format
+    gpu_description="GPUs: ${gpu_cores} x ${gpu_name}"
+    
+    echo "$gpu_description"
+    echo "Total VRAM: $((vram_bytes / 1024 / 1024 / 1024))GB"
 else
     echo "No NVIDIA GPU detected"
 fi
@@ -335,7 +357,7 @@ network_speed_gbps=$(calc "$network_speed / 1000")
 
 # Create description in English with CPU frequency
 if [ $gpu_present -eq 1 ]; then
-    description="CPU: $cpu_model${freq_text}, $adjusted_cores cores, $adjusted_ram_gb GB ${ram_type}, GPU: $gpu_name, $adjusted_disk_gb GB ${disk_type}, ${network_speed_gbps} Gbps network"
+    description="CPU: $cpu_model${freq_text}, $adjusted_cores cores, $adjusted_ram_gb GB ${ram_type}, $gpu_description, $adjusted_disk_gb GB ${disk_type}, ${network_speed_gbps} Gbps network"
 else
     description="CPU: $cpu_model${freq_text}, $adjusted_cores cores, $adjusted_ram_gb GB ${ram_type}, $adjusted_disk_gb GB ${disk_type}, ${network_speed_gbps} Gbps network"
 fi

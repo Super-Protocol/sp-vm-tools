@@ -1,4 +1,15 @@
 #!/bin/bash
+set -e
+
+# Add error handler
+trap 'exit_handler $? $LINENO' ERR
+
+exit_handler() {
+    local exit_code=$1
+    local line_number=$2
+    echo "Error on line $line_number: Command exited with status $exit_code"
+    exit $exit_code
+}
 
 # Default values
 SCRIPT_DIR=$( cd "$( dirname "$0" )" && pwd )
@@ -15,6 +26,7 @@ DEFAULT_CACHE="${HOME}/.cache/superprotocol" # Default cache path
 DEFAULT_MOUNT_CONFIG="/sp"
 
 DEFAULT_SSH_PORT=2222
+DEFAULT_GUEST_CID=3
 
 LOG_FILE=""
 DEFAULT_MAC_PREFIX="52:54:00:12:34"
@@ -22,9 +34,10 @@ DEFAULT_MAC_SUFFIX="56"
 QEMU_PATH=""
 DEFAULT_DEBUG=false
 DEFAULT_ARGO_BRANCH="main"
+DEFAULT_ARGO_SP_ENV="main"
 
-TDX_SUPPORT=$(lscpu | grep -i tdx)
-SEV_SUPPORT=$(lscpu | grep -i sev)
+TDX_SUPPORT=$(lscpu | grep -i tdx || echo "")
+SEV_SUPPORT=$(lscpu | grep -i sev || echo "")
 
 # Default mode
 DEFAULT_MODE="untrusted"  # Can be "untrusted", "tdx", or "sev"
@@ -68,8 +81,10 @@ usage() {
     echo "  --log_file <file>            Log file (default: no)"
     echo "  --debug <true|false>         Enable debug mode (default: ${DEFAULT_DEBUG})"
     echo "  --argo_branch <name>         Name of argo branch for init SP components (default: ${DEFAULT_ARGO_BRANCH})"
+    echo "  --argo_sp_env <name>         Name of argo environment for init SP components (default: ${DEFAULT_ARGO_SP_ENV})"
     echo "  --release <name>             Release name (default: latest)"
     echo "  --mode <mode>                VM mode: untrusted, tdx, sev (default: ${DEFAULT_MODE})"
+    echo "  --guest-cid <id>             Guest CID for vsock (default: ${DEFAULT_GUEST_CID})"
     echo ""
 }
 
@@ -77,6 +92,7 @@ usage() {
 VM_CPU=${DEFAULT_CORES}
 VM_RAM=${DEFAULT_MEM}
 USED_GPUS=() # List of used GPUs (to be filled dynamically)
+GUEST_CID=${DEFAULT_GUEST_CID}
 CACHE=${DEFAULT_CACHE}
 STATE_DISK_PATH=""
 STATE_DISK_SIZE=0
@@ -85,6 +101,7 @@ PROVIDER_CONFIG=""
 MOUNT_CONFIG=${DEFAULT_MOUNT_CONFIG}
 DEBUG_MODE=${DEFAULT_DEBUG}
 ARGO_BRANCH=${DEFAULT_ARGO_BRANCH}
+ARGO_SP_ENV=${DEFAULT_ARGO_SP_ENV}
 RELEASE=""
 RELEASE_FILEPATH=""
 
@@ -114,8 +131,10 @@ parse_args() {
             --log_file) LOG_FILE=$2; shift ;;
             --debug) DEBUG_MODE=$2; shift ;;
             --argo_branch) ARGO_BRANCH=$2; shift ;;
+            --argo_sp_env) ARGO_SP_ENV=$2; shift ;;
             --release) RELEASE=$2; shift ;;
             --mode) VM_MODE=$2; shift ;;
+            --guest-cid) GUEST_CID=$2; shift ;;
             --help) usage; exit 0;;
             *) echo "Unknown parameter: $1"; usage ; exit 1 ;;
         esac
@@ -258,7 +277,7 @@ parse_and_download_release_files() {
        fi
 
        echo "Downloading $filename from sj://$bucket/$prefix/$filename to $local_path..."
-       uplink cp --parallelism 8 --parallelism-chunk-size 32M --progress --access ${STORJ_TOKEN} "sj://$bucket/$prefix/$filename" "$local_path"
+       uplink cp --parallelism 16 --progress --access ${STORJ_TOKEN} "sj://$bucket/$prefix/$filename" "$local_path"
 
        if [ $? -ne 0 ]; then
            echo "Error: Failed to download $filename"
@@ -320,67 +339,199 @@ check_packages() {
     fi
 }
 
+prepare_gpus_for_vfio() {
+    local gpu_ids=("$@")
+    
+    # Detect NVSwitch devices
+    local nvswitch_ids=($(lspci -mm -n -d 10de:22a3 | cut -d' ' -f1))
+    echo "Debug: Found NVSwitch devices: ${nvswitch_ids[@]}"
+    
+    echo "Unloading NVIDIA modules..."
+    modprobe -r nvidia_uvm nvidia_drm nvidia_modeset nvidia || true
+    
+    echo "Loading VFIO modules..."
+    modprobe vfio
+    modprobe vfio-pci
+    
+    # Function to bind device to vfio-pci
+    bind_to_vfio() {
+        local device=$1
+        local device_type=$2
+        
+        echo "Preparing $device_type $device for VFIO passthrough"
+        
+        # Check current driver
+        local current_driver=$(lspci -k -s "$device" | grep "Kernel driver in use:" | awk '{print $5}')
+        echo "Current driver for $device_type $device: $current_driver"
+        
+        if [[ "$current_driver" != "vfio-pci" ]]; then
+            # If nvidia modules are still loaded, try to remove them
+            if [[ "$current_driver" == "nvidia" ]]; then
+                echo "Forcing removal of NVIDIA modules..."
+                rmmod -f nvidia_uvm nvidia_drm nvidia_modeset nvidia 2>/dev/null || true
+            fi
+            
+            # Unbind from current driver if bound
+            if [[ -e "/sys/bus/pci/devices/0000:$device/driver" ]]; then
+                echo "Unbinding from current driver"
+                echo "0000:$device" > /sys/bus/pci/devices/0000:$device/driver/unbind
+            fi
+            
+            # Add to vfio-pci
+            echo "Adding device to vfio-pci"
+            echo "vfio-pci" > /sys/bus/pci/devices/0000:$device/driver_override
+            echo "0000:$device" > /sys/bus/pci/drivers/vfio-pci/bind
+        else
+            echo "$device_type $device is already bound to vfio-pci"
+        fi
+        
+        # Verify binding
+        current_driver=$(lspci -k -s "$device" | grep "Kernel driver in use:" | awk '{print $5}')
+        if [[ "$current_driver" != "vfio-pci" ]]; then
+            echo "Error: Failed to bind $device_type $device to vfio-pci (current driver: $current_driver)"
+            exit 1
+        fi
+    }
+    
+    # Process GPUs
+    for gpu in "${gpu_ids[@]}"; do
+        bind_to_vfio "$gpu" "GPU"
+    done
+
+    # Process NVSwitch devices
+    for nvswitch in "${nvswitch_ids[@]}"; do
+        bind_to_vfio "$nvswitch" "NVSwitch"
+    done
+    
+    # Final verification
+    echo "Verifying device bindings..."
+    for gpu in "${gpu_ids[@]}"; do
+        current_driver=$(lspci -k -s "$gpu" | grep "Kernel driver in use:" | awk '{print $5}')
+        echo "GPU $gpu is using driver: $current_driver"
+    done
+    for nvswitch in "${nvswitch_ids[@]}"; do
+        current_driver=$(lspci -k -s "$nvswitch" | grep "Kernel driver in use:" | awk '{print $5}')
+        echo "NVSwitch $nvswitch is using driver: $current_driver"
+    done
+}
+
+validate_yaml_files() {
+    local dir="$1"
+    local has_errors=false
+    
+    # Check if python3 and PyYAML are installed
+    if ! command -v python3 &> /dev/null; then
+        echo "Error: python3 is required for YAML validation"
+        exit 1
+    fi
+    
+    if ! python3 -c "import yaml" &> /dev/null; then
+        echo "Installing PyYAML..."
+        apt-get update && apt-get install -y python3-yaml
+    fi
+    
+    # Create a temporary Python script for YAML validation
+    local tmp_script=$(mktemp)
+    cat > "$tmp_script" << 'EOF'
+import sys
+import yaml
+
+def validate_yaml(file_path):
+    try:
+        with open(file_path, 'r') as f:
+            yaml.safe_load(f)
+        return True
+    except yaml.YAMLError as e:
+        print(f"Error in {file_path}:")
+        print(e)
+        return False
+
+if __name__ == "__main__":
+    if not validate_yaml(sys.argv[1]):
+        sys.exit(1)
+EOF
+
+    # Find all yaml files recursively and validate each one
+    local yaml_files=$(find "$dir" -type f \( -name "*.yaml" -o -name "*.yml" \))
+    if [ -z "$yaml_files" ]; then
+        echo "No YAML files found in $dir"
+        rm "$tmp_script"
+        return 0
+    fi
+
+    echo "Validating YAML files in $dir..."
+    
+    while IFS= read -r file; do
+        echo "Checking $file..."
+        if ! python3 "$tmp_script" "$file"; then
+            has_errors=true
+            echo "❌ Invalid YAML: $file"
+        else
+            echo "✓ Valid YAML: $file"
+        fi
+    done <<< "$yaml_files"
+
+    # Cleanup
+    rm "$tmp_script"
+
+    if [ "$has_errors" = true ]; then
+        echo "YAML validation failed. Please fix the errors above."
+        return 1
+    fi
+    
+    echo "All YAML files are valid."
+    return 0
+}
+
 check_params() {
     # Collect system info
     TOTAL_CPUS=$(nproc)
     TOTAL_RAM=$(free -g | awk '/^Mem:/{print $2}')
-    USED_CPUS=0  # Add logic to calculate used CPUs by VM
-    USED_RAM=0   # Add logic to calculate used RAM by VM
-    AVAILABLE_GPUS=$(lspci -nnk -d 10de: | grep -E '3D controller' | awk '{print $1}')
-    IFS=' ' read -r -a AVAILABLE_GPUS_ARRAY <<< "$AVAILABLE_GPUS"
-
-    if [ "$VM_CPU" -gt "$TOTAL_CPUS" ]; then
-        echo "Error: VM_CPU ($VM_CPU) cannot exceed TOTAL_CPUS ($TOTAL_CPUS)."
-        exit 1
-    fi
-    echo "• Used / total CPUs on host: $VM_CPU / $TOTAL_CPUS"
-    echo "• Available confidential mode by CPU: ${TDX_SUPPORT:+TDX enabled} ${SEV_SUPPORT:+SEV enabled}"
-
-    if [ "$VM_RAM" -gt "$TOTAL_RAM" ]; then
-        echo "Error: VM_RAM ($VM_RAM GB) cannot exceed TOTAL_RAM ($TOTAL_RAM GB)."
-        exit 1
-    fi
-    echo "• Used RAM for VM / total RAM on host: $VM_RAM GB / $TOTAL_RAM GB"
-
+        
+    # Get list of all NVIDIA GPUs and NVSwitch devices
+    AVAILABLE_GPUS=($(lspci -nnk -d 10de: | grep -E '3D controller' | awk '{print $1}'))
+    AVAILABLE_NVSWITCHES=($(lspci -mm -n -d 10de:22a3 | cut -d' ' -f1))
+    
+    echo "Debug: Found GPUs: ${AVAILABLE_GPUS[@]}"
+    
+    # Process GPU list
     if [[ " ${USED_GPUS[@]} " =~ " none " ]]; then
         USED_GPUS=()
     elif [[ ${#USED_GPUS[@]} -eq 0 ]]; then
-        USED_GPUS=(${AVAILABLE_GPUS_ARRAY[@]})
+        USED_GPUS=("${AVAILABLE_GPUS[@]}")
     fi
-
+    
+    # Remove duplicates efficiently
     declare -A UNIQUE_GPUS
     for GPU in "${USED_GPUS[@]}"; do
         UNIQUE_GPUS["$GPU"]=1
     done
-
-    # Convert the unique associative array back to a regular array
-    declare -a UNIQUE_GPU_LIST
-    for UNIQUE_GPU in "${!UNIQUE_GPUS[@]}"; do
-        UNIQUE_GPU_LIST+=("$UNIQUE_GPU")
-    done
-
-    # Now, replace the initial user list with unique values
-    USED_GPUS=("${UNIQUE_GPU_LIST[@]}")
-
-    for USER_GPU in "${USED_GPUS[@]}"; do
-        if [[ $AVAILABLE_GPUS == *"$USER_GPU"* ]]; then
-            echo "GPU $USER_GPU is available."
+    USED_GPUS=("${!UNIQUE_GPUS[@]}")
+    
+    # Verify GPUs
+    for GPU in "${USED_GPUS[@]}"; do
+        if [[ " ${AVAILABLE_GPUS[*]} " =~ " ${GPU} " ]]; then
+            echo "GPU $GPU is available."
         else
-            echo "GPU $USER_GPU is NOT available."
+            echo "GPU $GPU is NOT available."
             exit 1
         fi
     done
-    echo "• Used GPUs for VM / available GPUs on host: ${USED_GPUS[@]:-None} / $AVAILABLE_GPUS"
+    
+    echo "• Used GPUs for VM / available GPUs on host: ${USED_GPUS[@]:-None} / ${AVAILABLE_GPUS[*]}"
 
     if [[ -z "$STATE_DISK_PATH" ]]; then
         STATE_DISK_PATH="$CACHE/state.qcow2"
     fi
 
+    echo "Removing old state disk..."
     rm -f ${STATE_DISK_PATH}
+    echo "Creating new state disk directory..."
     mkdir -p $(dirname ${STATE_DISK_PATH})
+    echo "Initializing state disk..."
     touch ${STATE_DISK_PATH}
-
-    # Get the mount point
+    
+    echo "Checking mount point..."
     MOUNT_POINT=$(df --output=target "${STATE_DISK_PATH}" | tail -n 1)
 
     # Check if MOUNT_POINT is empty
@@ -418,11 +569,22 @@ check_params() {
 
     if [[ -d "${PROVIDER_CONFIG}" ]]; then
         echo "• Provider config: ${PROVIDER_CONFIG}"
+
+        # Validate all yamls
+        validate_yaml_files "${PROVIDER_CONFIG}"
+        
+        # Check if authorized_keys doesn't exist in provider_config
+        if [[ ! -f "${PROVIDER_CONFIG}/authorized_keys" ]]; then
+            if [[ -f "${HOME}/.ssh/authorized_keys" ]]; then
+                cp "${HOME}/.ssh/authorized_keys" "${PROVIDER_CONFIG}/authorized_keys"
+                echo "Copied keys file from ~/.ssh/authorized_keys"
+            fi
+        fi
     else
         echo "Folder ${PROVIDER_CONFIG} does not exist."
         exit 1
     fi
-
+    
     if [[ "${MAC_ADDRESS}" =~ ^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$ ]]; then
          echo "• Mac address: ${MAC_ADDRESS}"
     else
@@ -439,6 +601,7 @@ check_params() {
 
     if [[ ${DEBUG_MODE} == "true" ]]; then
         echo "   Argo branch: $ARGO_BRANCH"
+        echo "   Argo SP env: $ARGO_SP_ENV"
         echo "   SSH Port: $SSH_PORT"
 
         if [[ -z "${LOG_FILE}" ]]; then
@@ -460,6 +623,9 @@ main() {
     check_params
     check_packages
 
+    # Prepare GPUs for VFIO passthrough
+    prepare_gpus_for_vfio "${USED_GPUS[@]}"
+
     # Find QEMU path before using it
     find_qemu_path
 
@@ -467,26 +633,44 @@ main() {
     download_release "${RELEASE}" "${RELEASE_ASSET}" "${CACHE}" "${RELEASE_REPO}"
     parse_and_download_release_files ${RELEASE_FILEPATH}
 
-    # Prepare QEMU command with GPU passthrough and chassis increment
+    # Prepare QEMU command with GPU passthrough
     GPU_PASSTHROUGH=""
     CHASSIS=1
-
-    # Set up GPU passthrough based on VM mode
+    
+    # Add single fw_cfg setting before GPU loop
+    GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,string=262144"
+    
+    # Add GPUs
     for GPU in "${USED_GPUS[@]}"; do
+        echo "Debug: Adding GPU to QEMU: $GPU with chassis $CHASSIS"
         if [[ "${VM_MODE}" == "tdx" ]]; then
-            # Original TDX configuration
             GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
         else
-            # Configuration for untrusted and sev modes
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS"
         fi
-        GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,string=262144"
         CHASSIS=$((CHASSIS + 1))
     done
-        
+    
+    # Add NVSwitch devices
+    if [[ "${VM_MODE}" == "tdx" ]]; then
+        GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
+        IOOMUFD_CHASSIS=$CHASSIS
+    fi
+
+    for NVSWITCH in "${AVAILABLE_NVSWITCHES[@]}"; do
+        echo "Debug: Adding NVSwitch to QEMU: $NVSWITCH with chassis $CHASSIS"
+        GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
+        if [[ "${VM_MODE}" == "tdx" ]]; then
+            GPU_PASSTHROUGH+=" -device vfio-pci,host=$NVSWITCH,bus=pci.$CHASSIS,iommufd=iommufd$IOOMUFD_CHASSIS"
+        else
+            GPU_PASSTHROUGH+=" -device vfio-pci,host=$NVSWITCH,bus=pci.$CHASSIS"
+        fi
+        CHASSIS=$((CHASSIS + 1))
+    done
+    
     # Initialize machine parameters based on mode
     MACHINE_PARAMS=""
     CPU_PARAMS="-cpu host"
@@ -529,7 +713,7 @@ main() {
     
     if [[ ${DEBUG_MODE} == true ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
-        KERNEL_CMD_LINE="root=/dev/vda1 console=ttyS0 clearcpuid=mtrr systemd.log_level=trace systemd.log_target=log rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} argo_branch=${ARGO_BRANCH} sp-debug=true"
+        KERNEL_CMD_LINE="root=/dev/vda1 console=ttyS0 clearcpuid=mtrr systemd.log_level=trace systemd.log_target=log rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} sp-debug=true"
     else
         KERNEL_CMD_LINE="root=/dev/vda1 clearcpuid=mtrr rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}"
     fi
@@ -552,7 +736,7 @@ main() {
     -vga none \
     -nodefaults \
     -serial stdio \
-    -device vhost-vsock-pci,guest-cid=3 \
+    -device vhost-vsock-pci,guest-cid=${GUEST_CID} \
     ${GPU_PASSTHROUGH} \
     "
 

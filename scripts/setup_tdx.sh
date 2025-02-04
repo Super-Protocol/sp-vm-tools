@@ -38,7 +38,7 @@ check_all_bios_settings() {
     if [ "$PA_BITS" -gt "46" ]; then
         results+=("${SUCCESS} CPU PA limit properly configured${NC}")
     else
-        results+=("${FAILURE} CPU PA limit must be enabled and set to 46 bits${NC}")
+        results+=("${FAILURE} CPU PA limit to 46 bit must be disabled${NC}")
         results+=("  Location: Uncore General Configuration")
         all_passed=false
     fi
@@ -123,7 +123,7 @@ check_all_bios_settings() {
     # Configuration requirements section remains unchanged
     results+=("${YELLOW}Required BIOS Configuration:${NC}")
     results+=("• Core Security:")
-    results+=("  - CPU PA: Enable and set to 46 bits")
+    results+=("  - CPU PA: Limit to 46 bits Disable")
     results+=("  - TXT: Enable")
     results+=("  - SGX: Enable")
     results+=("  - SMT: Enable")
