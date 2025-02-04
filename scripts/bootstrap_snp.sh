@@ -130,7 +130,7 @@ bootstrap() {
                 echo "System will reboot in 10 seconds..."
                 echo "Please run this script again after reboot to complete the setup."
                 sleep 10
-                reboot
+                reboot && exit 0
                 ;;
             2)
                 echo "Continuing without reboot (not recommended)..."
