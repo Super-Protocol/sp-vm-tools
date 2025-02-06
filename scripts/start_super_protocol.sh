@@ -740,11 +740,13 @@ main() {
     KERNEL_CMD_LINE=""
     ROOT_HASH=$(grep 'Root hash' "${ROOTFS_HASH_PATH}" | awk '{print $3}')
     
-    CLEARCPUID_PARAM=" "
+    CLEARCPUID_PARAM=" " # Space is important
     BUILD_PARAM=""
+    VSOCK_CID=""
 
     if [[ "${VM_MODE}" == "tdx" ]]; then
-        CLEARCPUID_PARAM=" clearcpuid=mtrr "
+        CLEARCPUID_PARAM=" clearcpuid=mtrr " # Space before and after is important
+        VSOCK_CID="-device vhost-vsock-pci,guest-cid=${GUEST_CID}"
     fi
 
     if [[ "${VM_MODE}" == "sev" ]]; then
@@ -753,7 +755,11 @@ main() {
 
     if [[ ${DEBUG_MODE} == true ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
-        KERNEL_CMD_LINE="root=/dev/vda1 console=ttyS0${CLEARCPUID_PARAM}systemd.log_level=trace systemd.log_target=log rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} sp-debug=true${BUILD_PARAM}"
+        KERNEL_CMD_LINE="root=/dev/vda1 console=ttyS0${CLEARCPUID_PARAM}\
+                        systemd.log_level=trace systemd.log_target=log \
+                        rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} \
+                        argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} \
+                        sp-debug=true${BUILD_PARAM}"
     else
         KERNEL_CMD_LINE="root=/dev/vda1${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}${BUILD_PARAM}"
     fi
@@ -776,7 +782,7 @@ main() {
     -vga none \
     -nodefaults \
     -serial stdio \
-    -device vhost-vsock-pci,guest-cid=${GUEST_CID} \
+    ${VSOCK_CID} \
     ${GPU_PASSTHROUGH} \
     "
 
