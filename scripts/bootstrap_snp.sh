@@ -6,20 +6,64 @@ source_common() {
     source "${script_dir}/common.sh"
 }
 
-update_tdx_module() {
-  TMP_DIR=$1
-  echo "Updating TDX-module..."
-  pushd "${TMP_DIR}"
-  wget https://github.com/intel/tdx-module/releases/download/TDX_1.5.05/intel_tdx_module.tar.gz
-  tar -xvzf intel_tdx_module.tar.gz
-  mkdir -p /boot/efi/EFI/TDX/
-  cp -vf TDX-Module/intel_tdx_module.so /boot/efi/EFI/TDX/TDX-SEAM.so
-  cp -vf TDX-Module/intel_tdx_module.so.sigstruct /boot/efi/EFI/TDX/TDX-SEAM.so.sigstruct
-  popd
+update_snp_firmware() {
+    TMP_DIR=$1
+    local model=$2
+
+    local firmware_name=""
+    local destination_filename=""
+    if [[ "$model" == "Milan" ]]; then
+        firmware_name="amd_sev_fam19h_model0xh_1.55.21"
+        destination_filename="amd_sev_fam19h_model0xh.sbin"
+    elif [[ "$model" == "Genoa" ]]; then
+        firmware_name="amd_sev_fam19h_model1xh_1.55.37"
+        destination_filename="amd_sev_fam19h_model1xh.sbin"
+    else
+        echo "Skipping firmware update: Model is not Milan or Genoa."
+        return 0
+    fi
+
+    if ! command -v unzip &> /dev/null ; then
+        apt-get update && apt-get install -y unzip || return 1
+    fi
+
+    pushd "${TMP_DIR}"
+    wget "https://download.amd.com/developer/eula/sev/${firmware_name}.zip"
+    if [ $? -ne 0 ]; then
+        echo "Failed to download ${firmware_name}.zip"
+        return 1
+    fi
+    mkdir -p /lib/firmware/amd
+    unzip "${firmware_name}.zip"
+    cp -vf "${firmware_name}.sbin" "/lib/firmware/amd/${destination_filename}"
+    popd
 }
 
 bootstrap() {
     check_os_version
+
+    CPU_MODEL=$(lscpu | grep "^Model name:" | sed 's/Model name: *//')
+
+    if [[ ! "$CPU_MODEL" =~ "AMD" ]]; then
+        echo "ERROR: This script is only intended for AMD processors."
+        exit 1
+    fi
+
+    AMD_GEN="unknown"
+    if [[ "$CPU_MODEL" =~ ^AMD[[:space:]]*EPYC[[:space:]]*7[0-9]{2}3.*$ ]]; then
+        echo "AMD Milan CPU Found"
+        AMD_GEN="Milan"
+    elif [[ "$CPU_MODEL" =~ ^AMD[[:space:]]*EPYC[[:space:]]*9[0-9]{2}4.*$ ]]; then
+        echo "This processor is AMD Genoa."
+        AMD_GEN="Genoa"
+    else
+        echo "Unknown CPU model: <$CPU_MODEL>"
+        read -p "Do you want to continue? (y/n): " choice
+        if [[ "$choice" != "y" ]]; then
+            echo "Exiting script."
+            exit 1
+        fi
+    fi
 
     # Check if the script is running as root
     print_section_header "Privilege Check"
@@ -33,7 +77,7 @@ bootstrap() {
     ARCHIVE_PATH=""
     if [ "$#" -ne 1 ]; then
         echo "No archive provided, downloading latest release..."
-        ARCHIVE_PATH=$(download_latest_release "tdx") || {
+        ARCHIVE_PATH=$(download_latest_release "snp") || {
             echo "Failed to download release"
             exit 1
         }
@@ -66,12 +110,12 @@ bootstrap() {
     print_section_header "Kernel Configuration"
     echo "Configuring kernel boot parameters..."
     if [ "$NEW_KERNEL_VERSION" != "$CURRENT_KERNEL" ]; then
-        setup_grub "$NEW_KERNEL_VERSION" "tdx"
+        setup_grub "$NEW_KERNEL_VERSION" "snp"
     fi
 
-    print_section_header "TDX Module Update"
-    echo "Updating TDX module..."
-    update_tdx_module "${TMP_DIR}"
+    print_section_header "SNP Firmware Update"
+    echo "Updating SNP firmware..."
+    update_snp_firmware "${TMP_DIR}" "${AMD_GEN}"
 
     # Check if kernel was actually installed
     print_section_header "System State Check"
@@ -94,17 +138,22 @@ bootstrap() {
         esac
     fi
 
-    if [ -f "$(dirname "${BASH_SOURCE[0]}")/setup_tdx.sh" ]; then
-        echo "Running TDX setup script..."
-        cp "$(dirname "${BASH_SOURCE[0]}")/setup_tdx.sh" "${TMP_DIR}/"
-        chmod +x "${TMP_DIR}/setup_tdx.sh"
-        "${TMP_DIR}/setup_tdx.sh"
+    SNP_HOST_FILE="$DEB_DIR/snphost"
+    LIBSEV_FILE="$DEB_DIR/libsev.so"
+
+    if [ -f "${SNP_HOST_FILE}" ] && [ -f "${LIBSEV_FILE}" ]; then
+        echo "Running configuration check..."
+        pushd $DEB_DIR
+        set +e
+        ./snphost ok
         if [ $? -ne 0 ]; then
-            echo -e "${RED}ERROR: TDX setup failed${NC}"
+            echo -e "${RED}ERROR: some checks failed${NC}"
             exit 1
         fi
-    else 
-        echo echo -e "${RED}ERROR: setup_tdx.sh not found${NC}"
+        set -e
+        popd
+    else
+        echo -e "${RED}ERROR: snphost or or its components not found${NC}"
         exit 1
     fi
 
