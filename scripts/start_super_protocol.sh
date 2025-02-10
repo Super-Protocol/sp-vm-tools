@@ -15,6 +15,7 @@ exit_handler() {
 SCRIPT_DIR=$( cd "$( dirname "$0" )" && pwd )
 
 REQUIRED_TDX_PACKAGES=("sp-qemu-tdx")
+REQUIRED_SNP_PACKAGES=("sp-qemu-snp")
 
 STORJ_TOKEN="1UXqNMwov41q9TgHmyopNg5q2giQ8aTdh1gjKWKjfbWPFrcrnhenp6QZfd5ukyVnYXDx9Cok6RtnQMMnXmoZPrSUMNGZGF9KuLCzvRNmQYHowX14C2xAxtJeH6VCuNX39ist4bRE9L5VT3k41frDVh3cG1gZvsqh4EaDeaJyV6U4xVaqXqULnSb9PozqU97VVLWhfwdnj6XgUM59Wzq7yo7vn8RxwSyn8H74TEiLNGUPPA3frsYZuoqWQkNzbiYev5ByWeLro1TXo7DogD4WALCKfEmpwHs9j9rsX5WZvvZ13ourTiuZp5vTTZkByB2ibxUJqkSoZSpCNVtmDToNVKkMREVySe"
 RELEASE_REPO="Super-Protocol/sp-vm"
@@ -37,7 +38,7 @@ DEFAULT_ARGO_BRANCH="main"
 DEFAULT_ARGO_SP_ENV="main"
 
 TDX_SUPPORT=$(lscpu | grep -i tdx || echo "")
-SEV_SUPPORT=$(lscpu | grep -i sev || echo "")
+SEV_SUPPORT=$(lscpu | grep -i sev_snp || echo "")
 
 # Default mode
 DEFAULT_MODE="untrusted"  # Can be "untrusted", "tdx", or "sev"
@@ -190,6 +191,7 @@ download_release() {
             exit 1
         fi
         RELEASE_NAME=${LATEST_TAG}
+        RELEASE=${LATEST_TAG}
     fi
 
     echo "Fetching release: ${RELEASE_NAME}"
@@ -231,77 +233,94 @@ download_release() {
 }
 
 parse_and_download_release_files() {
-   RELEASE_JSON=$1
-   DOWNLOAD_DIR=$(dirname ${RELEASE_JSON})
+    RELEASE_JSON=$1
+    DOWNLOAD_DIR=$(dirname ${RELEASE_JSON})
 
-   echo "Parsing release JSON at: ${RELEASE_JSON}"
-   
-   # First, validate that we can read all required entries from JSON
-   required_keys=("rootfs" "bios" "root_hash" "kernel")
-   for key in "${required_keys[@]}"; do
-       if ! jq -e ".${key}" "${RELEASE_JSON}" > /dev/null; then
-           echo "Error: Required key '${key}' not found in release JSON"
-           exit 1
-       fi
-   done
-   
-   while read -r entry; do
-       key=$(echo "$entry" | jq -r '.key')
-       bucket=$(echo "$entry" | jq -r '.value.bucket')
-       prefix=$(echo "$entry" | jq -r '.value.prefix')
-       filename=$(echo "$entry" | jq -r '.value.filename')
-       sha256=$(echo "$entry" | jq -r '.value.sha256')
+    echo "Parsing release JSON at: ${RELEASE_JSON}"
+    
+    # First, validate that we can read all required entries from JSON
+    required_keys=()
+    if [[ "${VM_MODE}" == "sev" ]]; then
+        required_keys=("rootfs" "bios" "root_hash" "kernel")
+    else
+        required_keys=("rootfs" "bios" "root_hash" "kernel")
+    fi
 
-       echo "Processing entry - key: ${key}, filename: ${filename}"
-       
-       local_path="$DOWNLOAD_DIR/$filename"
+    for key in "${required_keys[@]}"; do
+        if ! jq -e ".${key}" "${RELEASE_JSON}" > /dev/null; then
+            echo "Error: Required key '${key}' not found in release JSON"
+            exit 1
+        fi
+    done
+    
+    while read -r entry; do
+        key=$(echo "$entry" | jq -r '.key')
+        bucket=$(echo "$entry" | jq -r '.value.bucket')
+        prefix=$(echo "$entry" | jq -r '.value.prefix')
+        filename=$(echo "$entry" | jq -r '.value.filename')
+        sha256=$(echo "$entry" | jq -r '.value.sha256')
 
-       case $key in
-           rootfs) ROOTFS_PATH=$local_path; echo "Set ROOTFS_PATH to ${local_path}" ;;
-           bios) BIOS_PATH=$local_path; echo "Set BIOS_PATH to ${local_path}" ;;
-           root_hash) ROOTFS_HASH_PATH=$local_path; echo "Set ROOTFS_HASH_PATH to ${local_path}" ;;
-           kernel) KERNEL_PATH=$local_path; echo "Set KERNEL_PATH to ${local_path}" ;;
-           *) echo "Warning: Unknown key ${key} in release JSON" ;;
-       esac
+        echo "Processing entry - key: ${key}, filename: ${filename}"
+         
+        local_path="$DOWNLOAD_DIR/$filename"
 
-       # Check existing file
-       if [[ -f "$local_path" ]]; then
-           computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
-           if [[ "$computed_sha256" == "$sha256" ]]; then
-               echo "File $filename already exists and checksum is valid. Skipping download."
-               continue
-           else
-               echo "Warning: Checksum mismatch for existing file $filename. Downloading again."
-               rm -f "$local_path"
-           fi
-       fi
+        case $key in
+            rootfs) ROOTFS_PATH=$local_path; echo "Set ROOTFS_PATH to ${local_path}" ;;
+            bios)
+                if [[ "${VM_MODE}" != "sev" ]]; then
+                    BIOS_PATH=$local_path
+                    echo "Set BIOS_PATH to ${local_path}"
+                fi
+                ;;
+            bios_amd)
+                if [[ "${VM_MODE}" == "sev" ]]; then
+                    BIOS_PATH=$local_path
+                    echo "Set BIOS_PATH to ${local_path}"
+                fi
+                ;;
+            root_hash) ROOTFS_HASH_PATH=$local_path; echo "Set ROOTFS_HASH_PATH to ${local_path}" ;;
+            kernel) KERNEL_PATH=$local_path; echo "Set KERNEL_PATH to ${local_path}" ;;
+            *) echo "Warning: Unknown key ${key} in release JSON" ;;
+        esac
 
-       echo "Downloading $filename from sj://$bucket/$prefix/$filename to $local_path..."
-       uplink cp --parallelism 16 --progress --access ${STORJ_TOKEN} "sj://$bucket/$prefix/$filename" "$local_path"
+        # Check existing file
+        if [[ -f "$local_path" ]]; then
+            computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
+            if [[ "$computed_sha256" == "$sha256" ]]; then
+                echo "File $filename already exists and checksum is valid. Skipping download."
+                continue
+            else
+                echo "Warning: Checksum mismatch for existing file $filename. Downloading again."
+                rm -f "$local_path"
+            fi
+        fi
 
-       if [ $? -ne 0 ]; then
-           echo "Error: Failed to download $filename"
-           exit 1
-       fi
+        echo "Downloading $filename from sj://$bucket/$prefix/$filename to $local_path..."
+        uplink cp --parallelism 16 --progress --access ${STORJ_TOKEN} "sj://$bucket/$prefix/$filename" "$local_path"
 
-       computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
-       if [[ "$computed_sha256" != "$sha256" ]]; then
-           echo "Error: Checksum mismatch for $filename after download. Expected $sha256, got $computed_sha256."
-           exit 1
-       else
-           echo "Successfully downloaded and verified $filename."
-       fi
-   done < <(jq -c 'to_entries[]' "$RELEASE_JSON")
+        if [ $? -ne 0 ]; then
+            echo "Error: Failed to download $filename"
+            exit 1
+        fi
 
-   # Verify that all required paths are set
-   if [[ -z "${ROOTFS_PATH}" ]] || [[ -z "${BIOS_PATH}" ]] || [[ -z "${ROOTFS_HASH_PATH}" ]] || [[ -z "${KERNEL_PATH}" ]]; then
-       echo "Error: Not all required files were processed successfully"
-       echo "ROOTFS_PATH: ${ROOTFS_PATH}"
-       echo "BIOS_PATH: ${BIOS_PATH}"
-       echo "ROOTFS_HASH_PATH: ${ROOTFS_HASH_PATH}"
-       echo "KERNEL_PATH: ${KERNEL_PATH}"
-       exit 1
-   fi
+        computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
+        if [[ "$computed_sha256" != "$sha256" ]]; then
+            echo "Error: Checksum mismatch for $filename after download. Expected $sha256, got $computed_sha256."
+            exit 1
+        else
+            echo "Successfully downloaded and verified $filename."
+        fi
+    done < <(jq -c 'to_entries[]' "$RELEASE_JSON")
+
+    # Verify that all required paths are set
+    if [[ -z "${ROOTFS_PATH}" ]] || [[ -z "${BIOS_PATH}" ]] || [[ -z "${ROOTFS_HASH_PATH}" ]] || [[ -z "${KERNEL_PATH}" ]]; then
+        echo "Error: Not all required files were processed successfully"
+        echo "ROOTFS_PATH: ${ROOTFS_PATH}"
+        echo "BIOS_PATH: ${BIOS_PATH}"
+        echo "ROOTFS_HASH_PATH: ${ROOTFS_HASH_PATH}"
+        echo "KERNEL_PATH: ${KERNEL_PATH}"
+        exit 1
+    fi
 }
 
 check_packages() {
@@ -326,6 +345,14 @@ check_packages() {
     local missing=()
     if [[ "${VM_MODE}" == "tdx" ]]; then
         for package in "${REQUIRED_TDX_PACKAGES[@]}"; do
+            if ! dpkg -l | grep -q "^ii.*$package"; then
+                missing+=("$package")
+            fi
+        done
+    fi
+
+    if [[ "${VM_MODE}" == "sev" ]]; then
+        for package in "${REQUIRED_SNP_PACKAGES[@]}"; do
             if ! dpkg -l | grep -q "^ii.*$package"; then
                 missing+=("$package")
             fi
@@ -692,8 +719,10 @@ main() {
                 echo "Error: SEV is not supported on this system"
                 exit 1
             fi
-            MACHINE_PARAMS="q35,kernel_irqchip=split,confidential-guest-support=sev0"
-            CC_PARAMS+=" -object sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1"
+            MACHINE_PARAMS="q35,memory-encryption=sev0,vmport=off,memory-backend=ram1"
+            CC_PARAMS+=" -cpu EPYC-Milan \
+             -object memory-backend-memfd,id=ram1,size=${VM_RAM}G,share=true,prealloc=false \
+             -object sev-snp-guest,id=sev0,policy=0x30000,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on "
             ;;
         "untrusted")
             MACHINE_PARAMS="q35,kernel_irqchip=split"
@@ -711,11 +740,28 @@ main() {
     KERNEL_CMD_LINE=""
     ROOT_HASH=$(grep 'Root hash' "${ROOTFS_HASH_PATH}" | awk '{print $3}')
     
+    CLEARCPUID_PARAM=" " # Space is important
+    BUILD_PARAM=""
+    VSOCK_CID=""
+
+    if [[ "${VM_MODE}" == "tdx" ]]; then
+        CLEARCPUID_PARAM=" clearcpuid=mtrr " # Space before and after is important
+        VSOCK_CID="-device vhost-vsock-pci,guest-cid=${GUEST_CID}"
+    fi
+
+    if [[ "${VM_MODE}" == "sev" ]]; then
+        BUILD_PARAM=" build=$RELEASE"
+    fi
+
     if [[ ${DEBUG_MODE} == true ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
-        KERNEL_CMD_LINE="root=/dev/vda1 console=ttyS0 clearcpuid=mtrr systemd.log_level=trace systemd.log_target=log rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} sp-debug=true"
+        KERNEL_CMD_LINE="root=/dev/vda1 console=ttyS0${CLEARCPUID_PARAM}\
+                        systemd.log_level=trace systemd.log_target=log \
+                        rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} \
+                        argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} \
+                        sp-debug=true${BUILD_PARAM}"
     else
-        KERNEL_CMD_LINE="root=/dev/vda1 clearcpuid=mtrr rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}"
+        KERNEL_CMD_LINE="root=/dev/vda1${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}${BUILD_PARAM}"
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
@@ -736,7 +782,7 @@ main() {
     -vga none \
     -nodefaults \
     -serial stdio \
-    -device vhost-vsock-pci,guest-cid=${GUEST_CID} \
+    ${VSOCK_CID} \
     ${GPU_PASSTHROUGH} \
     "
 
