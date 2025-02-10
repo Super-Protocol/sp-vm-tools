@@ -3,28 +3,56 @@ name: Build packages self-hosted
 on:
   workflow_dispatch:
     inputs:
-      release_version:
-        description: "Release name (format v1.2.3)"
+      build_type:
+        description: "Select build type"
         required: true
+        default: "BOTH"
+        type: choice
+        options:
+          - TDX
+          - SNP
+          - BOTH
 
 jobs:
   build:
-    runs-on: sp-zen-tech-linux-x64
+    runs-on: self-hosted
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: Validate release version format
+
+      - name: Set build type and runner ID
+        id: set-build-type
+        run: | 
+          echo "BUILD_TYPE=${{ github.event.inputs.build_type }}" >> $GITHUB_ENV
+          echo "RUNNER_ID=${{ github.run_number }}" >> $GITHUB_ENV
+        
+      - name: Run TDX docker build
+        if: ${{ github.event.inputs.build_type == 'TDX' || github.event.inputs.build_type == 'BOTH' }}
         run: |
-          version_regex="^v[0-9]+\.[0-9]+\.[0-9]+$"
-          if [[ ! "${{ github.event.inputs.release_version }}" =~ $version_regex ]]; then
-            echo "Error: Invalid release version format. Expected format: v1.2.3"
+          NON_INTERACTIVE=1 FORCE_REBUILD_CONTAINER=1 ./build_in_docker.sh tdx
+
+      - name: Run SNP docker build
+        if: ${{ github.event.inputs.build_type == 'SNP' || github.event.inputs.build_type == 'BOTH' }}
+        run: |
+          NON_INTERACTIVE=1 FORCE_REBUILD_CONTAINER=1 ./build_in_docker.sh snp
+
+      - name: Set release name
+        id: release-name
+        run: |
+          if [[ "${BUILD_TYPE}" == "BOTH" ]]; then
+            echo "RELEASE_NAME=${RUNNER_ID}-tdx+snp" >> $GITHUB_ENV
+          elif [[ "${BUILD_TYPE}" == "TDX" ]]; then
+            echo "RELEASE_NAME=${RUNNER_ID}-tdx" >> $GITHUB_ENV
+          elif [[ "${BUILD_TYPE}" == "SNP" ]]; then
+            echo "RELEASE_NAME=${RUNNER_ID}-snp" >> $GITHUB_ENV
+          else
+            echo "Error: Unknown BUILD_TYPE ${BUILD_TYPE}" >&2
             exit 1
           fi
-
-      - name: Run docker build
-        run: |
-          NON_INTERACTIVE=1 FORCE_REBUILD_CONTAINER=1 ./build_in_docker.sh
 
       - name: Create GitHub Release
         id: create_release
@@ -33,17 +61,29 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
         with:
-          tag_name: "${{ github.event.inputs.release_version }}"
-          release_name: "Release ${{ github.event.inputs.release_version }}"
+          tag_name: "${{ env.RELEASE_NAME }}"
+          release_name: "Release ${{ env.RELEASE_NAME }}"
           draft: false
-          prerelease: false
+          prerelease: true
 
-      - name: Upload Release Asset
+      - name: Upload TDX Release Asset
+        if: ${{ github.event.inputs.build_type == 'TDX' || github.event.inputs.build_type == 'BOTH' }}
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./build/package.tar.gz
-          asset_name: package.tar.gz
+          asset_path: ./build/tdx/package-tdx.tar.gz
+          asset_name: package-tdx.tar.gz
+          asset_content_type: application/gzip
+      
+      - name: Upload SNP Release Asset
+        if: ${{ github.event.inputs.build_type == 'SNP' || github.event.inputs.build_type == 'BOTH' }}
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./build/snp/package-snp.tar.gz
+          asset_name: package-snp.tar.gz
           asset_content_type: application/gzip

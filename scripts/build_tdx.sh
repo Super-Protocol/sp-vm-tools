@@ -108,15 +108,14 @@ packaging() {
     cp -fv qemu/sp-qemu-tdx*.deb package/
     cp -fv edk2/Build/OvmfX64/DEBUG_GCC5/FV/OVMF.fd package/
     cd package
-    tar -czvf ../package.tar.gz .
+    tar -czvf ../package-tdx.tar.gz .
     popd
-
 }
 
 build_main() {
     local scripts_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-    local root_dir=${scripts_dir}/../
-    local build_dir=${scripts_dir}/../build
+    local root_dir="${scripts_dir}/../"
+    local build_dir="${scripts_dir}/../build/tdx"
 
     rm -rf ${build_dir}
     mkdir -p ${build_dir}
