@@ -35,6 +35,7 @@ QEMU_PATH=""
 DEFAULT_DEBUG=false
 DEFAULT_ARGO_BRANCH="main"
 DEFAULT_ARGO_SP_ENV="main"
+LOCAL_BUILD_DIR=""
 
 TDX_SUPPORT=$(lscpu | grep -i tdx || echo "")
 SEV_SUPPORT=$(lscpu | grep -i sev || echo "")
@@ -85,6 +86,7 @@ usage() {
     echo "  --release <name>             Release name (default: latest)"
     echo "  --mode <mode>                VM mode: untrusted, tdx, sev (default: ${DEFAULT_MODE})"
     echo "  --guest-cid <id>             Guest CID for vsock (default: ${DEFAULT_GUEST_CID})"
+    echo "  --build_dir <path>           Path to the local builded kata container (default: no)"
     echo ""
 }
 
@@ -135,6 +137,7 @@ parse_args() {
             --release) RELEASE=$2; shift ;;
             --mode) VM_MODE=$2; shift ;;
             --guest-cid) GUEST_CID=$2; shift ;;
+            --build_dir) LOCAL_BUILD_DIR=$2; shift ;;
             --help) usage; exit 0;;
             *) echo "Unknown parameter: $1"; usage ; exit 1 ;;
         esac
@@ -155,7 +158,7 @@ find_qemu_path() {
     )
 
     # First try using which
-    QEMU_PATH=$(which qemu-system-x86_64 2>/dev/null)
+    QEMU_PATH=$(which qemu-system-x86_64 2>/dev/null || true)
     
     if [[ -x "$QEMU_PATH" ]]; then
         echo "Found QEMU at: $QEMU_PATH"
@@ -181,51 +184,55 @@ download_release() {
     TARGET_DIR=$3
     REPO=$4
 
-    # Check if release name is provided or not
-    if [[ -z "${RELEASE_NAME}" ]]; then
-        echo "No release name provided. Fetching the latest release..."
-        LATEST_TAG=$(curl -s https://api.github.com/repos/$REPO/releases/latest | jq -r '.tag_name')
-        if [[ -z "${LATEST_TAG}" ]]; then
-            echo "Failed to fetch the latest release tag."
+    if [[ -z "${LOCAL_BUILD_DIR}" ]]; then
+        # Check if release name is provided or not
+        if [[ -z "${RELEASE_NAME}" ]]; then
+            echo "No release name provided. Fetching the latest release..."
+            LATEST_TAG=$(curl -s https://api.github.com/repos/$REPO/releases/latest | jq -r '.tag_name')
+            if [[ -z "${LATEST_TAG}" ]]; then
+                echo "Failed to fetch the latest release tag."
+                exit 1
+            fi
+            RELEASE_NAME=${LATEST_TAG}
+        fi
+
+        echo "Fetching release: ${RELEASE_NAME}"
+        RELEASE_URL="https://api.github.com/repos/${REPO}/releases/tags/${RELEASE_NAME}"
+
+        # Fetch the release information
+        RESPONSE=$(curl -s $RELEASE_URL)
+
+        # Check if the release was fetched correctly
+        if [[ $(echo "$RESPONSE" | jq -r '.message') == "Not Found" ]]; then
+            echo "Release not found!"
             exit 1
         fi
-        RELEASE_NAME=${LATEST_TAG}
-    fi
 
-    echo "Fetching release: ${RELEASE_NAME}"
-    RELEASE_URL="https://api.github.com/repos/${REPO}/releases/tags/${RELEASE_NAME}"
+        # Extract the browser_download_url of the specified asset
+        ASSET_URL=$(echo "${RESPONSE}" | jq -r ".assets[] | select(.name == \"${ASSET_NAME}\") | .browser_download_url")
 
-    # Fetch the release information
-    RESPONSE=$(curl -s $RELEASE_URL)
+        # Check if the asset exists
+        if [[ -z "${ASSET_URL}" ]]; then
+            echo "Asset \"${ASSET_NAME}\" not found!"
+            exit 1
+        fi
 
-    # Check if the release was fetched correctly
-    if [[ $(echo "$RESPONSE" | jq -r '.message') == "Not Found" ]]; then
-        echo "Release not found!"
-        exit 1
-    fi
+        # Create the target directory if it doesn't exist
+        TARGET_DIR="${TARGET_DIR}/${RELEASE_NAME}"
+        mkdir -p "${TARGET_DIR}"
 
-    # Extract the browser_download_url of the specified asset
-    ASSET_URL=$(echo "${RESPONSE}" | jq -r ".assets[] | select(.name == \"${ASSET_NAME}\") | .browser_download_url")
+        # Download the asset to the specified directory
+        echo "Downloading ${ASSET_NAME} to ${TARGET_DIR}..."
+        curl -L "${ASSET_URL}" -o "${TARGET_DIR}/${ASSET_NAME}"
 
-    # Check if the asset exists
-    if [[ -z "${ASSET_URL}" ]]; then
-        echo "Asset \"${ASSET_NAME}\" not found!"
-        exit 1
-    fi
-
-    # Create the target directory if it doesn't exist
-    TARGET_DIR="${TARGET_DIR}/${RELEASE_NAME}"
-    mkdir -p "${TARGET_DIR}"
-
-    # Download the asset to the specified directory
-    echo "Downloading ${ASSET_NAME} to ${TARGET_DIR}..."
-    curl -L "${ASSET_URL}" -o "${TARGET_DIR}/${ASSET_NAME}"
-
-    if [[ -f "${TARGET_DIR}/${ASSET_NAME}" && -s "${TARGET_DIR}/${ASSET_NAME}" ]]; then
-        echo "Download complete! File saved to ${TARGET_DIR}/${ASSET_NAME}"
+        if [[ -f "${TARGET_DIR}/${ASSET_NAME}" && -s "${TARGET_DIR}/${ASSET_NAME}" ]]; then
+            echo "Download complete! File saved to ${TARGET_DIR}/${ASSET_NAME}"
+        else
+            echo "Download failed or the file is empty!"
+            exit 1
+        fi
     else
-        echo "Download failed or the file is empty!"
-        exit 1
+        TARGET_DIR="${LOCAL_BUILD_DIR}";
     fi
     RELEASE_FILEPATH="${TARGET_DIR}/${ASSET_NAME}"
 }
@@ -271,8 +278,13 @@ parse_and_download_release_files() {
                echo "File $filename already exists and checksum is valid. Skipping download."
                continue
            else
-               echo "Warning: Checksum mismatch for existing file $filename. Downloading again."
-               rm -f "$local_path"
+                if [[ -z "${LOCAL_BUILD_DIR}" ]]; then
+                    echo "Warning: Checksum mismatch for existing file $filename. Downloading again."
+                    rm -f "$local_path"
+                else
+                    echo "Error: Checksum mismatch for existing file $filename builded locally."
+                    exit 1;
+                fi
            fi
        fi
 
