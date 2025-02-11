@@ -194,6 +194,7 @@ download_release() {
                 exit 1
             fi
             RELEASE_NAME=${LATEST_TAG}
+            RELEASE=${LATEST_TAG}
         fi
 
         echo "Fetching release: ${RELEASE_NAME}"
