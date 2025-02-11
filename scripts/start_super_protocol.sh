@@ -15,6 +15,7 @@ exit_handler() {
 SCRIPT_DIR=$( cd "$( dirname "$0" )" && pwd )
 
 REQUIRED_TDX_PACKAGES=("sp-qemu-tdx")
+REQUIRED_SNP_PACKAGES=("sp-qemu-snp")
 
 STORJ_TOKEN="1UXqNMwov41q9TgHmyopNg5q2giQ8aTdh1gjKWKjfbWPFrcrnhenp6QZfd5ukyVnYXDx9Cok6RtnQMMnXmoZPrSUMNGZGF9KuLCzvRNmQYHowX14C2xAxtJeH6VCuNX39ist4bRE9L5VT3k41frDVh3cG1gZvsqh4EaDeaJyV6U4xVaqXqULnSb9PozqU97VVLWhfwdnj6XgUM59Wzq7yo7vn8RxwSyn8H74TEiLNGUPPA3frsYZuoqWQkNzbiYev5ByWeLro1TXo7DogD4WALCKfEmpwHs9j9rsX5WZvvZ13ourTiuZp5vTTZkByB2ibxUJqkSoZSpCNVtmDToNVKkMREVySe"
 RELEASE_REPO="Super-Protocol/sp-vm"
@@ -38,7 +39,7 @@ DEFAULT_ARGO_SP_ENV="main"
 LOCAL_BUILD_DIR=""
 
 TDX_SUPPORT=$(lscpu | grep -i tdx || echo "")
-SEV_SUPPORT=$(lscpu | grep -i sev || echo "")
+SEV_SUPPORT=$(lscpu | grep -i sev_snp || echo "")
 
 # Default mode
 DEFAULT_MODE="untrusted"  # Can be "untrusted", "tdx", or "sev"
@@ -339,6 +340,14 @@ check_packages() {
     local missing=()
     if [[ "${VM_MODE}" == "tdx" ]]; then
         for package in "${REQUIRED_TDX_PACKAGES[@]}"; do
+            if ! dpkg -l | grep -q "^ii.*$package"; then
+                missing+=("$package")
+            fi
+        done
+    fi
+
+    if [[ "${VM_MODE}" == "sev" ]]; then
+        for package in "${REQUIRED_SNP_PACKAGES[@]}"; do
             if ! dpkg -l | grep -q "^ii.*$package"; then
                 missing+=("$package")
             fi
@@ -710,8 +719,10 @@ main() {
                 echo "Error: SEV is not supported on this system"
                 exit 1
             fi
-            MACHINE_PARAMS="q35,kernel_irqchip=split,confidential-guest-support=sev0"
-            CC_PARAMS+=" -object sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1"
+            MACHINE_PARAMS="q35,memory-encryption=sev0,vmport=off,memory-backend=ram1"
+            CC_PARAMS+=" -cpu EPYC-Milan \
+             -object memory-backend-memfd,id=ram1,size=${VM_RAM}G,share=true,prealloc=false \
+             -object sev-snp-guest,id=sev0,policy=0x30000,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on "
             ;;
         "untrusted")
             MACHINE_PARAMS="q35,kernel_irqchip=split"
@@ -728,12 +739,29 @@ main() {
     DEBUG_PARAMS=""
     KERNEL_CMD_LINE=""
     ROOT_HASH=$(grep 'Root hash' "${ROOTFS_HASH_PATH}" | awk '{print $3}')
+    
+    CLEARCPUID_PARAM=" " # Space is important
+    BUILD_PARAM=""
+    VSOCK_CID=""
+
+    if [[ "${VM_MODE}" == "tdx" ]]; then
+        CLEARCPUID_PARAM=" clearcpuid=mtrr " # Space before and after is important
+        VSOCK_CID="-device vhost-vsock-pci,guest-cid=${GUEST_CID}"
+    fi
+
+    if [[ "${VM_MODE}" == "sev" ]]; then
+        BUILD_PARAM=" build=$RELEASE"
+    fi
 
     if [[ ${DEBUG_MODE} == true ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
-        KERNEL_CMD_LINE="root=/dev/vda1 console=ttyS0 clearcpuid=mtrr systemd.log_level=trace systemd.log_target=log rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} sp-debug=true"
+        KERNEL_CMD_LINE="root=/dev/vda1 console=ttyS0${CLEARCPUID_PARAM}\
+                        systemd.log_level=trace systemd.log_target=log \
+                        rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} \
+                        argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} \
+                        sp-debug=true${BUILD_PARAM}"
     else
-        KERNEL_CMD_LINE="root=/dev/vda1 clearcpuid=mtrr rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}"
+        KERNEL_CMD_LINE="root=/dev/vda1${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}${BUILD_PARAM}"
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
