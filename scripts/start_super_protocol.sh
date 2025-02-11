@@ -151,15 +151,15 @@ parse_args() {
 find_qemu_path() {
     # List of common QEMU binary locations
     local qemu_locations=(
-        "/usr/bin/qemu-system-x86_64"
-        "/usr/local/bin/qemu-system-x86_64"
-        "/usr/sbin/qemu-system-x86_64"
-        "/usr/local/sbin/qemu-system-x86_64"
-    )
+    "/usr/bin/qemu-system-x86_64"
+    "/usr/local/bin/qemu-system-x86_64"
+    "/usr/sbin/qemu-system-x86_64"
+    "/usr/local/sbin/qemu-system-x86_64"
+)
 
     # First try using which
     QEMU_PATH=$(which qemu-system-x86_64 2>/dev/null || true)
-    
+
     if [[ -x "$QEMU_PATH" ]]; then
         echo "Found QEMU at: $QEMU_PATH"
         return 0
@@ -238,11 +238,11 @@ download_release() {
 }
 
 parse_and_download_release_files() {
-   RELEASE_JSON=$1
-   DOWNLOAD_DIR=$(dirname ${RELEASE_JSON})
+    RELEASE_JSON=$1
+    DOWNLOAD_DIR=$(dirname ${RELEASE_JSON})
 
-   echo "Parsing release JSON at: ${RELEASE_JSON}"
-   
+    echo "Parsing release JSON at: ${RELEASE_JSON}"
+
    # First, validate that we can read all required entries from JSON
    required_keys=("rootfs" "bios" "root_hash" "kernel")
    for key in "${required_keys[@]}"; do
@@ -251,7 +251,7 @@ parse_and_download_release_files() {
            exit 1
        fi
    done
-   
+
    while read -r entry; do
        key=$(echo "$entry" | jq -r '.key')
        bucket=$(echo "$entry" | jq -r '.value.bucket')
@@ -260,7 +260,7 @@ parse_and_download_release_files() {
        sha256=$(echo "$entry" | jq -r '.value.sha256')
 
        echo "Processing entry - key: ${key}, filename: ${filename}"
-       
+
        local_path="$DOWNLOAD_DIR/$filename"
 
        case $key in
@@ -278,13 +278,13 @@ parse_and_download_release_files() {
                echo "File $filename already exists and checksum is valid. Skipping download."
                continue
            else
-                if [[ -z "${LOCAL_BUILD_DIR}" ]]; then
-                    echo "Warning: Checksum mismatch for existing file $filename. Downloading again."
-                    rm -f "$local_path"
-                else
-                    echo "Error: Checksum mismatch for existing file $filename builded locally."
-                    exit 1;
-                fi
+               if [[ -z "${LOCAL_BUILD_DIR}" ]]; then
+                   echo "Warning: Checksum mismatch for existing file $filename. Downloading again."
+                   rm -f "$local_path"
+               else
+                   echo "Error: Checksum mismatch for existing file $filename builded locally."
+                   exit 1;
+               fi
            fi
        fi
 
@@ -353,42 +353,42 @@ check_packages() {
 
 prepare_gpus_for_vfio() {
     local gpu_ids=("$@")
-    
+
     # Detect NVSwitch devices
     local nvswitch_ids=($(lspci -mm -n -d 10de:22a3 | cut -d' ' -f1))
     echo "Debug: Found NVSwitch devices: ${nvswitch_ids[@]}"
-    
+
     echo "Unloading NVIDIA modules..."
     modprobe -r nvidia_uvm nvidia_drm nvidia_modeset nvidia || true
-    
+
     echo "Loading VFIO modules..."
     modprobe vfio
     modprobe vfio-pci
-    
+
     # Function to bind device to vfio-pci
     bind_to_vfio() {
         local device=$1
         local device_type=$2
-        
+
         echo "Preparing $device_type $device for VFIO passthrough"
-        
+
         # Check current driver
         local current_driver=$(lspci -k -s "$device" | grep "Kernel driver in use:" | awk '{print $5}')
         echo "Current driver for $device_type $device: $current_driver"
-        
+
         if [[ "$current_driver" != "vfio-pci" ]]; then
             # If nvidia modules are still loaded, try to remove them
             if [[ "$current_driver" == "nvidia" ]]; then
                 echo "Forcing removal of NVIDIA modules..."
                 rmmod -f nvidia_uvm nvidia_drm nvidia_modeset nvidia 2>/dev/null || true
             fi
-            
+
             # Unbind from current driver if bound
             if [[ -e "/sys/bus/pci/devices/0000:$device/driver" ]]; then
                 echo "Unbinding from current driver"
                 echo "0000:$device" > /sys/bus/pci/devices/0000:$device/driver/unbind
             fi
-            
+
             # Add to vfio-pci
             echo "Adding device to vfio-pci"
             echo "vfio-pci" > /sys/bus/pci/devices/0000:$device/driver_override
@@ -396,7 +396,7 @@ prepare_gpus_for_vfio() {
         else
             echo "$device_type $device is already bound to vfio-pci"
         fi
-        
+
         # Verify binding
         current_driver=$(lspci -k -s "$device" | grep "Kernel driver in use:" | awk '{print $5}')
         if [[ "$current_driver" != "vfio-pci" ]]; then
@@ -404,7 +404,7 @@ prepare_gpus_for_vfio() {
             exit 1
         fi
     }
-    
+
     # Process GPUs
     for gpu in "${gpu_ids[@]}"; do
         bind_to_vfio "$gpu" "GPU"
@@ -414,7 +414,7 @@ prepare_gpus_for_vfio() {
     for nvswitch in "${nvswitch_ids[@]}"; do
         bind_to_vfio "$nvswitch" "NVSwitch"
     done
-    
+
     # Final verification
     echo "Verifying device bindings..."
     for gpu in "${gpu_ids[@]}"; do
@@ -430,18 +430,18 @@ prepare_gpus_for_vfio() {
 validate_yaml_files() {
     local dir="$1"
     local has_errors=false
-    
+
     # Check if python3 and PyYAML are installed
     if ! command -v python3 &> /dev/null; then
         echo "Error: python3 is required for YAML validation"
         exit 1
     fi
-    
+
     if ! python3 -c "import yaml" &> /dev/null; then
         echo "Installing PyYAML..."
         apt-get update && apt-get install -y python3-yaml
     fi
-    
+
     # Create a temporary Python script for YAML validation
     local tmp_script=$(mktemp)
     cat > "$tmp_script" << 'EOF'
@@ -472,7 +472,7 @@ EOF
     fi
 
     echo "Validating YAML files in $dir..."
-    
+
     while IFS= read -r file; do
         echo "Checking $file..."
         if ! python3 "$tmp_script" "$file"; then
@@ -490,7 +490,7 @@ EOF
         echo "YAML validation failed. Please fix the errors above."
         return 1
     fi
-    
+
     echo "All YAML files are valid."
     return 0
 }
@@ -499,27 +499,27 @@ check_params() {
     # Collect system info
     TOTAL_CPUS=$(nproc)
     TOTAL_RAM=$(free -g | awk '/^Mem:/{print $2}')
-        
+
     # Get list of all NVIDIA GPUs and NVSwitch devices
     AVAILABLE_GPUS=($(lspci -nnk -d 10de: | grep -E '3D controller' | awk '{print $1}'))
     AVAILABLE_NVSWITCHES=($(lspci -mm -n -d 10de:22a3 | cut -d' ' -f1))
-    
+
     echo "Debug: Found GPUs: ${AVAILABLE_GPUS[@]}"
-    
+
     # Process GPU list
     if [[ " ${USED_GPUS[@]} " =~ " none " ]]; then
         USED_GPUS=()
     elif [[ ${#USED_GPUS[@]} -eq 0 ]]; then
         USED_GPUS=("${AVAILABLE_GPUS[@]}")
     fi
-    
+
     # Remove duplicates efficiently
     declare -A UNIQUE_GPUS
     for GPU in "${USED_GPUS[@]}"; do
         UNIQUE_GPUS["$GPU"]=1
     done
     USED_GPUS=("${!UNIQUE_GPUS[@]}")
-    
+
     # Verify GPUs
     for GPU in "${USED_GPUS[@]}"; do
         if [[ " ${AVAILABLE_GPUS[*]} " =~ " ${GPU} " ]]; then
@@ -529,7 +529,7 @@ check_params() {
             exit 1
         fi
     done
-    
+
     echo "• Used GPUs for VM / available GPUs on host: ${USED_GPUS[@]:-None} / ${AVAILABLE_GPUS[*]}"
 
     if [[ -z "$STATE_DISK_PATH" ]]; then
@@ -542,7 +542,7 @@ check_params() {
     mkdir -p $(dirname ${STATE_DISK_PATH})
     echo "Initializing state disk..."
     touch ${STATE_DISK_PATH}
-    
+
     echo "Checking mount point..."
     MOUNT_POINT=$(df --output=target "${STATE_DISK_PATH}" | tail -n 1)
 
@@ -584,7 +584,7 @@ check_params() {
 
         # Validate all yamls
         validate_yaml_files "${PROVIDER_CONFIG}"
-        
+
         # Check if authorized_keys doesn't exist in provider_config
         if [[ ! -f "${PROVIDER_CONFIG}/authorized_keys" ]]; then
             if [[ -f "${HOME}/.ssh/authorized_keys" ]]; then
@@ -592,13 +592,18 @@ check_params() {
                 echo "Copied keys file from ~/.ssh/authorized_keys"
             fi
         fi
+
+        # Setting proper rights and ownership to authorized_keys
+        chown root:root "${PROVIDER_CONFIG}"
+        chown root:root "${PROVIDER_CONFIG}/authorized_keys"
+        chmod 400 "${PROVIDER_CONFIG}/authorized_keys"
     else
         echo "Folder ${PROVIDER_CONFIG} does not exist."
         exit 1
     fi
-    
+
     if [[ "${MAC_ADDRESS}" =~ ^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$ ]]; then
-         echo "• Mac address: ${MAC_ADDRESS}"
+        echo "• Mac address: ${MAC_ADDRESS}"
     else
         echo "Error: MAC-address $MAC_ADDRESS has invalid format"
         exit 1
@@ -648,10 +653,10 @@ main() {
     # Prepare QEMU command with GPU passthrough
     GPU_PASSTHROUGH=""
     CHASSIS=1
-    
+
     # Add single fw_cfg setting before GPU loop
     GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,string=262144"
-    
+
     # Add GPUs
     for GPU in "${USED_GPUS[@]}"; do
         echo "Debug: Adding GPU to QEMU: $GPU with chassis $CHASSIS"
@@ -665,7 +670,7 @@ main() {
         fi
         CHASSIS=$((CHASSIS + 1))
     done
-    
+
     # Add NVSwitch devices
     if [[ "${VM_MODE}" == "tdx" ]]; then
         GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
@@ -682,7 +687,7 @@ main() {
         fi
         CHASSIS=$((CHASSIS + 1))
     done
-    
+
     # Initialize machine parameters based on mode
     MACHINE_PARAMS=""
     CPU_PARAMS="-cpu host"
@@ -722,7 +727,7 @@ main() {
     DEBUG_PARAMS=""
     KERNEL_CMD_LINE=""
     ROOT_HASH=$(grep 'Root hash' "${ROOTFS_HASH_PATH}" | awk '{print $3}')
-    
+
     if [[ ${DEBUG_MODE} == true ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
         KERNEL_CMD_LINE="root=/dev/vda1 console=ttyS0 clearcpuid=mtrr systemd.log_level=trace systemd.log_target=log rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} sp-debug=true"
@@ -731,30 +736,30 @@ main() {
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
-    -enable-kvm \
-    -append \"${KERNEL_CMD_LINE}\" \
-    -drive file=${ROOTFS_PATH},if=virtio,format=raw \
-    -drive file=${STATE_DISK_PATH},if=virtio,format=qcow2 \
-    -kernel ${KERNEL_PATH} \
-    -smp cores=${VM_CPU} \
-    -m ${VM_RAM}G \
-    ${CPU_PARAMS} \
-    -machine ${MACHINE_PARAMS} \
-    ${CC_SPECIFIC_PARAMS} \
-    ${NETWORK_SETTINGS} \
-    -nographic \
-    ${CC_PARAMS} \
-    -bios ${BIOS_PATH} \
-    -vga none \
-    -nodefaults \
-    -serial stdio \
-    -device vhost-vsock-pci,guest-cid=${GUEST_CID} \
-    ${GPU_PASSTHROUGH} \
-    "
+        -enable-kvm \
+        -append \"${KERNEL_CMD_LINE}\" \
+        -drive file=${ROOTFS_PATH},if=virtio,format=raw \
+        -drive file=${STATE_DISK_PATH},if=virtio,format=qcow2 \
+        -kernel ${KERNEL_PATH} \
+        -smp cores=${VM_CPU} \
+        -m ${VM_RAM}G \
+        ${CPU_PARAMS} \
+        -machine ${MACHINE_PARAMS} \
+        ${CC_SPECIFIC_PARAMS} \
+        ${NETWORK_SETTINGS} \
+        -nographic \
+        ${CC_PARAMS} \
+        -bios ${BIOS_PATH} \
+        -vga none \
+        -nodefaults \
+        -serial stdio \
+        -device vhost-vsock-pci,guest-cid=${GUEST_CID} \
+        ${GPU_PASSTHROUGH} \
+        "
 
     if [ -n "${PROVIDER_CONFIG}" ] && [ -d "${PROVIDER_CONFIG}" ]; then
         QEMU_COMMAND+=" -fsdev local,security_model=passthrough,id=fsdev0,path=${PROVIDER_CONFIG} \
-                    -device virtio-9p-pci,fsdev=fsdev0,mount_tag=sharedfolder"
+            -device virtio-9p-pci,fsdev=fsdev0,mount_tag=sharedfolder"
     fi
 
     # Create VM state disk
