@@ -245,77 +245,77 @@ parse_and_download_release_files() {
 
     echo "Parsing release JSON at: ${RELEASE_JSON}"
 
-   # First, validate that we can read all required entries from JSON
-   required_keys=("rootfs" "bios" "root_hash" "kernel")
-   for key in "${required_keys[@]}"; do
-       if ! jq -e ".${key}" "${RELEASE_JSON}" > /dev/null; then
-           echo "Error: Required key '${key}' not found in release JSON"
-           exit 1
-       fi
-   done
+    # First, validate that we can read all required entries from JSON
+    required_keys=("rootfs" "bios" "root_hash" "kernel")
+    for key in "${required_keys[@]}"; do
+        if ! jq -e ".${key}" "${RELEASE_JSON}" > /dev/null; then
+            echo "Error: Required key '${key}' not found in release JSON"
+            exit 1
+        fi
+    done
 
-   while read -r entry; do
-       key=$(echo "$entry" | jq -r '.key')
-       bucket=$(echo "$entry" | jq -r '.value.bucket')
-       prefix=$(echo "$entry" | jq -r '.value.prefix')
-       filename=$(echo "$entry" | jq -r '.value.filename')
-       sha256=$(echo "$entry" | jq -r '.value.sha256')
+    while read -r entry; do
+        key=$(echo "$entry" | jq -r '.key')
+        bucket=$(echo "$entry" | jq -r '.value.bucket')
+        prefix=$(echo "$entry" | jq -r '.value.prefix')
+        filename=$(echo "$entry" | jq -r '.value.filename')
+        sha256=$(echo "$entry" | jq -r '.value.sha256')
 
-       echo "Processing entry - key: ${key}, filename: ${filename}"
+        echo "Processing entry - key: ${key}, filename: ${filename}"
 
-       local_path="$DOWNLOAD_DIR/$filename"
+        local_path="$DOWNLOAD_DIR/$filename"
 
-       case $key in
-           rootfs) ROOTFS_PATH=$local_path; echo "Set ROOTFS_PATH to ${local_path}" ;;
-           bios) BIOS_PATH=$local_path; echo "Set BIOS_PATH to ${local_path}" ;;
-           root_hash) ROOTFS_HASH_PATH=$local_path; echo "Set ROOTFS_HASH_PATH to ${local_path}" ;;
-           kernel) KERNEL_PATH=$local_path; echo "Set KERNEL_PATH to ${local_path}" ;;
-           *) echo "Warning: Unknown key ${key} in release JSON" ;;
-       esac
+        case $key in
+            rootfs) ROOTFS_PATH=$local_path; echo "Set ROOTFS_PATH to ${local_path}" ;;
+            bios) BIOS_PATH=$local_path; echo "Set BIOS_PATH to ${local_path}" ;;
+            root_hash) ROOTFS_HASH_PATH=$local_path; echo "Set ROOTFS_HASH_PATH to ${local_path}" ;;
+            kernel) KERNEL_PATH=$local_path; echo "Set KERNEL_PATH to ${local_path}" ;;
+            *) echo "Warning: Unknown key ${key} in release JSON" ;;
+        esac
 
-       # Check existing file
-       if [[ -f "$local_path" ]]; then
-           computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
-           if [[ "$computed_sha256" == "$sha256" ]]; then
-               echo "File $filename already exists and checksum is valid. Skipping download."
-               continue
-           else
-               if [[ -z "${LOCAL_BUILD_DIR}" ]]; then
-                   echo "Warning: Checksum mismatch for existing file $filename. Downloading again."
-                   rm -f "$local_path"
-               else
-                   echo "Error: Checksum mismatch for existing file $filename builded locally."
-                   exit 1;
-               fi
-           fi
-       fi
+        # Check existing file
+        if [[ -f "$local_path" ]]; then
+            computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
+            if [[ "$computed_sha256" == "$sha256" ]]; then
+                echo "File $filename already exists and checksum is valid. Skipping download."
+                continue
+            else
+                if [[ -z "${LOCAL_BUILD_DIR}" ]]; then
+                    echo "Warning: Checksum mismatch for existing file $filename. Downloading again."
+                    rm -f "$local_path"
+                else
+                    echo "Error: Checksum mismatch for existing file $filename builded locally."
+                    exit 1;
+                fi
+            fi
+        fi
 
-       echo "Downloading $filename from sj://$bucket/$prefix/$filename to $local_path..."
-       uplink cp --parallelism 16 --progress --access ${STORJ_TOKEN} "sj://$bucket/$prefix/$filename" "$local_path"
+        echo "Downloading $filename from sj://$bucket/$prefix/$filename to $local_path..."
+        uplink cp --parallelism 16 --progress --access ${STORJ_TOKEN} "sj://$bucket/$prefix/$filename" "$local_path"
 
-       if [ $? -ne 0 ]; then
-           echo "Error: Failed to download $filename"
-           exit 1
-       fi
+        if [ $? -ne 0 ]; then
+            echo "Error: Failed to download $filename"
+            exit 1
+        fi
 
-       computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
-       if [[ "$computed_sha256" != "$sha256" ]]; then
-           echo "Error: Checksum mismatch for $filename after download. Expected $sha256, got $computed_sha256."
-           exit 1
-       else
-           echo "Successfully downloaded and verified $filename."
-       fi
-   done < <(jq -c 'to_entries[]' "$RELEASE_JSON")
+        computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
+        if [[ "$computed_sha256" != "$sha256" ]]; then
+            echo "Error: Checksum mismatch for $filename after download. Expected $sha256, got $computed_sha256."
+            exit 1
+        else
+            echo "Successfully downloaded and verified $filename."
+        fi
+    done < <(jq -c 'to_entries[]' "$RELEASE_JSON")
 
-   # Verify that all required paths are set
-   if [[ -z "${ROOTFS_PATH}" ]] || [[ -z "${BIOS_PATH}" ]] || [[ -z "${ROOTFS_HASH_PATH}" ]] || [[ -z "${KERNEL_PATH}" ]]; then
-       echo "Error: Not all required files were processed successfully"
-       echo "ROOTFS_PATH: ${ROOTFS_PATH}"
-       echo "BIOS_PATH: ${BIOS_PATH}"
-       echo "ROOTFS_HASH_PATH: ${ROOTFS_HASH_PATH}"
-       echo "KERNEL_PATH: ${KERNEL_PATH}"
-       exit 1
-   fi
+    # Verify that all required paths are set
+    if [[ -z "${ROOTFS_PATH}" ]] || [[ -z "${BIOS_PATH}" ]] || [[ -z "${ROOTFS_HASH_PATH}" ]] || [[ -z "${KERNEL_PATH}" ]]; then
+        echo "Error: Not all required files were processed successfully"
+        echo "ROOTFS_PATH: ${ROOTFS_PATH}"
+        echo "BIOS_PATH: ${BIOS_PATH}"
+        echo "ROOTFS_HASH_PATH: ${ROOTFS_HASH_PATH}"
+        echo "KERNEL_PATH: ${KERNEL_PATH}"
+        exit 1
+    fi
 }
 
 check_packages() {
@@ -739,7 +739,7 @@ main() {
     DEBUG_PARAMS=""
     KERNEL_CMD_LINE=""
     ROOT_HASH=$(grep 'Root hash' "${ROOTFS_HASH_PATH}" | awk '{print $3}')
-    
+
     CLEARCPUID_PARAM=" " # Space is important
     BUILD_PARAM=""
     VSOCK_CID=""
