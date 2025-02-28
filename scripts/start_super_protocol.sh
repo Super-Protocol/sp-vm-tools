@@ -246,7 +246,13 @@ parse_and_download_release_files() {
     echo "Parsing release JSON at: ${RELEASE_JSON}"
 
     # First, validate that we can read all required entries from JSON
-    required_keys=("rootfs" "bios" "root_hash" "kernel")
+    required_keys=()
+    if [[ "${VM_MODE}" == "sev" ]]; then
+        required_keys=("rootfs" "bios_amd" "root_hash" "kernel")
+    else
+        required_keys=("rootfs" "bios" "root_hash" "kernel")
+    fi
+
     for key in "${required_keys[@]}"; do
         if ! jq -e ".${key}" "${RELEASE_JSON}" > /dev/null; then
             echo "Error: Required key '${key}' not found in release JSON"
