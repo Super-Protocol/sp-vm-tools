@@ -267,7 +267,18 @@ parse_and_download_release_files() {
 
         case $key in
             rootfs) ROOTFS_PATH=$local_path; echo "Set ROOTFS_PATH to ${local_path}" ;;
-            bios) BIOS_PATH=$local_path; echo "Set BIOS_PATH to ${local_path}" ;;
+            bios)
+                if [[ "${VM_MODE}" != "sev" ]]; then
+                    BIOS_PATH=$local_path
+                    echo "Set BIOS_PATH to ${local_path}"
+                fi
+                ;;
+            bios_amd)
+                if [[ "${VM_MODE}" == "sev" ]]; then
+                    BIOS_PATH=$local_path
+                    echo "Set BIOS_PATH to ${local_path}"
+                fi
+                ;;
             root_hash) ROOTFS_HASH_PATH=$local_path; echo "Set ROOTFS_HASH_PATH to ${local_path}" ;;
             kernel) KERNEL_PATH=$local_path; echo "Set KERNEL_PATH to ${local_path}" ;;
             *) echo "Warning: Unknown key ${key} in release JSON" ;;
