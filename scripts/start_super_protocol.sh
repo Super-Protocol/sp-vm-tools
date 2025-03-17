@@ -42,7 +42,7 @@ TDX_SUPPORT=$(lscpu | grep -i tdx || echo "")
 SEV_SUPPORT=$(lscpu | grep -i sev_snp || echo "")
 
 # Default mode
-DEFAULT_MODE="untrusted"  # Can be "untrusted", "tdx", or "sev"
+DEFAULT_MODE="untrusted"  # Can be "untrusted", "tdx", or "sev-snp"
 
 # Function to get the next available guest-cid and nic_id numbers
 get_next_available_id() {
@@ -85,7 +85,7 @@ usage() {
     echo "  --argo_branch <name>         Name of argo branch for init SP components (default: ${DEFAULT_ARGO_BRANCH})"
     echo "  --argo_sp_env <name>         Name of argo environment for init SP components (default: ${DEFAULT_ARGO_SP_ENV})"
     echo "  --release <name>             Release name (default: latest)"
-    echo "  --mode <mode>                VM mode: untrusted, tdx, sev (default: ${DEFAULT_MODE})"
+    echo "  --mode <mode>                VM mode: untrusted, tdx, sev-snp (default: ${DEFAULT_MODE})"
     echo "  --guest-cid <id>             Guest CID for vsock (default: ${DEFAULT_GUEST_CID})"
     echo "  --build_dir <path>           Path to the local builded kata container (default: no)"
     echo ""
@@ -247,7 +247,7 @@ parse_and_download_release_files() {
 
     # First, validate that we can read all required entries from JSON
     required_keys=()
-    if [[ "${VM_MODE}" == "sev" ]]; then
+    if [[ "${VM_MODE}" == "sev-snp" ]]; then
         required_keys=("rootfs" "bios_amd" "root_hash" "kernel")
     else
         required_keys=("rootfs" "bios" "root_hash" "kernel")
@@ -274,13 +274,13 @@ parse_and_download_release_files() {
         case $key in
             rootfs) ROOTFS_PATH=$local_path; echo "Set ROOTFS_PATH to ${local_path}" ;;
             bios)
-                if [[ "${VM_MODE}" != "sev" ]]; then
+                if [[ "${VM_MODE}" != "sev-snp" ]]; then
                     BIOS_PATH=$local_path
                     echo "Set BIOS_PATH to ${local_path}"
                 fi
                 ;;
             bios_amd)
-                if [[ "${VM_MODE}" == "sev" ]]; then
+                if [[ "${VM_MODE}" == "sev-snp" ]]; then
                     BIOS_PATH=$local_path
                     echo "Set BIOS_PATH to ${local_path}"
                 fi
@@ -363,7 +363,7 @@ check_packages() {
         done
     fi
 
-    if [[ "${VM_MODE}" == "sev" ]]; then
+    if [[ "${VM_MODE}" == "sev-snp" ]]; then
         for package in "${REQUIRED_SNP_PACKAGES[@]}"; do
             if ! dpkg -l | grep -q "^ii.*$package"; then
                 missing+=("$package")
@@ -731,7 +731,7 @@ main() {
             MACHINE_PARAMS="q35,kernel-irqchip=split,confidential-guest-support=tdx,memory-backend=mem0"
             CC_SPECIFIC_PARAMS=" -object '{\"qom-type\":\"tdx-guest\",\"id\":\"tdx\",\"quote-generation-socket\":{\"type\":\"vsock\",\"cid\":\"${BASE_CID}\",\"port\":\"4050\"}}'"
             ;;
-        "sev")
+        "sev-snp")
             if [[ ! $SEV_SUPPORT ]]; then
                 echo "Error: SEV is not supported on this system"
                 exit 1
@@ -746,7 +746,7 @@ main() {
             CPU_PARAMS="-cpu host,-kvm-steal-time,pmu=off"
             ;;
         *)
-            echo "Error: Invalid mode '${VM_MODE}'. Must be 'untrusted', 'tdx', or 'sev'."
+            echo "Error: Invalid mode '${VM_MODE}'. Must be 'untrusted', 'tdx', or 'sev-snp'."
             exit 1
             ;;
     esac
@@ -766,7 +766,7 @@ main() {
         VSOCK_CID="-device vhost-vsock-pci,guest-cid=${GUEST_CID}"
     fi
 
-    if [[ "${VM_MODE}" == "sev" ]]; then
+    if [[ "${VM_MODE}" == "sev-snp" ]]; then
         BUILD_PARAM=" build=$RELEASE"
     fi
 
