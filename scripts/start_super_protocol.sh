@@ -38,11 +38,11 @@ DEFAULT_ARGO_BRANCH="main"
 DEFAULT_ARGO_SP_ENV="main"
 LOCAL_BUILD_DIR=""
 
+# VM mode
+VM_MODE=""
+DEFAULT_VM_MODE="untrusted"  # Can be "untrusted", "tdx", or "sev-snp"
 TDX_SUPPORT=$(lscpu | grep -i tdx || echo "")
-SEV_SUPPORT=$(lscpu | grep -i sev_snp || echo "")
-
-# Default mode
-DEFAULT_MODE="untrusted"  # Can be "untrusted", "tdx", or "sev-snp"
+SEV_SNP_SUPPORT=$(lscpu | grep -i sev_snp || echo "")
 
 # Function to get the next available guest-cid and nic_id numbers
 get_next_available_id() {
@@ -85,7 +85,7 @@ usage() {
     echo "  --argo_branch <name>         Name of argo branch for init SP components (default: ${DEFAULT_ARGO_BRANCH})"
     echo "  --argo_sp_env <name>         Name of argo environment for init SP components (default: ${DEFAULT_ARGO_SP_ENV})"
     echo "  --release <name>             Release name (default: latest)"
-    echo "  --mode <mode>                VM mode: untrusted, tdx, sev-snp (default: ${DEFAULT_MODE})"
+    echo "  --mode <mode>                VM mode: untrusted, tdx, sev-snp (default: ${DEFAULT_VM_MODE})"
     echo "  --guest-cid <id>             Guest CID for vsock (default: ${DEFAULT_GUEST_CID})"
     echo "  --build_dir <path>           Path to the local builded kata container (default: no)"
     echo ""
@@ -144,9 +144,28 @@ parse_args() {
         esac
         shift
     done
+}
 
-    # Set default mode if not specified
-    VM_MODE=${VM_MODE:-$DEFAULT_MODE}
+detect_cpu_type() {
+    if [[ -n "$VM_MODE" ]]; then
+        echo "CPU type was overwritten by '--mode' cmd arg. value: '$VM_MODE'";
+        return;
+    fi
+
+    if lscpu | grep -iq tdx; then
+        VM_MODE="tdx";
+    elif lscpu | grep -iq sev_snp; then
+        VM_MODE="sev-snp";
+    elif false; then  # TODO: decect sgx?
+        VM_MODE="sgx";
+    fi
+
+    if [[ -z "$VM_MODE" ]]; then
+        echo "failed to detect CPU type, using default: '$DEFAULT_VM_MODE'";
+        VM_MODE="$DEFAULT_VM_MODE";
+    else
+        echo "detected CPU type: $VM_MODE";
+    fi
 }
 
 find_qemu_path() {
@@ -732,7 +751,7 @@ main() {
             CC_SPECIFIC_PARAMS=" -object '{\"qom-type\":\"tdx-guest\",\"id\":\"tdx\",\"quote-generation-socket\":{\"type\":\"vsock\",\"cid\":\"${BASE_CID}\",\"port\":\"4050\"}}'"
             ;;
         "sev-snp")
-            if [[ ! $SEV_SUPPORT ]]; then
+            if [[ ! $SEV_SNP_SUPPORT ]]; then
                 echo "Error: SEV is not supported on this system"
                 exit 1
             fi
@@ -776,9 +795,9 @@ main() {
                         systemd.log_level=trace systemd.log_target=log \
                         rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} \
                         argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} \
-                        sp-debug=true${BUILD_PARAM}"
+                        sp-debug=true${BUILD_PARAM} sp_cpu_type=$VM_MODE"
     else
-        KERNEL_CMD_LINE="root=/dev/vda1${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}${BUILD_PARAM}"
+        KERNEL_CMD_LINE="root=/dev/vda1${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}${BUILD_PARAM} sp_cpu_type=$VM_MODE"
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
@@ -823,4 +842,5 @@ main() {
 }
 
 parse_args $@
+detect_cpu_type
 main
