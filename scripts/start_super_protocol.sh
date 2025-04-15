@@ -795,9 +795,9 @@ main() {
                         systemd.log_level=trace systemd.log_target=log \
                         rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} \
                         argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} \
-                        sp-debug=true${BUILD_PARAM} sp_cpu_type=$VM_MODE"
+                        sp-debug=true${BUILD_PARAM}"
     else
-        KERNEL_CMD_LINE="root=/dev/vda1${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}${BUILD_PARAM} sp_cpu_type=$VM_MODE"
+        KERNEL_CMD_LINE="root=/dev/vda1${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}${BUILD_PARAM}"
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
