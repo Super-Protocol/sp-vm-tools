@@ -156,7 +156,10 @@ detect_cpu_type() {
         VM_MODE="tdx";
     elif lscpu | grep -iq sev_snp; then
         VM_MODE="sev-snp";
-    elif false; then  # TODO: decect sgx?
+    elif [[ -s "/var/run/aesmd/aesm.socket" ]] \
+        && [[ -c "/dev/sgx_provision" ]] \
+        && [[ -c "/dev/sgx_enclave" ]] \
+        && [[ -d "/dev/sgx" ]]; then
         VM_MODE="sgx";
     fi
 
