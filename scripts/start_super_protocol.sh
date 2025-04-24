@@ -586,15 +586,15 @@ check_params() {
     if [[ -n "$HTTP_PORT" ]]; then
         echo "Checking http port aviability..."
         if nc -z 0.0.0.0 "$HTTP_PORT"; then
-            echo "https port $HTTP_PORT already bound!";
-            exit 1;
+            echo "http port $HTTP_PORT already bound!"
+            exit 1
         fi
     fi
     if [[ -n "$HTTPS_PORT" ]]; then
         echo "Checking https port aviability..."
         if nc -z 0.0.0.0 "$HTTPS_PORT"; then
             echo "https port $HTTPS_PORT already bound!"
-            exit 1;
+            exit 1
         fi
     fi
 
