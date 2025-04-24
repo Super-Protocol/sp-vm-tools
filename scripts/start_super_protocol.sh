@@ -27,8 +27,6 @@ DEFAULT_CACHE="${HOME}/.cache/superprotocol" # Default cache path
 DEFAULT_MOUNT_CONFIG="/sp"
 
 DEFAULT_SSH_PORT=2222
-DEFAULT_HTTP_PORT=80
-DEFAULT_HTTPS_PORT=443
 DEFAULT_GUEST_CID=3
 
 LOG_FILE=""
@@ -82,8 +80,8 @@ usage() {
     echo "  --provider_config <file>     Provider configuration file (default: no)"
     echo "  --mac_address <address>      MAC address (default: ${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX})"
     echo "  --ssh_port <port>            SSH port (default: ${DEFAULT_SSH_PORT})"
-    echo "  --http_port <port>           HTTP port (default: ${DEFAULT_HTTP_PORT})"
-    echo "  --https_port <port>          HTTPS port (default: ${DEFAULT_HTTPS_PORT})"
+    echo "  --http_port <port>           HTTP port (default: no port forward)"
+    echo "  --https_port <port>          HTTPS port (default: no port forward)"
     echo "  --log_file <file>            Log file (default: no)"
     echo "  --debug <true|false>         Enable debug mode (default: ${DEFAULT_DEBUG})"
     echo "  --argo_branch <name>         Name of argo branch for init SP components (default: ${DEFAULT_ARGO_BRANCH})"
@@ -113,8 +111,8 @@ RELEASE=""
 RELEASE_FILEPATH=""
 
 SSH_PORT=${DEFAULT_SSH_PORT}
-HTTP_PORT=${DEFAULT_HTTP_PORT}
-HTTPS_PORT=${DEFAULT_HTTPS_PORT}
+HTTP_PORT=""
+HTTPS_PORT=""
 BASE_CID=$(get_next_available_id 2 guest-cid)
 BASE_NIC=$(get_next_available_id 0 nic_id)
 
@@ -585,15 +583,19 @@ check_params() {
     touch ${STATE_DISK_PATH}
 
 
-    echo "Checking http port aviability..."
-    if nc -z 0.0.0.0 "$HTTP_PORT"; then
-        echo "HTTP port $HTTP_PORT already bound! Use '--http_port' flag to redefine it";
-        exit 1;
+    if [[ -n "$HTTP_PORT" ]]; then
+        echo "Checking http port aviability..."
+        if nc -z 0.0.0.0 "$HTTP_PORT"; then
+            echo "https port $HTTP_PORT already bound!";
+            exit 1;
+        fi
     fi
-    echo "Checking https port aviability..."
-    if nc -z 0.0.0.0 "$HTTPS_PORT"; then
-        echo "HTTP port $HTTPS_PORT already bound! Use '--https_port' flag to redefine it"
-        exit 1;
+    if [[ -n "$HTTPS_PORT" ]]; then
+        echo "Checking https port aviability..."
+        if nc -z 0.0.0.0 "$HTTPS_PORT"; then
+            echo "https port $HTTPS_PORT already bound!"
+            exit 1;
+        fi
     fi
 
 
@@ -674,8 +676,12 @@ check_params() {
         echo "   Argo branch: $ARGO_BRANCH"
         echo "   Argo SP env: $ARGO_SP_ENV"
         echo "   SSH Port: $SSH_PORT"
-        echo "   HTTP Port: $HTTP_PORT"
-        echo "   HTTPS Port: $HTTPS_PORT"
+        if [[ -n "$HTTP_PORT" ]]; then
+            echo "   HTTP Port: $HTTP_PORT"
+        fi
+        if [[ -n "$HTTPS_PORT" ]]; then
+            echo "   HTTPS Port: $HTTPS_PORT"
+        fi
 
         if [[ -z "${LOG_FILE}" ]]; then
             echo "Error: <log_file> option can't be empty in debug mode"
@@ -782,7 +788,12 @@ main() {
 
     NETWORK_SETTINGS=" -device virtio-net-pci,netdev=nic_id$BASE_NIC,mac=$MAC_ADDRESS"
     NETWORK_SETTINGS+=" -netdev user,id=nic_id$BASE_NIC"
-    NETWORK_SETTINGS+=",hostfwd=tcp:0.0.0.0:$HTTP_PORT-:80,hostfwd=tcp:0.0.0.0:$HTTPS_PORT-:443"
+    if [[ -n "$HTTP_PORT" ]]; then
+        NETWORK_SETTINGS+=",hostfwd=tcp:0.0.0.0:$HTTP_PORT-:80"
+    fi
+    if [[ -n "$HTTPS_PORT" ]]; then
+        NETWORK_SETTINGS+=",hostfwd=tcp:0.0.0.0:$HTTPS_PORT-:443"
+    fi
     DEBUG_PARAMS=""
     KERNEL_CMD_LINE=""
     ROOT_HASH=$(grep 'Root hash' "${ROOTFS_HASH_PATH}" | awk '{print $3}')
