@@ -152,9 +152,9 @@ detect_cpu_type() {
         return;
     fi
 
-    if lscpu | grep -iq tdx; then
+    if [[ -n "$TDX_SUPPORT" ]]; then
         VM_MODE="tdx";
-    elif lscpu | grep -iq sev_snp; then
+    elif [[ -n "$SEV_SNP_SUPPORT" ]]; then
         VM_MODE="sev-snp";
     fi
 
