@@ -1,16 +1,18 @@
-import { ChallengeProviderUntrusted, PkiClient } from "@super-protocol/pki-client";
-import { StaticAttestationServiceClient } from "@super-protocol/pki-api-client";
 import * as fs from 'fs';
 import * as path from 'path';
+import { ChallengeProvider, ChallengeProviderSevSnp, ChallengeProviderTdx, ChallengeProviderUntrusted, PkiClient } from "@super-protocol/pki-client";
+import { StaticAttestationServiceClient } from "@super-protocol/pki-api-client";
+import { ChallengeType } from "@super-protocol/pki-common";
 
 const requestSecretFromVault = async (
+    cpuType: string,
     caUrl: string,
     caBundlePath: string,
     certDomain: string,
     outputCertFolder: string
 ) => {
     try {
-        const challengeProvider = new ChallengeProviderUntrusted(Buffer.from('cccccc', 'hex'));
+        const challengeProvider = getChallengeProvider(cpuType);
         const caBundle = fs.readFileSync(caBundlePath, 'utf-8');
 
         const attestationServiceClient = new StaticAttestationServiceClient(
@@ -35,12 +37,27 @@ const requestSecretFromVault = async (
     }
 };
 
+const getChallengeProvider = (cpuType: string): ChallengeProvider => {
+  // cpuTypes have same name as ChallengeType enum
+  // in @super-protocol/pki-common
+    switch (cpuType) {
+      case ChallengeType.Untrusted:
+        return new ChallengeProviderUntrusted(Buffer.from('cccccc', 'hex'));
+      case ChallengeType.TDX:
+        return new ChallengeProviderTdx();
+      case ChallengeType.SEVSNP:
+        return new ChallengeProviderSevSnp();
+      default:
+        throw new Error(`Unsupported CPU type: ${cpuType}`);
+    }
+};
+
 const args = process.argv.slice(2);
 if (args.length < 4) {
-    console.error('Usage: ./ca-initializer <CA_URL> <CA_BUNDLE_PATH> <CERT_GENERATED_DOMAIN> <OUTPUT_CERTS_FOLDER>');
+    console.error('Usage: ./ca-initializer <CPU_TYPE> <CA_URL> <CA_BUNDLE_PATH> <CERT_GENERATED_DOMAIN> <OUTPUT_CERTS_FOLDER>');
     process.exit(1);
 }
 
-const [caUrl, caBundlePath, certDomain, outputCertFolder] = args;
+const [cpuType, caUrl, caBundlePath, certDomain, outputCertFolder] = args;
 
-requestSecretFromVault(caUrl, caBundlePath, certDomain, outputCertFolder);
+requestSecretFromVault(cpuType, caUrl, caBundlePath, certDomain, outputCertFolder);
