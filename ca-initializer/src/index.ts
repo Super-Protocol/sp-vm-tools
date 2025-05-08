@@ -13,6 +13,8 @@ const requestSecretFromVault = async (
     try {
         const challengeProvider = getChallengeProvider(cpuType);
         const caUrl = getCaUrl(cpuType);
+        console.log(`CA URL: ${caUrl}`);
+
         const caBundle = fs.readFileSync(caBundlePath, 'utf-8');
 
         const attestationServiceClient = new StaticAttestationServiceClient(
@@ -61,8 +63,11 @@ const getChallengeProvider = (cpuType: string): ChallengeProvider => {
 };
 
 const args = process.argv.slice(2);
+
 if (args.length < 4) {
-    console.error('Usage: ./ca-initializer <CPU_TYPE> <CA_BUNDLE_PATH> <CERT_GENERATED_DOMAIN> <OUTPUT_CERTS_FOLDER>');
+    const packageJson = fs.readFileSync(path.join(__dirname, '../package.json'), 'utf-8');
+    console.log('Version', JSON.parse(packageJson).version);
+    console.log('Usage: ./ca-initializer <CPU_TYPE> <CA_BUNDLE_PATH> <CERT_GENERATED_DOMAIN> <OUTPUT_CERTS_FOLDER>');
     process.exit(1);
 }
 
