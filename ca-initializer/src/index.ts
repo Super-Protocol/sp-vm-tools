@@ -6,13 +6,13 @@ import { ChallengeType } from "@super-protocol/pki-common";
 
 const requestSecretFromVault = async (
     cpuType: string,
-    caUrl: string,
     caBundlePath: string,
     certDomain: string,
     outputCertFolder: string
 ) => {
     try {
         const challengeProvider = getChallengeProvider(cpuType);
+        const caUrl = getCaUrl(cpuType);
         const caBundle = fs.readFileSync(caBundlePath, 'utf-8');
 
         const attestationServiceClient = new StaticAttestationServiceClient(
@@ -35,6 +35,14 @@ const requestSecretFromVault = async (
     } catch (error) {
         console.error(`Certificate generation error ${error}`);
     }
+};
+
+const getCaUrl = (cpuType: string): string => {
+  if(cpuType === 'Untrusted') {
+    return 'https://ca-subroot1.tee-dev.superprotocol.com:44443';
+  }
+
+  return 'https://ca-subroot2.tee-dev.superprotocol.io:44443'
 };
 
 const getChallengeProvider = (cpuType: string): ChallengeProvider => {
@@ -60,4 +68,4 @@ if (args.length < 4) {
 
 const [cpuType, caUrl, caBundlePath, certDomain, outputCertFolder] = args;
 
-requestSecretFromVault(cpuType, caUrl, caBundlePath, certDomain, outputCertFolder);
+requestSecretFromVault(cpuType, caBundlePath, certDomain, outputCertFolder);
