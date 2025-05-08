@@ -62,10 +62,10 @@ const getChallengeProvider = (cpuType: string): ChallengeProvider => {
 
 const args = process.argv.slice(2);
 if (args.length < 4) {
-    console.error('Usage: ./ca-initializer <CPU_TYPE> <CA_URL> <CA_BUNDLE_PATH> <CERT_GENERATED_DOMAIN> <OUTPUT_CERTS_FOLDER>');
+    console.error('Usage: ./ca-initializer <CPU_TYPE> <CA_BUNDLE_PATH> <CERT_GENERATED_DOMAIN> <OUTPUT_CERTS_FOLDER>');
     process.exit(1);
 }
 
-const [cpuType, caUrl, caBundlePath, certDomain, outputCertFolder] = args;
+const [cpuType, caBundlePath, certDomain, outputCertFolder] = args;
 
 requestSecretFromVault(cpuType, caBundlePath, certDomain, outputCertFolder);
