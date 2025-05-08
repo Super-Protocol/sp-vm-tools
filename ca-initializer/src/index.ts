@@ -6,15 +6,13 @@ import { ChallengeType } from "@super-protocol/pki-common";
 
 const requestSecretFromVault = async (
     cpuType: string,
+    caUrl: string,
     caBundlePath: string,
     certDomain: string,
     outputCertFolder: string
 ) => {
     try {
         const challengeProvider = getChallengeProvider(cpuType);
-        const caUrl = getCaUrl(cpuType);
-        console.log(`CA URL: ${caUrl}`);
-
         const caBundle = fs.readFileSync(caBundlePath, 'utf-8');
 
         const attestationServiceClient = new StaticAttestationServiceClient(
@@ -39,14 +37,6 @@ const requestSecretFromVault = async (
     }
 };
 
-const getCaUrl = (cpuType: string): string => {
-  if(cpuType === 'Untrusted') {
-    return 'https://ca-subroot1.tee-dev.superprotocol.com:44443';
-  }
-
-  return 'https://ca-subroot2.tee-dev.superprotocol.io:44443'
-};
-
 const getChallengeProvider = (cpuType: string): ChallengeProvider => {
   // cpuTypes have same name as ChallengeType enum
   // in @super-protocol/pki-common
@@ -67,10 +57,10 @@ const args = process.argv.slice(2);
 if (args.length < 4) {
     const packageJson = fs.readFileSync(path.join(__dirname, '../package.json'), 'utf-8');
     console.log('Version', JSON.parse(packageJson).version);
-    console.log('Usage: ./ca-initializer <CPU_TYPE> <CA_BUNDLE_PATH> <CERT_GENERATED_DOMAIN> <OUTPUT_CERTS_FOLDER>');
+    console.log('Usage: ./ca-initializer <CPU_TYPE> <CA_URL> <CA_BUNDLE_PATH> <CERT_GENERATED_DOMAIN> <OUTPUT_CERTS_FOLDER>');
     process.exit(1);
 }
 
-const [cpuType, caBundlePath, certDomain, outputCertFolder] = args;
+const [cpuType, caUrl, caBundlePath, certDomain, outputCertFolder] = args;
 
-requestSecretFromVault(cpuType, caBundlePath, certDomain, outputCertFolder);
+requestSecretFromVault(cpuType, caUrl, caBundlePath, certDomain, outputCertFolder);
