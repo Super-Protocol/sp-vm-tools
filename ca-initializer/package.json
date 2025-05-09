@@ -38,8 +38,7 @@
   },
   "pkg": {
     "assets": [
-      "node_modules/axios/**/*",
-      "node_modules/@super-protocol/sp-nvtrust-wrapper/**/*"
+      "node_modules/axios/**/*"
     ]
   }
 }
