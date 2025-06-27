@@ -26,6 +26,7 @@ DEFAULT_MEM=$(( $(free -g | awk '/^Mem:/{print $2}') - 8 ))
 DEFAULT_CACHE="${HOME}/.cache/superprotocol" # Default cache path
 DEFAULT_MOUNT_CONFIG="/sp"
 
+DEFAULT_IP_ADDRESS="0.0.0.0"
 DEFAULT_SSH_PORT=2222
 DEFAULT_GUEST_CID=3
 
@@ -79,6 +80,7 @@ usage() {
     echo "  --cache <path>               Cache directory (default: ${DEFAULT_CACHE})"
     echo "  --provider_config <file>     Provider configuration file (default: no)"
     echo "  --mac_address <address>      MAC address (default: ${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX})"
+    echo "  --ip_address <port>          IP address (default: ${DEFAULT_IP_ADDRESS})"
     echo "  --ssh_port <port>            SSH port (default: ${DEFAULT_SSH_PORT})"
     echo "  --http_port <port>           HTTP port (default: no port forward)"
     echo "  --https_port <port>          HTTPS port (default: no port forward)"
@@ -110,6 +112,7 @@ ARGO_SP_ENV=${DEFAULT_ARGO_SP_ENV}
 RELEASE=""
 RELEASE_FILEPATH=""
 
+IP_ADDRESS=${DEFAULT_IP_ADDRESS}
 SSH_PORT=${DEFAULT_SSH_PORT}
 HTTP_PORT=""
 HTTPS_PORT=""
@@ -134,6 +137,7 @@ parse_args() {
             --provider_config) PROVIDER_CONFIG=$2; shift ;;
             --mount_config) MOUNT_CONFIG=$2; shift ;;
             --mac_address) MAC_ADDRESS=$2; shift ;;
+            --ip_address) IP_ADDRESS=$2; shift ;;
             --ssh_port) SSH_PORT=$2; shift ;;
             --http_port) HTTP_PORT=$2; shift ;;
             --https_port) HTTPS_PORT=$2; shift ;;
@@ -602,14 +606,14 @@ check_params() {
 
     if [[ -n "$HTTP_PORT" ]]; then
         echo "Checking http port aviability..."
-        if nc -z 0.0.0.0 "$HTTP_PORT"; then
+        if nc -z "$IP_ADDRESS" "$HTTP_PORT"; then
             echo "http port $HTTP_PORT already bound!"
             exit 1
         fi
     fi
     if [[ -n "$HTTPS_PORT" ]]; then
         echo "Checking https port aviability..."
-        if nc -z 0.0.0.0 "$HTTPS_PORT"; then
+        if nc -z "$IP_ADDRESS" "$HTTPS_PORT"; then
             echo "https port $HTTPS_PORT already bound!"
             exit 1
         fi
@@ -806,10 +810,10 @@ main() {
     NETWORK_SETTINGS=" -device virtio-net-pci,netdev=nic_id$BASE_NIC,mac=$MAC_ADDRESS"
     NETWORK_SETTINGS+=" -netdev user,id=nic_id$BASE_NIC"
     if [[ -n "$HTTP_PORT" ]]; then
-        NETWORK_SETTINGS+=",hostfwd=tcp:0.0.0.0:$HTTP_PORT-:80"
+        NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$HTTP_PORT-:80"
     fi
     if [[ -n "$HTTPS_PORT" ]]; then
-        NETWORK_SETTINGS+=",hostfwd=tcp:0.0.0.0:$HTTPS_PORT-:443"
+        NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$HTTPS_PORT-:443"
     fi
     DEBUG_PARAMS=""
     KERNEL_CMD_LINE=""
