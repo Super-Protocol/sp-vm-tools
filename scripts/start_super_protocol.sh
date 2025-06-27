@@ -80,7 +80,7 @@ usage() {
     echo "  --cache <path>               Cache directory (default: ${DEFAULT_CACHE})"
     echo "  --provider_config <file>     Provider configuration file (default: no)"
     echo "  --mac_address <address>      MAC address (default: ${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX})"
-    echo "  --ip_address <port>          IP address (default: ${DEFAULT_IP_ADDRESS})"
+    echo "  --ip_address <address>       IP address (default: ${DEFAULT_IP_ADDRESS})"
     echo "  --ssh_port <port>            SSH port (default: ${DEFAULT_SSH_PORT})"
     echo "  --http_port <port>           HTTP port (default: no port forward)"
     echo "  --https_port <port>          HTTPS port (default: no port forward)"
