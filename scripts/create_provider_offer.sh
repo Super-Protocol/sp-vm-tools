@@ -1,5 +1,35 @@
 #!/bin/bash
 
+# Parse command line arguments
+CAPACITY_DIVIDER=1
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --capacity-divider)
+            CAPACITY_DIVIDER="$2"
+            shift 2
+            ;;
+        --help|-h)
+            echo "Usage: $0 [--capacity-divider NUMBER]"
+            echo "  --capacity-divider: Divide system capacity by this number (default: 1)"
+            echo "                     Example: --capacity-divider 2 uses half of the system resources"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
+# Validate capacity divider
+if ! [[ "$CAPACITY_DIVIDER" =~ ^[0-9]+(\.[0-9]+)?$ ]] || (( $(echo "$CAPACITY_DIVIDER <= 0" | bc -l) )); then
+    echo "Error: capacity-divider must be a positive number"
+    exit 1
+fi
+
+echo "Using capacity divider: $CAPACITY_DIVIDER"
+
 # Install petname if not present
 if ! command -v petname &> /dev/null; then
     echo "Installing petname package..."
@@ -51,6 +81,7 @@ set_system_hostname() {
     
     echo "Hostname has been updated. Changes will take full effect after reboot."
 }
+
 # Function to format hostname
 format_hostname() {
     local name=$1
@@ -240,10 +271,10 @@ get_ram_type() {
         if [ -n "$ram_type" ]; then
             echo "$ram_type"
         else
-            echo "RAM"  # Fallback если не удалось определить тип
+            echo "RAM"  # Fallback if unable to determine type
         fi
     else
-        echo "RAM"  # Fallback если нет dmidecode
+        echo "RAM"  # Fallback if dmidecode is not available
     fi
 }
 
@@ -264,11 +295,17 @@ set_system_hostname "$hostname_safe"
 # Get CPU cores (including HyperThreading) and calculate reserved cores
 total_cores=$(nproc)
 reserved_cores=$(( total_cores / 16 ))
-# Ensure at least 1 core is reserved
 # Ensure at least 1 core is reserved and no more than 6
 [[ $reserved_cores -lt 1 ]] && reserved_cores=1
 [[ $reserved_cores -gt 6 ]] && reserved_cores=6
 adjusted_cores=$((total_cores - reserved_cores))
+
+# Apply capacity divider to cores
+final_cores=$(calc "$adjusted_cores / $CAPACITY_DIVIDER")
+# Ensure at least 1 core
+if (( $(echo "$final_cores < 1" | bc -l) )); then
+    final_cores=1
+fi
 
 # Get CPU frequency
 cpu_freq=$(get_cpu_freq)
@@ -282,12 +319,26 @@ total_ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
 total_ram_gb=$(calc "$total_ram_kb / 1024 / 1024")
 adjusted_ram_gb=$(calc "$total_ram_gb - 20")
 adjusted_ram_gb=$(calc "$adjusted_ram_gb * 0.9")
-ram_bytes=$(to_bytes "$adjusted_ram_gb")
+
+# Apply capacity divider to RAM
+final_ram_gb=$(calc "$adjusted_ram_gb / $CAPACITY_DIVIDER")
+# Ensure minimum RAM
+if (( $(echo "$final_ram_gb < 1" | bc -l) )); then
+    final_ram_gb=1
+fi
+ram_bytes=$(to_bytes "$final_ram_gb")
 
 # Get largest disk size in GB and adjust it
 disk_size_gb=$(get_largest_disk_size)
 adjusted_disk_gb=$(adjust_disk_size "$disk_size_gb")
-disk_bytes=$(to_bytes "$adjusted_disk_gb")
+
+# Apply capacity divider to disk
+final_disk_gb=$(calc "$adjusted_disk_gb / $CAPACITY_DIVIDER")
+# Ensure minimum disk size
+if (( $(echo "$final_disk_gb < 1" | bc -l) )); then
+    final_disk_gb=1
+fi
+disk_bytes=$(to_bytes "$final_disk_gb")
 
 # Get RAM and disk types
 ram_type=$(get_ram_type)
@@ -301,6 +352,7 @@ gpu_info=""
 gpu_name=""
 gpu_count=0
 gpu_description=""
+final_gpu_cores=0
 
 # First, ensure lspci is installed
 if ! command -v lspci &> /dev/null; then
@@ -313,6 +365,13 @@ gpu_list=$(lspci -nnk -d 10de: | grep -E '3D controller' || true)
 if [ ! -z "$gpu_list" ]; then
     gpu_present=1
     gpu_cores=$(echo "$gpu_list" | wc -l)
+    
+    # Apply capacity divider to GPU cores
+    final_gpu_cores=$(calc "$gpu_cores / $CAPACITY_DIVIDER")
+    # Ensure minimum GPU cores (can be fractional)
+    if (( $(echo "$final_gpu_cores < 0.1" | bc -l) )); then
+        final_gpu_cores=0.1
+    fi
     
     # Get first GPU info for name
     first_gpu=$(echo "$gpu_list" | head -n 1)
@@ -329,11 +388,18 @@ if [ ! -z "$gpu_list" ]; then
     vram_gb=$(get_gpu_memory_from_name "$gpu_info")
     if [ $? -eq 0 ] && [ $vram_gb -gt 0 ]; then
         total_vram_gb=$((vram_gb * gpu_cores))
-        vram_bytes=$(to_bytes "$total_vram_gb")
+        
+        # Apply capacity divider to VRAM
+        final_vram_gb=$(calc "$total_vram_gb / $CAPACITY_DIVIDER")
+        vram_bytes=$(to_bytes "$final_vram_gb")
     fi
     
-    # Format GPU description with new format
-    gpu_description="GPUs: ${gpu_cores} x ${gpu_name}"
+    # Format GPU description with capacity divider applied
+    if (( $(echo "$CAPACITY_DIVIDER == 1" | bc -l) )); then
+        gpu_description="GPUs: ${gpu_cores} x ${gpu_name}"
+    else
+        gpu_description="GPUs: ${final_gpu_cores} x ${gpu_name} (${gpu_cores} total, divided by ${CAPACITY_DIVIDER})"
+    fi
     
     echo "$gpu_description"
     echo "Total VRAM: $((vram_bytes / 1024 / 1024 / 1024))GB"
@@ -344,7 +410,10 @@ fi
 # Calculate network bandwidth for detected speed in bytes per second
 # Speed in Mbps = (speed * 1000 * 1000) / 8 bytes per second
 network_speed=$(get_max_network_speed)
-bandwidth=$(calc "$network_speed * 1000 * 1000 / 8")
+
+# Apply capacity divider to network speed
+final_network_speed=$(calc "$network_speed / $CAPACITY_DIVIDER")
+bandwidth=$(calc "$final_network_speed * 1000 * 1000 / 8")
 
 # Get CPU model
 cpu_model=$(grep "model name" /proc/cpuinfo | head -n 1 | cut -d':' -f2 | xargs)
@@ -353,13 +422,12 @@ if [ -z "$cpu_model" ]; then
 fi
 
 # Get network speed in Gbps (convert from Mbps)
-network_speed_gbps=$(calc "$network_speed / 1000")
+network_speed_gbps=$(calc "$final_network_speed / 1000")
 
-# Create description in English with CPU frequency
 if [ $gpu_present -eq 1 ]; then
-    description="CPU: $cpu_model${freq_text}, $adjusted_cores cores, $adjusted_ram_gb GB ${ram_type}, $gpu_description, $adjusted_disk_gb GB ${disk_type}, ${network_speed_gbps} Gbps network"
+    description="CPU: $cpu_model${freq_text}, $final_cores cores, $final_ram_gb GB ${ram_type}, GPUs: ${final_gpu_cores} x ${gpu_name}, $final_disk_gb GB ${disk_type}, ${network_speed_gbps} Gbps network"
 else
-    description="CPU: $cpu_model${freq_text}, $adjusted_cores cores, $adjusted_ram_gb GB ${ram_type}, $adjusted_disk_gb GB ${disk_type}, ${network_speed_gbps} Gbps network"
+    description="CPU: $cpu_model${freq_text}, $final_cores cores, $final_ram_gb GB ${ram_type}, $final_disk_gb GB ${disk_type}, ${network_speed_gbps} Gbps network"
 fi
 
 floor_divide_precision() {
@@ -374,7 +442,7 @@ floor_divide() {
     echo $(( dividend / divisor ))
 }
 
-# Generate JSON file
+# Generate JSON file using final values (after capacity divider applied)
 cat > offer.json << EOF
 {
    "name": "$name",
@@ -384,8 +452,8 @@ cat > offer.json << EOF
    "properties": "0",
    "hardwareInfo": {
       "slotInfo": {
-         "cpuCores": $adjusted_cores,
-         "gpuCores": $gpu_cores,
+         "cpuCores": $final_cores,
+         "gpuCores": $final_gpu_cores,
          "ram": $ram_bytes,
          "vram": $vram_bytes,
          "diskUsage": $disk_bytes
@@ -412,11 +480,11 @@ else
     slot2_price=$base_price_slot2
 fi
 
-# Calculate values for slot1
-slot1_gpu_cores=$(floor_divide_precision $gpu_cores $adjusted_cores)
-slot1_disk=$(floor_divide $disk_bytes $adjusted_cores)
-slot1_ram=$(floor_divide $ram_bytes $adjusted_cores)
-slot1_vram=$(floor_divide $vram_bytes $adjusted_cores)
+# Calculate values for slot1 using final values
+slot1_gpu_cores=$(floor_divide_precision $final_gpu_cores $final_cores)
+slot1_disk=$(floor_divide $disk_bytes $final_cores)
+slot1_ram=$(floor_divide $ram_bytes $final_cores)
+slot1_vram=$(floor_divide $vram_bytes $final_cores)
 
 # Generate slot1.json
 cat > slot1.json << EOF
@@ -437,11 +505,11 @@ cat > slot1.json << EOF
 }
 EOF
 
-# Calculate values for slot2
-slot2_gpu_cores=$(floor_divide_precision $((gpu_cores * 3)) $adjusted_cores)
-slot2_disk=$(floor_divide $((disk_bytes * 3)) $adjusted_cores)
-slot2_ram=$(floor_divide $((ram_bytes * 3)) $adjusted_cores)
-slot2_vram=$(floor_divide $((vram_bytes * 3)) $adjusted_cores)
+# Calculate values for slot2 using final values
+slot2_gpu_cores=$(floor_divide_precision $((final_gpu_cores * 3)) $final_cores)
+slot2_disk=$(floor_divide $((disk_bytes * 3)) $final_cores)
+slot2_ram=$(floor_divide $((ram_bytes * 3)) $final_cores)
+slot2_vram=$(floor_divide $((vram_bytes * 3)) $final_cores)
 
 # Generate slot2.json
 cat > slot2.json << EOF
@@ -462,6 +530,14 @@ cat > slot2.json << EOF
 }
 EOF
 
+echo "Configuration files generated successfully with capacity divider: $CAPACITY_DIVIDER"
+echo "Final configuration:"
+echo "- CPU cores: $final_cores (from $adjusted_cores adjusted cores)"
+echo "- RAM: ${final_ram_gb}GB (from ${adjusted_ram_gb}GB adjusted RAM)"
+echo "- GPU cores: $final_gpu_cores (from $gpu_cores total GPU cores)"
+echo "- Disk: ${final_disk_gb}GB (from ${adjusted_disk_gb}GB adjusted disk)"
+echo "- Network: ${network_speed_gbps}Gbps (from $(calc "$network_speed / 1000")Gbps total speed)"
+echo ""
 echo "offer.json has been generated successfully."
 echo "slot1.json has been generated successfully."
 echo "slot2.json has been generated successfully."
