@@ -133,15 +133,18 @@ build_snphost() {
     local build_dir=$1
     local root_dir=$2
     
-    cp -fvr ${root_dir}/sources/amd/snphost ${build_dir}/
-    curl --proto '=https' --tlsv1.2 -sSf -o rustup-init.sh https://sh.rustup.rs
-    chmod +x rustup-init.sh
-    ./rustup-init.sh -y --default-toolchain 1.83.0
-    rm rustup-init.sh
-    source "$HOME/.cargo/env"
-
-    pushd ${build_dir}/snphost
-    cargo build -r
+    pushd ${build_dir}
+    
+    curl -L -o snphost-0.6.1-musl.tar.gz \
+        https://github.com/virtee/snphost/releases/download/v0.6.1/snphost-0.6.1-musl.tar.gz
+    
+    mkdir -p snphost/target/release
+    tar -xzf snphost-0.6.1-musl.tar.gz -C snphost/target/release/
+    
+    chmod +x snphost/target/release/snphost
+    chmod +x snphost/target/release/libsev.so
+    
+    popd
 }
 
 packaging() {
