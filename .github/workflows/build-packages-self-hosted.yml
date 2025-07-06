@@ -18,24 +18,30 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Clean workspace  
+      - name: Clean workspace completely
         run: |
-          cd $HOME
-          WORK_DIR="${GITHUB_WORKSPACE:-$(pwd)/sp-vm-tools}"
-          echo "Cleaning: $WORK_DIR"
+          echo "Cleaning workspace: ${{ github.workspace }}"
           
           sudo pkill -f "sp-vm-tools" || true
-          sudo umount $WORK_DIR/build/snp/* 2>/dev/null || true
+          sudo pkill -f "build" || true
+          sleep 2
           
-          sudo rm -rf "$WORK_DIR" || true
-          mkdir -p "$WORK_DIR"
+          sudo umount ${{ github.workspace }}/build/snp/* 2>/dev/null || true
+          sudo umount ${{ github.workspace }}/build/* 2>/dev/null || true
+          
+          sudo chmod -R 777 ${{ github.workspace }} 2>/dev/null || true
+          sudo rm -rf ${{ github.workspace }}/* 2>/dev/null || true
+          sudo rm -rf ${{ github.workspace }}/.git 2>/dev/null || true
+          sudo rm -rf ${{ github.workspace }}/.* 2>/dev/null || true
+          
+          ls -la ${{ github.workspace }} || true
       
       - name: Checkout repository with submodules
         uses: actions/checkout@v4
         with:
+          clean: false
           submodules: recursive
-
-
+          
       - name: Set build type and runner ID
         id: set-build-type
         run: | 
@@ -46,11 +52,17 @@ jobs:
         if: ${{ github.event.inputs.build_type == 'TDX' || github.event.inputs.build_type == 'BOTH' }}
         run: |
           NON_INTERACTIVE=1 FORCE_REBUILD_CONTAINER=1 ./build_in_docker.sh tdx
-
+          
       - name: Run SNP docker build
         if: ${{ github.event.inputs.build_type == 'SNP' || github.event.inputs.build_type == 'BOTH' }}
         run: |
           NON_INTERACTIVE=1 FORCE_REBUILD_CONTAINER=1 ./build_in_docker.sh snp
+          
+      - name: Fix file permissions after build
+        if: always()
+        run: |
+          sudo chown -R gh-runner:gh-runner ${{ github.workspace }} || true
+          sudo chmod -R u+w ${{ github.workspace }} || true
 
       - name: Set release name
         id: release-name
