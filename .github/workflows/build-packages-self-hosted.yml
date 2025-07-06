@@ -18,6 +18,10 @@ jobs:
     runs-on: self-hosted
 
     steps:
+      - name: Clean workspace
+        run: |
+          sudo rm -rf ${{ github.workspace }} || true
+      
       - name: Checkout repository with submodules
         uses: actions/checkout@v4
         with:
