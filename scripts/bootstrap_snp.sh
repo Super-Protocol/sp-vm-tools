@@ -139,9 +139,8 @@ bootstrap() {
     fi
 
     SNP_HOST_FILE="$DEB_DIR/snphost"
-    LIBSEV_FILE="$DEB_DIR/libsev.so"
 
-    if [ -f "${SNP_HOST_FILE}" ] && [ -f "${LIBSEV_FILE}" ]; then
+    if [ -f "${SNP_HOST_FILE}" ]; then
         echo "Running configuration check..."
         pushd $DEB_DIR
         set +e
