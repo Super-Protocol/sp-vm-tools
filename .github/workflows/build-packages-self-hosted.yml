@@ -18,9 +18,17 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Clean workspace
+      - name: Clean workspace  
         run: |
-          sudo rm -rf ${{ github.workspace }} || true
+          cd $HOME
+          WORK_DIR="${GITHUB_WORKSPACE:-$(pwd)/sp-vm-tools}"
+          echo "Cleaning: $WORK_DIR"
+          
+          sudo pkill -f "sp-vm-tools" || true
+          sudo umount $WORK_DIR/build/snp/* 2>/dev/null || true
+          
+          sudo rm -rf "$WORK_DIR" || true
+          mkdir -p "$WORK_DIR"
       
       - name: Checkout repository with submodules
         uses: actions/checkout@v4
