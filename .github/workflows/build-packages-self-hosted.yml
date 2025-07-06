@@ -18,47 +18,41 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Fix permissions before checkout
+      - name: Setup clean workspace
         run: |
-          if [ -d "${{ github.workspace }}" ]; then
-            sudo chown -R gh-runner:gh-runner ${{ github.workspace }} || true
-            sudo chmod -R u+rwX ${{ github.workspace }} || true
-          fi
-      
-      - name: Checkout repository with submodules
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          clean: true
+          WORK_DIR="/home/gh-runner/builds/run-${{ github.run_number }}"
+          echo "WORK_DIR=$WORK_DIR" >> $GITHUB_ENV
+          
+          sudo find /home/gh-runner/builds -maxdepth 1 -name "run-*" -type d | \
+            sort -V | head -n -3 | xargs sudo rm -rf 2>/dev/null || true
+          
+          sudo rm -rf "$WORK_DIR" 2>/dev/null || true
+          mkdir -p "$WORK_DIR"
+          cd "$WORK_DIR"
+          
+          git clone --depth 1 --recursive \
+            https://github.com/${{ github.repository }}.git .
+          git checkout ${{ github.sha }}
+          git submodule update --init --recursive
           
       - name: Set build type and runner ID
-        id: set-build-type
+        working-directory: ${{ env.WORK_DIR }}
         run: | 
           echo "BUILD_TYPE=${{ github.event.inputs.build_type }}" >> $GITHUB_ENV
           echo "RUNNER_ID=${{ github.run_number }}" >> $GITHUB_ENV
         
       - name: Run TDX docker build
         if: ${{ github.event.inputs.build_type == 'TDX' || github.event.inputs.build_type == 'BOTH' }}
+        working-directory: ${{ env.WORK_DIR }}
         run: |
           NON_INTERACTIVE=1 FORCE_REBUILD_CONTAINER=1 ./build_in_docker.sh tdx
           
       - name: Run SNP docker build
         if: ${{ github.event.inputs.build_type == 'SNP' || github.event.inputs.build_type == 'BOTH' }}
+        working-directory: ${{ env.WORK_DIR }}
         run: |
           NON_INTERACTIVE=1 FORCE_REBUILD_CONTAINER=1 ./build_in_docker.sh snp
           
-      - name: Fix permissions after build
-        if: always()
-        run: |
-          sudo chown -R gh-runner:gh-runner ${{ github.workspace }} || true
-          sudo chmod -R u+rwX ${{ github.workspace }} || true
-          
-      - name: Fix file permissions after build
-        if: always()
-        run: |
-          sudo chown -R gh-runner:gh-runner ${{ github.workspace }} || true
-          sudo chmod -R u+w ${{ github.workspace }} || true
-
       - name: Set release name
         id: release-name
         run: |
@@ -92,7 +86,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./build/tdx/package-tdx.tar.gz
+          asset_path: ${{ env.WORK_DIR }}/build/tdx/package-tdx.tar.gz
           asset_name: package-tdx.tar.gz
           asset_content_type: application/gzip
       
@@ -103,6 +97,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./build/snp/package-snp.tar.gz
+          asset_path: ${{ env.WORK_DIR }}/build/snp/package-snp.tar.gz
           asset_name: package-snp.tar.gz
           asset_content_type: application/gzip
