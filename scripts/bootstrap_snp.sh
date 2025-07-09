@@ -170,6 +170,59 @@ check_memory_configuration() {
     echo "  Available Memory: ${available_mem}GB"
 }
 
+check_gpu_passthrough_readiness() {
+    print_section_header "GPU Passthrough Readiness"
+    
+    local all_good=true
+    echo "Scanning for NVIDIA GPUs..."
+    if command -v lspci >/dev/null; then
+        local nvidia_count=$(lspci | grep -i nvidia | wc -l)
+        if [ "$nvidia_count" -gt 0 ]; then
+            echo "  NVIDIA GPUs found: $nvidia_count"
+            lspci | grep -i nvidia | while read line; do
+                echo "    - $line"
+            done
+        else
+            echo "  NVIDIA GPUs: ⚠ No NVIDIA GPUs detected"
+        fi
+    else
+        echo "  GPU Detection: ✗ lspci not available"
+        all_good=false
+    fi
+    
+    if [ -d "/sys/kernel/iommu_groups" ]; then
+        echo ""
+        echo "Checking GPU IOMMU groups..."
+        local gpu_found=false
+        for d in /sys/kernel/iommu_groups/*/devices/*; do 
+            if [ -e "$d" ]; then
+                local device_id=$(basename "$d")
+                local device_info=$(lspci -s "$device_id" 2>/dev/null)
+                if echo "$device_info" | grep -qi nvidia; then
+                    local group_num=$(echo "$d" | sed 's|.*/iommu_groups/\([0-9]*\)/.*|\1|')
+                    echo "  GPU in IOMMU Group $group_num: $device_info"
+                    gpu_found=true
+                    
+                    echo "    Group $group_num devices:"
+                    for group_device in /sys/kernel/iommu_groups/$group_num/devices/*; do
+                        if [ -e "$group_device" ]; then
+                            local gd_id=$(basename "$group_device")
+                            local gd_info=$(lspci -s "$gd_id" 2>/dev/null)
+                            echo "      - $gd_info"
+                        fi
+                    done
+                fi
+            fi
+        done
+        
+        if [ "$gpu_found" = "false" ]; then
+            echo "  ⚠ No NVIDIA GPUs found in IOMMU groups"
+        fi
+    fi
+    
+    return 0
+}
+
 run_comprehensive_snp_gpu_check() {
     echo "========================================"
     echo "SNP GPU Passthrough Comprehensive Check"
@@ -180,6 +233,7 @@ run_comprehensive_snp_gpu_check() {
     local snp_status=$?
     
     check_iommu_configuration
+    check_gpu_passthrough_readiness
     check_cpu_performance_settings
     check_memory_configuration
     
@@ -352,7 +406,6 @@ bootstrap() {
     fi
 
     print_section_header "SNP GPU Compatibility Check"
-    run_comprehensive_snp_gpu_check
     if [ $? -ne 0 ]; then
         echo -e "${RED}ERROR: SNP GPU compatibility check failed${NC}"
         read -p "Continue anyway? (y/N): " continue_choice
@@ -368,6 +421,8 @@ bootstrap() {
     else
         echo "Skipping NVIDIA GPU check (lspci not found)"
     fi    
+
+    run_comprehensive_snp_gpu_check
 
     # Clean up temporary directory
     print_section_header "Cleanup"
