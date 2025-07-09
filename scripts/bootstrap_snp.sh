@@ -6,6 +6,201 @@ source_common() {
     source "${script_dir}/common.sh"
 }
 
+check_snp_status() {
+    print_section_header "SNP Status Validation"
+    
+    local all_good=true
+    
+    echo "Checking KVM AMD parameters..."
+    for param in sev sev_es sev_snp; do
+        local param_file="/sys/module/kvm_amd/parameters/$param"
+        if [ -f "$param_file" ]; then
+            local value=$(cat "$param_file" 2>/dev/null || echo "N")
+            printf "  %-12s: %s" "kvm_amd.$param" "$value"
+            if [ "$value" = "Y" ]; then
+                echo " ✓"
+            else
+                echo " ✗ FAILED"
+                all_good=false
+            fi
+        else
+            echo "  kvm_amd.$param: FILE NOT FOUND ✗"
+            all_good=false
+        fi
+    done
+    
+    echo ""
+    echo "Checking SEV-SNP dmesg messages..."
+    
+    if dmesg | grep -q "SEV-SNP: RMP table physical range"; then
+        local rmp_range=$(dmesg | grep "SEV-SNP: RMP table physical range" | tail -1)
+        echo "  RMP Table: ✓ ($rmp_range)"
+    else
+        echo "  RMP Table: ✗ FAILED - No RMP table found"
+        all_good=false
+    fi
+    
+    if dmesg | grep -q "SEV API:"; then
+        local sev_api=$(dmesg | grep "SEV API:" | tail -1 | awk '{print $5}')
+        echo "  SEV API: ✓ (version $sev_api)"
+    else
+        echo "  SEV API: ✗ FAILED - No SEV API info"
+        all_good=false
+    fi
+    
+    if dmesg | grep -q "SEV-SNP API:"; then
+        local snp_api=$(dmesg | grep "SEV-SNP API:" | tail -1 | awk '{print $5}')
+        echo "  SEV-SNP API: ✓ (version $snp_api)"
+    else
+        echo "  SEV-SNP API: ✗ FAILED - No SEV-SNP API info"
+        all_good=false
+    fi
+    
+    if dmesg | grep -q "SEV-SNP enabled"; then
+        local snp_asids=$(dmesg | grep "SEV-SNP enabled" | tail -1 | sed 's/.*(\(ASIDs.*\))/\1/')
+        echo "  SEV-SNP ASIDs: ✓ ($snp_asids)"
+    else
+        echo "  SEV-SNP ASIDs: ✗ FAILED - No ASID allocation found"
+        all_good=false
+    fi
+    
+    if [ "$all_good" = "true" ]; then
+        echo ""
+        echo "✓ All SNP checks passed"
+        return 0
+    else
+        echo ""
+        echo "✗ Some SNP checks failed"
+        return 1
+    fi
+}
+
+check_iommu_configuration() {
+    print_section_header "IOMMU Configuration Check"
+    
+    local all_good=true
+    
+    if [ -d "/sys/kernel/iommu_groups" ]; then
+        local group_count=$(ls /sys/kernel/iommu_groups/ | wc -l)
+        echo "  IOMMU Groups: ✓ ($group_count groups found)"
+    else
+        echo "  IOMMU Groups: ✗ FAILED - IOMMU not enabled"
+        all_good=false
+    fi
+    
+    if dmesg | grep -q "AMD-Vi:"; then
+        echo "  AMD-Vi: ✓ (AMD IOMMU detected)"
+    else
+        echo "  AMD-Vi: ⚠ WARNING - No AMD-Vi messages found"
+    fi
+    
+    if lsmod | grep -q vfio; then
+        echo "  VFIO Modules: ✓ (VFIO loaded)"
+        lsmod | grep vfio | while read line; do
+            echo "    - $line"
+        done
+    else
+        echo "  VFIO Modules: ⚠ WARNING - VFIO not loaded"
+    fi
+    
+    return 0
+}
+
+check_cpu_performance_settings() {
+    print_section_header "CPU Performance Settings"
+    
+    echo "Checking CPU governor settings..."
+    local governors_ok=true
+    for cpu in /sys/devices/system/cpu/cpu[0-9]*; do
+        if [ -f "$cpu/cpufreq/scaling_governor" ]; then
+            local cpu_num=$(basename "$cpu")
+            local governor=$(cat "$cpu/cpufreq/scaling_governor")
+            if [ "$governor" = "performance" ]; then
+                echo "  $cpu_num: ✓ $governor"
+            else
+                echo "  $cpu_num: ⚠ $governor (recommended: performance)"
+                governors_ok=false
+            fi
+        fi
+    done
+    
+    if [ "$governors_ok" = "false" ]; then
+        echo ""
+        echo "To set performance governor:"
+        echo "  echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor"
+    fi
+    
+    echo ""
+    echo "Checking C-State configuration..."
+    if [ -f "/sys/module/intel_idle/parameters/max_cstate" ]; then
+        local max_cstate=$(cat /sys/module/intel_idle/parameters/max_cstate)
+        echo "  Intel max_cstate: $max_cstate"
+    elif [ -d "/sys/devices/system/cpu/cpu0/cpuidle" ]; then
+        echo "  AMD cpuidle states detected"
+        local state_count=$(ls /sys/devices/system/cpu/cpu0/cpuidle/ | grep state | wc -l)
+        echo "  Available idle states: $state_count"
+    else
+        echo "  C-State info: Not available"
+    fi
+}
+
+check_memory_configuration() {
+    print_section_header "Memory Configuration for SNP"
+    
+    echo "Checking huge pages configuration..."
+    if [ -f "/proc/meminfo" ]; then
+        local hugepages_total=$(grep HugePages_Total /proc/meminfo | awk '{print $2}')
+        local hugepages_free=$(grep HugePages_Free /proc/meminfo | awk '{print $2}')
+        local hugepage_size=$(grep Hugepagesize /proc/meminfo | awk '{print $2}')
+        
+        echo "  HugePages Total: $hugepages_total"
+        echo "  HugePages Free: $hugepages_free"
+        echo "  HugePage Size: ${hugepage_size}kB"
+        
+        if [ "$hugepages_total" -gt 0 ]; then
+            echo "  ✓ Huge pages configured"
+        else
+            echo "  ⚠ No huge pages configured (may impact VM performance)"
+        fi
+    fi
+    
+    local total_mem=$(free -g | awk '/^Mem:/{print $2}')
+    local available_mem=$(free -g | awk '/^Mem:/{print $7}')
+    echo "  Total Memory: ${total_mem}GB"
+    echo "  Available Memory: ${available_mem}GB"
+}
+
+run_comprehensive_snp_gpu_check() {
+    echo "========================================"
+    echo "SNP GPU Passthrough Comprehensive Check"
+    echo "========================================"
+    echo ""
+    
+    check_snp_status
+    local snp_status=$?
+    
+    check_iommu_configuration
+    check_cpu_performance_settings
+    check_memory_configuration
+    
+    echo ""
+    print_section_header "Summary"
+    if [ $snp_status -eq 0 ]; then
+        echo "✓ SNP is properly configured and ready"
+        echo "✓ System appears ready for confidential GPU computing"
+        echo ""
+        echo "Next steps:"
+        echo "1. Configure VM with GPU passthrough"
+        echo "2. Ensure host NVIDIA drivers are blacklisted for passthrough GPU"
+        echo "3. Test VM boot with SEV-SNP + GPU passthrough"
+    else
+        echo "✗ SNP configuration issues detected"
+        echo "✗ Please resolve SNP issues before proceeding with GPU passthrough"
+    fi
+    
+    return $snp_status
+}
+
 update_snp_firmware() {
     TMP_DIR=$1
     local model=$2
@@ -154,6 +349,16 @@ bootstrap() {
     else
         echo -e "${RED}ERROR: snphost or or its components not found${NC}"
         exit 1
+    fi
+
+    print_section_header "SNP GPU Compatibility Check"
+    run_comprehensive_snp_gpu_check
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}ERROR: SNP GPU compatibility check failed${NC}"
+        read -p "Continue anyway? (y/N): " continue_choice
+        if [[ "$continue_choice" != "y" && "$continue_choice" != "Y" ]]; then
+            exit 1
+        fi
     fi
 
     print_section_header "Hardware Configuration"
