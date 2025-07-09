@@ -764,13 +764,6 @@ main() {
         CHASSIS=$((CHASSIS + 1))
     done
 
-    if [[ ${#USED_GPUS[@]} -gt 0 ]]; then
-        # Для H100L нужны специальные параметры
-        GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio32,string=65536"
-        GPU_PASSTHROUGH+=" -global ICH9-LPC.disable_s3=1"
-        GPU_PASSTHROUGH+=" -global ICH9-LPC.disable_s4=1"
-    fi
-
     # Add NVSwitch devices
     if [[ "${VM_MODE}" == "tdx" ]]; then
         GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
