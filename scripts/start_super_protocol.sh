@@ -719,6 +719,13 @@ check_params() {
     echo "• VM Mode: ${VM_MODE}"
 }
 
+get_cbitpos() {
+    modprobe cpuid
+    EBX=$(dd if=/dev/cpu/0/cpuid ibs=16 count=32 skip=134217728 | tail -c 16 | od -An -t u4 -j 4 -N 4 | sed -re 's|^ *||')
+    CBITPOS=$((EBX & 0x3f))
+    echo "Detected cbitpos: $CBITPOS"
+}
+
 main() {
     check_params
     check_packages
@@ -747,6 +754,9 @@ main() {
             GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
+        elif [[ "${VM_MODE}" == "sev-snp" ]]; then
+            GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0"
+            GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS,romfile="
         else
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS"
@@ -792,11 +802,14 @@ main() {
                 echo "Error: SEV is not supported on this system"
                 exit 1
             fi
-            MACHINE_PARAMS="q35,memory-encryption=sev0,vmport=off,memory-backend=ram1"
-            CC_PARAMS+=" -cpu EPYC-Milan \
-             -object memory-backend-memfd,id=ram1,size=${VM_RAM}G,share=true,prealloc=false \
-             -object sev-snp-guest,id=sev0,policy=0x30000,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on "
-            ;;
+            
+            get_cbitpos
+            
+            MACHINE_PARAMS="q35"
+            CPU_PARAMS="-cpu EPYC-v4"
+            CC_PARAMS=" -machine confidential-guest-support=sev0,vmport=off"
+            CC_SPECIFIC_PARAMS=" -object sev-snp-guest,id=sev0,cbitpos=${CBITPOS},reduced-phys-bits=1,policy=0x30000"
+            ;;            
         "untrusted")
             MACHINE_PARAMS="q35,kernel_irqchip=split"
             CPU_PARAMS="-cpu host,-kvm-steal-time,pmu=off"
@@ -843,27 +856,53 @@ main() {
         KERNEL_CMD_LINE="root=/dev/vda1${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}${BUILD_PARAM}"
     fi
 
-    QEMU_COMMAND="${QEMU_PATH} \
-        -enable-kvm \
-        -append \"${KERNEL_CMD_LINE}\" \
-        -drive file=${ROOTFS_PATH},if=virtio,format=raw \
-        -drive file=${STATE_DISK_PATH},if=virtio,format=qcow2 \
-        -kernel ${KERNEL_PATH} \
-        -smp cores=${VM_CPU} \
-        -m ${VM_RAM}G \
-        ${CPU_PARAMS} \
-        -machine ${MACHINE_PARAMS} \
-        ${CC_SPECIFIC_PARAMS} \
-        ${NETWORK_SETTINGS} \
-        -nographic \
-        ${CC_PARAMS} \
-        -bios ${BIOS_PATH} \
-        -vga none \
-        -nodefaults \
-        -serial stdio \
-        -device vhost-vsock-pci,guest-cid=${GUEST_CID} \
-        ${GPU_PASSTHROUGH} \
-        "
+    if [[ "${VM_MODE}" == "sev-snp" ]]; then
+        QEMU_COMMAND="${QEMU_PATH} \
+            -bios ${BIOS_PATH} \
+            -nographic \
+            -machine ${MACHINE_PARAMS} \
+            ${CC_PARAMS} \
+            ${CC_SPECIFIC_PARAMS} \
+            -vga none \
+            -enable-kvm -no-reboot \
+            ${CPU_PARAMS} \
+            -smp cores=${VM_CPU} \
+            -m ${VM_RAM}G,slots=2,maxmem=512G \
+            -drive file=${ROOTFS_PATH},if=none,id=disk0,format=raw \
+            -device virtio-scsi-pci,id=scsi0,disable-legacy=on,iommu_platform=true,romfile= \
+            -device scsi-hd,drive=disk0 \
+            -drive file=${STATE_DISK_PATH},if=none,id=disk1,format=qcow2 \
+            -device scsi-hd,drive=disk1 \
+            -device virtio-net-pci,disable-legacy=on,iommu_platform=true,netdev=nic_id$BASE_NIC,mac=$MAC_ADDRESS,romfile= \
+            -netdev user,id=nic_id$BASE_NIC \
+            -device vhost-vsock-pci,guest-cid=${GUEST_CID} \
+            -kernel ${KERNEL_PATH} \
+            -append \"${KERNEL_CMD_LINE}\" \
+            ${GPU_PASSTHROUGH} \
+            "
+    else
+        QEMU_COMMAND="${QEMU_PATH} \
+            -enable-kvm \
+            -append \"${KERNEL_CMD_LINE}\" \
+            -drive file=${ROOTFS_PATH},if=virtio,format=raw \
+            -drive file=${STATE_DISK_PATH},if=virtio,format=qcow2 \
+            -kernel ${KERNEL_PATH} \
+            -smp cores=${VM_CPU} \
+            -m ${VM_RAM}G \
+            ${CPU_PARAMS} \
+            -machine ${MACHINE_PARAMS} \
+            ${CC_SPECIFIC_PARAMS} \
+            ${NETWORK_SETTINGS} \
+            -nographic \
+            ${CC_PARAMS} \
+            -bios ${BIOS_PATH} \
+            -vga none \
+            -nodefaults \
+            -serial stdio \
+            -device vhost-vsock-pci,guest-cid=${GUEST_CID} \
+            ${GPU_PASSTHROUGH} \
+            "
+    fi
 
     if [ -n "${PROVIDER_CONFIG}" ] && [ -d "${PROVIDER_CONFIG}" ]; then
         QEMU_COMMAND+=" -fsdev local,security_model=passthrough,id=fsdev0,path=${PROVIDER_CONFIG} \
