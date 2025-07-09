@@ -745,7 +745,7 @@ main() {
     CHASSIS=1
 
     # Add single fw_cfg setting before GPU loop
-    GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,string=262144"
+    GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,string=2621440"
 
     # Add GPUs
     for GPU in "${USED_GPUS[@]}"; do
@@ -763,6 +763,13 @@ main() {
         fi
         CHASSIS=$((CHASSIS + 1))
     done
+
+    if [[ ${#USED_GPUS[@]} -gt 0 ]]; then
+        # Для H100L нужны специальные параметры
+        GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio32,string=65536"
+        GPU_PASSTHROUGH+=" -global ICH9-LPC.disable_s3=1"
+        GPU_PASSTHROUGH+=" -global ICH9-LPC.disable_s4=1"
+    fi
 
     # Add NVSwitch devices
     if [[ "${VM_MODE}" == "tdx" ]]; then
@@ -856,6 +863,12 @@ main() {
         KERNEL_CMD_LINE="root=/dev/vda1${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}${BUILD_PARAM}"
     fi
 
+    if [[ "${VM_MODE}" == "sev-snp" ]] && [[ ${#USED_GPUS[@]} -gt 0 ]]; then
+        IOMMU_PARAMS=" amd_iommu=on iommu=pt pci=realloc"
+    else
+        IOMMU_PARAMS=""
+    fi
+
     if [[ "${VM_MODE}" == "sev-snp" ]]; then
         QEMU_COMMAND="${QEMU_PATH} \
             -bios ${BIOS_PATH} \
@@ -877,7 +890,7 @@ main() {
             -netdev user,id=nic_id$BASE_NIC \
             -device vhost-vsock-pci,guest-cid=${GUEST_CID} \
             -kernel ${KERNEL_PATH} \
-            -append \"${KERNEL_CMD_LINE}\" \
+            -append \"${KERNEL_CMD_LINE}${IOMMU_PARAMS}\" \
             ${GPU_PASSTHROUGH} \
             "
     else
