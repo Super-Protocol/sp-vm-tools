@@ -745,7 +745,7 @@ main() {
     CHASSIS=1
 
     # Add single fw_cfg setting before GPU loop
-    GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,string=2621440"
+    GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio64,string=262144"
 
     # Add GPUs
     for GPU in "${USED_GPUS[@]}"; do
@@ -763,13 +763,6 @@ main() {
         fi
         CHASSIS=$((CHASSIS + 1))
     done
-
-    if [[ ${#USED_GPUS[@]} -gt 0 ]]; then
-        # Для H100L нужны специальные параметры
-        GPU_PASSTHROUGH+=" -fw_cfg name=opt/ovmf/X-PciMmio32,string=65536"
-        GPU_PASSTHROUGH+=" -global ICH9-LPC.disable_s3=1"
-        GPU_PASSTHROUGH+=" -global ICH9-LPC.disable_s4=1"
-    fi
 
     # Add NVSwitch devices
     if [[ "${VM_MODE}" == "tdx" ]]; then
@@ -863,59 +856,27 @@ main() {
         KERNEL_CMD_LINE="root=/dev/vda1${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}${BUILD_PARAM}"
     fi
 
-    if [[ "${VM_MODE}" == "sev-snp" ]] && [[ ${#USED_GPUS[@]} -gt 0 ]]; then
-        IOMMU_PARAMS=" amd_iommu=on iommu=pt pci=realloc"
-    else
-        IOMMU_PARAMS=""
-    fi
-
-    if [[ "${VM_MODE}" == "sev-snp" ]]; then
-        QEMU_COMMAND="${QEMU_PATH} \
-            -bios ${BIOS_PATH} \
-            -nographic \
-            -machine ${MACHINE_PARAMS} \
-            ${CC_PARAMS} \
-            ${CC_SPECIFIC_PARAMS} \
-            -vga none \
-            -enable-kvm -no-reboot \
-            ${CPU_PARAMS} \
-            -smp cores=${VM_CPU} \
-            -m ${VM_RAM}G,slots=2,maxmem=512G \
-            -drive file=${ROOTFS_PATH},if=none,id=disk0,format=raw \
-            -device virtio-scsi-pci,id=scsi0,disable-legacy=on,iommu_platform=true,romfile= \
-            -device scsi-hd,drive=disk0 \
-            -drive file=${STATE_DISK_PATH},if=none,id=disk1,format=qcow2 \
-            -device scsi-hd,drive=disk1 \
-            -device virtio-net-pci,disable-legacy=on,iommu_platform=true,netdev=nic_id$BASE_NIC,mac=$MAC_ADDRESS,romfile= \
-            -netdev user,id=nic_id$BASE_NIC \
-            -device vhost-vsock-pci,guest-cid=${GUEST_CID} \
-            -kernel ${KERNEL_PATH} \
-            -append \"${KERNEL_CMD_LINE}${IOMMU_PARAMS}\" \
-            ${GPU_PASSTHROUGH} \
-            "
-    else
-        QEMU_COMMAND="${QEMU_PATH} \
-            -enable-kvm \
-            -append \"${KERNEL_CMD_LINE}\" \
-            -drive file=${ROOTFS_PATH},if=virtio,format=raw \
-            -drive file=${STATE_DISK_PATH},if=virtio,format=qcow2 \
-            -kernel ${KERNEL_PATH} \
-            -smp cores=${VM_CPU} \
-            -m ${VM_RAM}G \
-            ${CPU_PARAMS} \
-            -machine ${MACHINE_PARAMS} \
-            ${CC_SPECIFIC_PARAMS} \
-            ${NETWORK_SETTINGS} \
-            -nographic \
-            ${CC_PARAMS} \
-            -bios ${BIOS_PATH} \
-            -vga none \
-            -nodefaults \
-            -serial stdio \
-            -device vhost-vsock-pci,guest-cid=${GUEST_CID} \
-            ${GPU_PASSTHROUGH} \
-            "
-    fi
+    QEMU_COMMAND="${QEMU_PATH} \
+        -enable-kvm \
+        -append \"${KERNEL_CMD_LINE}\" \
+        -drive file=${ROOTFS_PATH},if=virtio,format=raw \
+        -drive file=${STATE_DISK_PATH},if=virtio,format=qcow2 \
+        -kernel ${KERNEL_PATH} \
+        -smp cores=${VM_CPU} \
+        -m ${VM_RAM}G \
+        ${CPU_PARAMS} \
+        -machine ${MACHINE_PARAMS} \
+        ${CC_SPECIFIC_PARAMS} \
+        ${NETWORK_SETTINGS} \
+        -nographic \
+        ${CC_PARAMS} \
+        -bios ${BIOS_PATH} \
+        -vga none \
+        -nodefaults \
+        -serial stdio \
+        -device vhost-vsock-pci,guest-cid=${GUEST_CID} \
+        ${GPU_PASSTHROUGH} \
+        "
 
     if [ -n "${PROVIDER_CONFIG}" ] && [ -d "${PROVIDER_CONFIG}" ]; then
         QEMU_COMMAND+=" -fsdev local,security_model=passthrough,id=fsdev0,path=${PROVIDER_CONFIG} \
