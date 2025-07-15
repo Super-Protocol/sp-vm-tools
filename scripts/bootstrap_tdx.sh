@@ -34,6 +34,20 @@ bootstrap() {
 
     echo "Installing required tools..."
     apt update && apt install -y unzip wget
+
+    if [ -f "$(dirname "${BASH_SOURCE[0]}")/setup_tdx.sh" ]; then
+        echo "Running TDX setup script..."
+        cp "$(dirname "${BASH_SOURCE[0]}")/setup_tdx.sh" "${TMP_DIR}/"
+        chmod +x "${TMP_DIR}/setup_tdx.sh"
+        "${TMP_DIR}/setup_tdx.sh"
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}ERROR: TDX setup failed${NC}"
+            exit 1
+        fi
+    else 
+        echo echo -e "${RED}ERROR: setup_tdx.sh not found${NC}"
+        exit 1
+    fi
     
     echo "Downloading official Canonical TDX 3.3..."
     cd "${TMP_DIR}"
