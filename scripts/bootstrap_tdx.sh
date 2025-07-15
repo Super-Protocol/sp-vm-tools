@@ -10,7 +10,7 @@ update_tdx_module() {
   TMP_DIR=$1
   echo "Updating TDX-module..."
   pushd "${TMP_DIR}"
-  wget https://github.com/intel/tdx-module/releases/download/TDX_1.5.05/intel_tdx_module.tar.gz
+  wget https://github.com/intel/tdx-module/releases/download/TDX_1.5.06/intel_tdx_module.tar.gz
   tar -xvzf intel_tdx_module.tar.gz
   mkdir -p /boot/efi/EFI/TDX/
   cp -vf TDX-Module/intel_tdx_module.so /boot/efi/EFI/TDX/TDX-SEAM.so
@@ -28,85 +28,23 @@ bootstrap() {
         exit 1
     fi
 
-    # Download latest release if no archive provided
-    print_section_header "Release Package Setup"
-    ARCHIVE_PATH=""
-    if [ "$#" -ne 1 ]; then
-        echo "No archive provided, downloading latest release..."
-        ARCHIVE_PATH=$(download_latest_release "tdx") || {
-            echo "Failed to download release"
-            exit 1
-        }
-    else
-        ARCHIVE_PATH="$1"
-    fi
-    
-    # Check if the archive exists
-    if [ ! -f "${ARCHIVE_PATH}" ]; then
-        echo "Archive not found: ${ARCHIVE_PATH}"
-        exit 1
-    fi
-
-    echo "Using archive: ${ARCHIVE_PATH}"
-
-    # Create a temporary directory for extraction
-    print_section_header "Package Extraction"
+    # Download and setup official Canonical TDX
+    print_section_header "Official TDX Setup"
     TMP_DIR=$(mktemp -d)
-    DEB_DIR="${TMP_DIR}/package"
-    mkdir -p "${DEB_DIR}"
-
-    # Extract the archive to the temporary directory
-    echo "Extracting archive..."
-    tar -xf "${ARCHIVE_PATH}" -C "${DEB_DIR}"
-
-    print_section_header "Kernel Installation"
-    echo "Installing kernel and required packages first..."
-    install_debs "${DEB_DIR}"
-
-    print_section_header "Kernel Configuration"
-    echo "Configuring kernel boot parameters..."
-    if [ "$NEW_KERNEL_VERSION" != "$CURRENT_KERNEL" ]; then
-        setup_grub "$NEW_KERNEL_VERSION" "tdx"
-    fi
+    
+    echo "Downloading official Canonical TDX 3.3..."
+    cd "${TMP_DIR}"
+    wget https://github.com/canonical/tdx/archive/refs/tags/3.3.zip
+    unzip 3.3.zip
+    mv tdx-3.3 tdx
+    cd tdx
+    
+    echo "Running official TDX host setup..."
+    ./setup-tdx-host.sh
 
     print_section_header "TDX Module Update"
     echo "Updating TDX module..."
     update_tdx_module "${TMP_DIR}"
-
-    # Check if kernel was actually installed
-    print_section_header "System State Check"
-    if [ "$NEW_KERNEL_VERSION" != "$CURRENT_KERNEL" ]; then
-        echo "System reboot required to apply changes"
-        echo "1. Reboot now"
-        echo "2. Continue without reboot (not recommended)"
-        read -p "Choose (1/2): " choice
-        case $choice in
-            1)
-                print_section_header "System Reboot"
-                echo "System will reboot in 10 seconds..."
-                echo "Please run this script again after reboot to complete the setup."
-                sleep 10
-                reboot && exit 0
-                ;;
-            2)
-                echo "Continuing without reboot (not recommended)..."
-                ;;
-        esac
-    fi
-
-    if [ -f "$(dirname "${BASH_SOURCE[0]}")/setup_tdx.sh" ]; then
-        echo "Running TDX setup script..."
-        cp "$(dirname "${BASH_SOURCE[0]}")/setup_tdx.sh" "${TMP_DIR}/"
-        chmod +x "${TMP_DIR}/setup_tdx.sh"
-        "${TMP_DIR}/setup_tdx.sh"
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}ERROR: TDX setup failed${NC}"
-            exit 1
-        fi
-    else 
-        echo echo -e "${RED}ERROR: setup_tdx.sh not found${NC}"
-        exit 1
-    fi
 
     print_section_header "Hardware Configuration"
     if command -v lspci >/dev/null; then
@@ -122,10 +60,9 @@ bootstrap() {
     rm -rf "${TMP_DIR}"
 
     print_section_header "Installation Status"
-    echo "Installation complete."
-    if [ "$NEW_KERNEL_VERSION" != "$CURRENT_KERNEL" ] && [ "$choice" = "2" ]; then
-        echo "NOTE: A system reboot is still required to activate all changes."
-    fi
+    echo "Official TDX installation complete."
+    echo "System reboot required to activate TDX."
+    echo "After reboot, use official tools to create and run TDs."
 }
 
 source_common
