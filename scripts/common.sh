@@ -273,7 +273,7 @@ download_latest_release() {
 check_os_version() {
     if [ ! -f /etc/os-release ]; then
         echo -e "${RED}ERROR: Could not determine OS version${NC}"
-        echo "This script is designed for Ubuntu 24.04 or higher."
+        echo "This script is designed for Ubuntu 25.04 or higher."
         exit 1
     fi
 
@@ -281,7 +281,7 @@ check_os_version() {
     
     if [ "$ID" != "ubuntu" ]; then
         echo -e "${RED}ERROR: Unsupported operating system${NC}"
-        echo "This script requires Ubuntu 24.04 or higher."
+        echo "This script requires Ubuntu 25.04 or higher."
         echo "Current OS: $PRETTY_NAME"
         exit 1
     fi
@@ -289,9 +289,9 @@ check_os_version() {
     # Extract major version number
     major_version=$(echo "$VERSION_ID" | cut -d. -f1)
     
-    if [ "$major_version" -lt 24 ]; then
+    if [ "$major_version" -lt 25 ]; then
         echo -e "${RED}ERROR: Unsupported Ubuntu version${NC}"
-        echo "This script requires Ubuntu 24.04 or higher."
+        echo "This script requires Ubuntu 25.04 or higher."
         echo "Current version: $PRETTY_NAME"
         echo "Please upgrade your system to continue."
         exit 1
