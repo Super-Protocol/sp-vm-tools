@@ -49,7 +49,7 @@ EOF
 
   # enable cc mode
   sudo rm -rf "${TMP_DIR}/gpu-admin-tools" 2>/dev/null || true
-  git clone -b v2024.08.09 --single-branch --depth 1 --no-tags https://github.com/NVIDIA/gpu-admin-tools.git "${TMP_DIR}/gpu-admin-tools"
+  git clone -b v2025.04.07 --single-branch --depth 1 --no-tags https://github.com/NVIDIA/gpu-admin-tools.git "${TMP_DIR}/gpu-admin-tools"
   pushd "${TMP_DIR}/gpu-admin-tools"
 
   nvswitch_list=$(lspci -nnk -d 10de: | grep -E 'NVSwitch' || true)
