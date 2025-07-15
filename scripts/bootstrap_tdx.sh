@@ -31,6 +31,9 @@ bootstrap() {
     # Download and setup official Canonical TDX
     print_section_header "Official TDX Setup"
     TMP_DIR=$(mktemp -d)
+
+    echo "Installing required tools..."
+    apt update && apt install -y unzip wget
     
     echo "Downloading official Canonical TDX 3.3..."
     cd "${TMP_DIR}"
