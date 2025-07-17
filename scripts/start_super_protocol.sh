@@ -177,24 +177,14 @@ detect_cpu_type() {
 }
 
 find_qemu_path() {
-    # List of common QEMU binary locations
     local qemu_locations=(
-    "/usr/local/sbin/qemu-system-x86_64"
-    "/usr/sbin/qemu-system-x86_64"
-    "/usr/local/bin/qemu-system-x86_64"
-    "/usr/bin/qemu-system-x86_64"
-    "/bin/qemu-system-x86_64"
-)
-
-    # First try using which
-    QEMU_PATH=$(which qemu-system-x86_64 2>/dev/null || true)
-
-    if [[ -x "$QEMU_PATH" ]]; then
-        echo "Found QEMU at: $QEMU_PATH"
-        return 0
-    fi
-
-    # If which failed, check common locations
+        "/usr/bin/qemu-system-x86_64"
+        "/bin/qemu-system-x86_64"
+        "/usr/local/bin/qemu-system-x86_64"
+        "/usr/local/sbin/qemu-system-x86_64"
+        "/usr/sbin/qemu-system-x86_64"
+    )
+    
     for location in "${qemu_locations[@]}"; do
         if [[ -x "$location" ]]; then
             QEMU_PATH="$location"
@@ -202,7 +192,7 @@ find_qemu_path() {
             return 0
         fi
     done
-
+    
     echo "Error: Could not find qemu-system-x86_64 executable"
     exit 1
 }
