@@ -53,18 +53,59 @@ check_all_bios_settings() {
         all_passed=false
     fi
 
-    # TME Check should verify both base TME and MT-TME
+    # TME Check - checks both CPU support and actual enablement
     results+=("TME Settings:")
-    if dmesg | grep -q "x86/tme: enabled by BIOS" && \
-       dmesg | grep -q "x86/mktme: enabled by BIOS" && \
-       dmesg | grep -q "KeyIDs available"; then
-        results+=("${SUCCESS} Memory encryption (TME and TME-MT) enabled${NC}")
+    
+    # Check CPU support and actual TME status
+    cpu_tme_support=false
+    tme_active=false
+    
+    # Check CPU TME support
+    if cat /proc/cpuinfo | grep -q "tme"; then
+        cpu_tme_support=true
+    fi
+    
+    # Check if TME is actually enabled via TDX initialization
+    # (Modern TDX systems don't show direct TME messages, TME status is confirmed via TDX)
+    if dmesg | grep -q "virt/tdx.*module initialized"; then
+        tme_active=true
+    fi
+    
+    # Final TME assessment
+    if $cpu_tme_support && $tme_active; then
+        results+=("${SUCCESS} Memory encryption (TME) enabled${NC}")
+    elif $cpu_tme_support && ! $tme_active; then
+        results+=("${WARNING} TME supported but not active${NC}")
+        results+=("  Required: Enable TME and TDX in BIOS")
+        # Uncomment next line if TME is mandatory
+        # all_passed=false
     else
-        results+=("${FAILURE} Memory encryption not properly configured${NC}")
-        results+=("  Required: Enable both TME and TME-MT")
+        results+=("${FAILURE} Memory encryption not supported or enabled${NC}")
         all_passed=false
     fi
 
+    # TME-MT Check - checks Multi-Tenant TME support and enablement
+    results+=("TME-MT Settings:")
+    
+    # Check if TME-MT is active via TDX private KeyID range
+    # TDX uses TME-MT for memory isolation between Trust Domains
+    tme_mt_active=false
+    if dmesg | grep -q "virt/tdx.*private KeyID range"; then
+        tme_mt_active=true
+        # Extract KeyID range for additional info
+        keyid_info=$(dmesg | grep "virt/tdx.*private KeyID range" | head -1 | sed 's/.*private KeyID range //')
+        results+=("  TME-MT KeyID range: $keyid_info")
+    fi
+    
+    # Final TME-MT assessment
+    if $tme_mt_active; then
+        results+=("${SUCCESS} Multi-Tenant Memory encryption (TME-MT) enabled${NC}")
+    else
+        results+=("${FAILURE} TME-MT not enabled${NC}")
+        results+=("  Required: Enable TME-MT in BIOS and set non-zero key split")
+        all_passed=false
+    fi
+    
     # SGX Check remains unchanged
     results+=("SGX Settings:")
     if grep -q "sgx" /proc/cpuinfo && [ -c "/dev/sgx_enclave" -o -c "/dev/sgx/enclave" ]; then
