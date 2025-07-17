@@ -178,9 +178,9 @@ detect_cpu_type() {
 
 find_qemu_path() {
     local qemu_locations=(
+        "/usr/local/bin/qemu-system-x86_64"
         "/usr/bin/qemu-system-x86_64"
         "/bin/qemu-system-x86_64"
-        "/usr/local/bin/qemu-system-x86_64"
         "/usr/local/sbin/qemu-system-x86_64"
         "/usr/sbin/qemu-system-x86_64"
     )
