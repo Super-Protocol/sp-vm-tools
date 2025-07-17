@@ -38,140 +38,136 @@ EOF
 
   echo "Determining PCI IDs for your NVIDIA GPU(s)..."
   
-  # Get all NVIDIA devices (GPUs and NVSwitches)
-  all_nvidia_devices=$(lspci -nnk -d 10de: | grep -E '\[(10de:[0-9a-f]{4})\]' | wc -l)
+  # Get GPU devices (only actual GPUs, not bridges/switches)
   gpu_list=$(lspci -nnk -d 10de: | grep -E '3D controller|VGA compatible controller' || true)
-  nvswitch_list=$(lspci -nnk -d 10de: | grep -E 'NVSwitch' || true)
+  # Get all other NVIDIA devices for reference
+  all_nvidia_devices=$(lspci -d 10de: | wc -l)
+  other_nvidia_devices=$((all_nvidia_devices - $(echo "$gpu_list" | wc -l)))
 
-  if [ -z "$gpu_list" ] && [ -z "$nvswitch_list" ]; then
-    echo "No NVIDIA devices found, skipping configuration"
+  if [ -z "$gpu_list" ]; then
+    echo "No NVIDIA GPUs found, skipping configuration"
     return 0
   fi
 
+  # Count actual GPUs
+  gpu_count=$(echo "$gpu_list" | wc -l)
+
   echo "Found NVIDIA devices:"
-  if [ -n "$gpu_list" ]; then
-    echo "GPUs:"
-    echo "$gpu_list"
-  fi
-  if [ -n "$nvswitch_list" ]; then
-    echo "NVSwitches:"
-    echo "$nvswitch_list"
-  fi
+  echo "- GPUs: $gpu_count"
+  echo "- Other NVIDIA devices (NVLink/bridges): $other_nvidia_devices"
+  echo "- Total: $all_nvidia_devices"
+  echo ""
+  echo "GPU details:"
+  echo "$gpu_list"
 
   # Clone gpu-admin-tools
   sudo rm -rf "${TMP_DIR}/gpu-admin-tools" 2>/dev/null || true
   git clone -b v2025.04.07 --single-branch --depth 1 --no-tags https://github.com/NVIDIA/gpu-admin-tools.git "${TMP_DIR}/gpu-admin-tools"
   pushd "${TMP_DIR}/gpu-admin-tools"
 
-  # Step 1: Disable PPCIe mode on all NVIDIA devices (as per instruction)
-  echo "Disabling PPCIe mode on all NVIDIA devices..."
-  for i in $(seq 0 $((all_nvidia_devices - 1))); do
-    echo "Disabling PPCIe mode for device $i"
-    python3 ./nvidia_gpu_tools.py --set-ppcie-mode=off --reset-after-ppcie-mode-switch --gpu=$i
+  # Step 1: Disable PPCIe mode on GPUs only (using BDF addresses)
+  echo "Disabling PPCIe mode on GPU devices..."
+  if [ "$gpu_count" -gt 0 ]; then
+    gpu_bdfs=$(echo "$gpu_list" | awk '{print $1}')
+    for gpu_bdf in $gpu_bdfs; do
+      echo "Disabling PPCIe mode for GPU ${gpu_bdf}"
+      python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu_bdf} --set-ppcie-mode=off --reset-after-ppcie-mode-switch
+      if [ $? -ne 0 ]; then
+        echo "Warning: Failed to disable PPCIe mode for GPU ${gpu_bdf} (this may be normal)"
+      fi
+    done
+  else
+    echo "No GPUs found to configure"
+    popd
+    return 0
+  fi
+
+  # Step 2: Configure GPUs for CC mode
+  echo "Configuring GPUs for Confidential Computing mode..."
+  
+  gpu_bdfs=$(echo "$gpu_list" | awk '{print $1}')
+  
+  for gpu_bdf in $gpu_bdfs; do
+    echo "Setting CC mode for GPU ${gpu_bdf}"
+    python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu_bdf} --set-cc-mode=on --reset-after-cc-mode-switch
     if [ $? -ne 0 ]; then
-      echo "Warning: Failed to disable PPCIe mode for device $i (this may be normal for some devices)"
+      echo "ERROR: Failed to enable CC mode for GPU ${gpu_bdf}"
+      echo "This is critical for confidential computing functionality"
+      exit 1
     fi
+    
+    # Verify the mode was set correctly
+    echo "Verifying CC mode for GPU ${gpu_bdf}"
+    python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu_bdf} --query-cc-settings
   done
 
-  # Step 2: Configure GPUs for CC mode (only GPUs, not NVSwitches)
-  if [ -n "$gpu_list" ]; then
-    echo "Configuring GPUs for Confidential Computing mode..."
-    
-    # Get GPU BDF addresses
-    gpu_bdfs=$(echo "$gpu_list" | awk '{print $1}')
-    
-    for gpu_bdf in $gpu_bdfs; do
-      echo "Setting CC mode for GPU ${gpu_bdf}"
-      python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu_bdf} --set-cc-mode=on --reset-after-cc-mode-switch
-      if [ $? -ne 0 ]; then
-        echo "ERROR: Failed to enable CC mode for GPU ${gpu_bdf}"
-        echo "This is critical for confidential computing functionality"
-        exit 1
-      fi
-      
-      # Verify the mode was set correctly
-      echo "Verifying CC mode for GPU ${gpu_bdf}"
-      python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu_bdf} --query-cc-settings
-    done
-  fi
-
-  # Step 3: Handle NVSwitches (they don't support CC mode, but may need other configuration)
-  if [ -n "$nvswitch_list" ]; then
-    echo "Configuring NVSwitches..."
-    nvswitch_bdfs=$(echo "$nvswitch_list" | awk '{print $1}')
-    
-    for nvswitch_bdf in $nvswitch_bdfs; do
-      echo "Querying module name for NVSwitch ${nvswitch_bdf}"
-      python3 ./nvidia_gpu_tools.py --gpu-bdf=${nvswitch_bdf} --query-module-name
-      # Note: CC mode is not supported for NVSwitches, so we skip that step
-    done
-  fi
+  # Note: We don't need to handle NVSwitches separately as nvidia_gpu_tools
+  # will handle all necessary infrastructure automatically
 
   popd
 
-  # Step 4: Configure VFIO-PCI for GPU passthrough
+  # Step 3: Configure VFIO-PCI for GPU passthrough
   echo "Configuring VFIO-PCI for GPU passthrough..."
   
-  # Get PCI IDs for GPUs only (not NVSwitches, as they may not need passthrough)
-  if [ -n "$gpu_list" ]; then
-    new_pci_ids=$(echo "$gpu_list" | grep -oP '\[\K[0-9a-f]{4}:[0-9a-f]{4}(?=\])' | sort -u | tr '\n' ',' | sed 's/,$//')
-    
-    if [ -z "$new_pci_ids" ]; then
-      echo "ERROR: No PCI IDs found for NVIDIA GPUs!"
-      exit 1
-    fi
-
-    # Merge with existing PCI IDs if any
-    existing_pci_ids=""
-    if [ -f /etc/modprobe.d/vfio.conf ]; then
-      existing_pci_ids=$(grep -oP '(?<=ids=)[^ ]+' /etc/modprobe.d/vfio.conf | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
-    fi
-
-    if [ -n "$existing_pci_ids" ]; then
-      combined_pci_ids=$(echo -e "${existing_pci_ids}\n${new_pci_ids}" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
-    else
-      combined_pci_ids="$new_pci_ids"
-    fi
-
-    echo "Updating VFIO-PCI configuration with GPU IDs: $combined_pci_ids"
-    sudo bash -c "echo 'options vfio-pci ids=$combined_pci_ids' > /etc/modprobe.d/vfio.conf"
-
-    # Ensure VFIO-PCI module is loaded
-    echo "Configuring VFIO-PCI module loading..."
-    if [ ! -f /etc/modules-load.d/vfio-pci.conf ]; then
-      sudo bash -c "echo 'vfio-pci' > /etc/modules-load.d/vfio-pci.conf"
-      echo "Created /etc/modules-load.d/vfio-pci.conf"
-    else
-      if ! grep -q '^vfio-pci$' /etc/modules-load.d/vfio-pci.conf; then
-        sudo bash -c "echo 'vfio-pci' >> /etc/modules-load.d/vfio-pci.conf"
-        echo "Added vfio-pci to modules-load.d"
-      else
-        echo "vfio-pci module already configured"
-      fi
-    fi
-
-    # Regenerate initramfs
-    echo "Regenerating kernel initramfs..."
-    sudo update-initramfs -u
-
-    echo "NVIDIA GPU configuration completed successfully"
-    echo "GPUs configured for CC mode: $(echo "$gpu_list" | wc -l)"
-    if [ -n "$nvswitch_list" ]; then
-      echo "NVSwitches found: $(echo "$nvswitch_list" | wc -l)"
-    fi
-    echo "VFIO-PCI configured with IDs: $combined_pci_ids"
+  # Get PCI IDs for GPUs only
+  new_pci_ids=$(echo "$gpu_list" | grep -oP '\[\K[0-9a-f]{4}:[0-9a-f]{4}(?=\])' | sort -u | tr '\n' ',' | sed 's/,$//')
+  
+  if [ -z "$new_pci_ids" ]; then
+    echo "ERROR: No PCI IDs found for NVIDIA GPUs!"
+    exit 1
   fi
+
+  # Merge with existing PCI IDs if any
+  existing_pci_ids=""
+  if [ -f /etc/modprobe.d/vfio.conf ]; then
+    existing_pci_ids=$(grep -oP '(?<=ids=)[^ ]+' /etc/modprobe.d/vfio.conf | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+  fi
+
+  if [ -n "$existing_pci_ids" ]; then
+    combined_pci_ids=$(echo -e "${existing_pci_ids}\n${new_pci_ids}" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+  else
+    combined_pci_ids="$new_pci_ids"
+  fi
+
+  echo "Updating VFIO-PCI configuration with GPU IDs: $combined_pci_ids"
+  sudo bash -c "echo 'options vfio-pci ids=$combined_pci_ids' > /etc/modprobe.d/vfio.conf"
+
+  # Ensure VFIO-PCI module is loaded
+  echo "Configuring VFIO-PCI module loading..."
+  if [ ! -f /etc/modules-load.d/vfio-pci.conf ]; then
+    sudo bash -c "echo 'vfio-pci' > /etc/modules-load.d/vfio-pci.conf"
+    echo "Created /etc/modules-load.d/vfio-pci.conf"
+  else
+    if ! grep -q '^vfio-pci$' /etc/modules-load.d/vfio-pci.conf; then
+      sudo bash -c "echo 'vfio-pci' >> /etc/modules-load.d/vfio-pci.conf"
+      echo "Added vfio-pci to modules-load.d"
+    else
+      echo "vfio-pci module already configured"
+    fi
+  fi
+
+  # Regenerate initramfs
+  echo "Regenerating kernel initramfs..."
+  sudo update-initramfs -u
+
+  echo "NVIDIA GPU configuration completed successfully"
+  echo "GPUs configured for CC mode: $gpu_count"
+  echo "Total NVIDIA devices in system: $all_nvidia_devices"
+  echo "VFIO-PCI configured with IDs: $combined_pci_ids"
+  
+  echo ""
+  echo "GPU Status Summary:"
+  for gpu_bdf in $(echo "$gpu_list" | awk '{print $1}'); do
+    echo "- $gpu_bdf: CC mode enabled, VFIO ready"
+  done
 
   echo ""
   echo "IMPORTANT: GPU configuration is persistent across reboots."
   echo "To revert changes, run the following commands:"
   echo "cd ${TMP_DIR}/gpu-admin-tools"
-  if [ -n "$gpu_list" ]; then
-    gpu_bdfs=$(echo "$gpu_list" | awk '{print $1}')
-    for gpu_bdf in $gpu_bdfs; do
-      echo "sudo python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu_bdf} --set-cc-mode=off --reset-after-cc-mode-switch"
-    done
-  fi
+  for gpu_bdf in $(echo "$gpu_list" | awk '{print $1}'); do
+    echo "sudo python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu_bdf} --set-cc-mode=off --reset-after-cc-mode-switch"
+  done
   
   return 0
 }
