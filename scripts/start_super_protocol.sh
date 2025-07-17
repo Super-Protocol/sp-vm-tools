@@ -183,6 +183,7 @@ find_qemu_path() {
     "/usr/sbin/qemu-system-x86_64"
     "/usr/local/bin/qemu-system-x86_64"
     "/usr/bin/qemu-system-x86_64"
+    "/bin/qemu-system-x86_64"
 )
 
     # First try using which
