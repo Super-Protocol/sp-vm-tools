@@ -87,21 +87,35 @@ check_all_bios_settings() {
     # TME-MT Check - checks Multi-Tenant TME support and enablement
     results+=("TME-MT Settings:")
     
-    # Check if TME-MT is active via TDX private KeyID range
-    # TDX uses TME-MT for memory isolation between Trust Domains
+    # Check if TME-MT is active via TDX module initialization and PAMT allocation
+    # In modern TDX implementations, PAMT allocation indicates TME-MT is working
     tme_mt_active=false
-    if dmesg | grep -q "virt/tdx.*private KeyID range"; then
+    tdx_enabled=false
+    
+    # Check if TDX is enabled in KVM (indicates TME-MT capability)
+    if [ -f /sys/module/kvm_intel/parameters/tdx ] && [ "$(cat /sys/module/kvm_intel/parameters/tdx)" = "Y" ]; then
+        tdx_enabled=true
+    fi
+    
+    # Check if PAMT is allocated (confirms TME-MT is working)
+    if dmesg | grep -q "virt/tdx.*KB allocated for PAMT"; then
         tme_mt_active=true
-        # Extract KeyID range for additional info
-        keyid_info=$(dmesg | grep "virt/tdx.*private KeyID range" | head -1 | sed 's/.*private KeyID range //')
-        results+=("  TME-MT KeyID range: $keyid_info")
+        # Extract PAMT allocation info
+        pamt_info=$(dmesg | grep "virt/tdx.*KB allocated for PAMT" | head -1 | sed 's/.*virt\/tdx: //' | sed 's/ KB allocated for PAMT//')
+        results+=("  PAMT allocation: ${pamt_info} KB")
     fi
     
     # Final TME-MT assessment
-    if $tme_mt_active; then
+    if $tdx_enabled && $tme_mt_active; then
         results+=("${SUCCESS} Multi-Tenant Memory encryption (TME-MT) enabled${NC}")
     else
         results+=("${FAILURE} TME-MT not enabled${NC}")
+        if ! $tdx_enabled; then
+            results+=("  Issue: TDX not enabled in KVM")
+        fi
+        if ! $tme_mt_active; then
+            results+=("  Issue: PAMT not allocated")
+        fi
         results+=("  Required: Enable TME-MT in BIOS and set non-zero key split")
         all_passed=false
     fi
