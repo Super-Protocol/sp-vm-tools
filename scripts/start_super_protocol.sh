@@ -775,7 +775,7 @@ main() {
                 exit 1
             fi
             CC_PARAMS+=" -object memory-backend-ram,id=mem0,size=${VM_RAM}G "
-            MACHINE_PARAMS="q35,kernel-irqchip=split,confidential-guest-support=tdx,memory-backend=mem0"
+            MACHINE_PARAMS="q35,kernel_irqchip=split,confidential-guest-support=tdx,memory-backend=mem0"
             CC_SPECIFIC_PARAMS=" -object '{\"qom-type\":\"tdx-guest\",\"id\":\"tdx\",\"quote-generation-socket\":{\"type\":\"vsock\",\"cid\":\"${BASE_CID}\",\"port\":\"4050\"}}'"
             ;;
         "sev-snp")
