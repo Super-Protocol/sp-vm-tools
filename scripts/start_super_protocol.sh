@@ -767,18 +767,15 @@ main() {
         CHASSIS=$((CHASSIS + 1))
     done
 
-    # Add NVSwitch devices (for older systems)
-    if [[ "${VM_MODE}" == "tdx" ]]; then
-        GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
-        IOOMUFD_CHASSIS=$CHASSIS
-    fi
-
+    # Add NVSwitch devices (for older systems)  
     for NVSWITCH in "${AVAILABLE_NVSWITCHES[@]}"; do
         echo "Debug: Adding NVSwitch to QEMU: $NVSWITCH with chassis $CHASSIS"
-        GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
         if [[ "${VM_MODE}" == "tdx" ]]; then
-            GPU_PASSTHROUGH+=" -device vfio-pci,host=$NVSWITCH,bus=pci.$CHASSIS,iommufd=iommufd$IOOMUFD_CHASSIS"
+            GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"  # ← Переместить СЮДА
+            GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
+            GPU_PASSTHROUGH+=" -device vfio-pci,host=$NVSWITCH,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
         else
+            GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$NVSWITCH,bus=pci.$CHASSIS"
         fi
         CHASSIS=$((CHASSIS + 1))
