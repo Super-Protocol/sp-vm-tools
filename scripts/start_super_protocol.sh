@@ -746,7 +746,7 @@ main() {
     download_release "${RELEASE}" "${RELEASE_ASSET}" "${CACHE}" "${RELEASE_REPO}"
     parse_and_download_release_files ${RELEASE_FILEPATH}
 
-# Prepare QEMU command with GPU passthrough
+    # Prepare QEMU command with GPU passthrough
     GPU_PASSTHROUGH=""
     CHASSIS=1
 
@@ -805,17 +805,15 @@ main() {
         fi
     done
 
-    # Use shared iommufd for CX7 bridges in TDX mode
-    if [[ "${VM_MODE}" == "tdx" && ${#AVAILABLE_CX7_BRIDGES[@]} -gt 0 ]]; then
-        GPU_PASSTHROUGH+=" -object iommufd,id=iommufd_cx7"
-    fi
-
+    # Add CX7 bridges with individual iommufd for each device
     for CX7_BRIDGE in "${AVAILABLE_CX7_BRIDGES[@]}"; do
         echo "Debug: Adding CX7 Bridge to QEMU: $CX7_BRIDGE with chassis $CHASSIS"
-        GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
         if [[ "${VM_MODE}" == "tdx" ]]; then
-            GPU_PASSTHROUGH+=" -device vfio-pci,host=$CX7_BRIDGE,bus=pci.$CHASSIS,iommufd=iommufd_cx7"
+            GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
+            GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
+            GPU_PASSTHROUGH+=" -device vfio-pci,host=$CX7_BRIDGE,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
         else
+            GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$CX7_BRIDGE,bus=pci.$CHASSIS"
         fi
         CHASSIS=$((CHASSIS + 1))
