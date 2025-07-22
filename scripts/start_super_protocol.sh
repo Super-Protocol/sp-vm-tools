@@ -899,7 +899,7 @@ main() {
 
     if [ -n "${PROVIDER_CONFIG}" ] && [ -d "${PROVIDER_CONFIG}" ]; then
         QEMU_COMMAND+=" -fsdev local,security_model=passthrough,id=fsdev0,path=${PROVIDER_CONFIG} \
-            -device virtio-9p-pci,fsdev=fsdev0,mount_tag=sharedfolder"
+            -device virtio-9p-pci,fsdev=fsdev0,mount_tag=sharedfolder,disable-legacy=on,iommu_platform=true"
     fi
 
     # Create VM state disk
