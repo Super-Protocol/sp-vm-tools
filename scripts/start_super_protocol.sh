@@ -405,12 +405,38 @@ check_packages() {
 prepare_gpus_for_vfio() {
     local gpu_ids=("$@")
 
-    # Detect NVSwitch devices
+    # Detect NVSwitch devices (old code for compatibility)
     local nvswitch_ids=($(lspci -mm -n -d 10de:22a3 | cut -d' ' -f1))
     echo "Debug: Found NVSwitch devices: ${nvswitch_ids[@]}"
 
+    # Detect CX7 Bridge devices for NVLink management
+    local cx7_bridge_ids=()
+    echo "Scanning for CX7 Bridge devices..."
+    for dev_path in /sys/bus/pci/devices/*/; do
+        dev_bdf=$(basename "$dev_path")
+        vpd_file="${dev_path}vpd"
+        
+        # Check if device has VPD file and contains SW_MNG marker
+        if [[ -f "$vpd_file" ]] && grep -q "SW_MNG" "$vpd_file" 2>/dev/null; then
+            # Get device info to confirm it's ConnectX-7
+            device_info=$(lspci -s "$dev_bdf" 2>/dev/null || echo "Unknown device")
+            if [[ $device_info == *"Mellanox"* && $device_info == *"ConnectX-7"* ]]; then
+                # Remove 0000: prefix for consistency with other device arrays
+                dev_short=${dev_bdf#0000:}
+                cx7_bridge_ids+=("$dev_short")
+                echo "Found CX7 Bridge device: $dev_short"
+            fi
+        fi
+    done
+    
+    echo "Debug: Found CX7 Bridge devices: ${cx7_bridge_ids[@]}"
+
     echo "Unloading NVIDIA modules..."
     modprobe -r nvidia_uvm nvidia_drm nvidia_modeset nvidia || true
+
+    # Unload Mellanox modules for CX7 Bridge devices
+    echo "Unloading Mellanox modules..."
+    modprobe -r mlx5_ib mlx5_core || true
 
     echo "Loading VFIO modules..."
     modprobe vfio
@@ -428,11 +454,17 @@ prepare_gpus_for_vfio() {
         echo "Current driver for $device_type $device: $current_driver"
 
         if [[ "$current_driver" != "vfio-pci" ]]; then
-            # If nvidia modules are still loaded, try to remove them
-            if [[ "$current_driver" == "nvidia" ]]; then
-                echo "Forcing removal of NVIDIA modules..."
-                rmmod -f nvidia_uvm nvidia_drm nvidia_modeset nvidia 2>/dev/null || true
-            fi
+            # Handle specific driver removal
+            case "$current_driver" in
+                "nvidia")
+                    echo "Forcing removal of NVIDIA modules..."
+                    rmmod -f nvidia_uvm nvidia_drm nvidia_modeset nvidia 2>/dev/null || true
+                    ;;
+                "mlx5_core")
+                    echo "Forcing removal of Mellanox modules..."
+                    rmmod -f mlx5_ib mlx5_core 2>/dev/null || true
+                    ;;
+            esac
 
             # Unbind from current driver if bound
             if [[ -e "/sys/bus/pci/devices/0000:$device/driver" ]]; then
@@ -461,9 +493,14 @@ prepare_gpus_for_vfio() {
         bind_to_vfio "$gpu" "GPU"
     done
 
-    # Process NVSwitch devices
+    # Process NVSwitch devices (for older systems)
     for nvswitch in "${nvswitch_ids[@]}"; do
         bind_to_vfio "$nvswitch" "NVSwitch"
+    done
+
+    # Process CX7 Bridge devices (for B200 systems)
+    for cx7_bridge in "${cx7_bridge_ids[@]}"; do
+        bind_to_vfio "$cx7_bridge" "CX7-Bridge"
     done
 
     # Final verification
@@ -475,6 +512,10 @@ prepare_gpus_for_vfio() {
     for nvswitch in "${nvswitch_ids[@]}"; do
         current_driver=$(lspci -k -s "$nvswitch" | grep "Kernel driver in use:" | awk '{print $5}')
         echo "NVSwitch $nvswitch is using driver: $current_driver"
+    done
+    for cx7_bridge in "${cx7_bridge_ids[@]}"; do
+        current_driver=$(lspci -k -s "$cx7_bridge" | grep "Kernel driver in use:" | awk '{print $5}')
+        echo "CX7-Bridge $cx7_bridge is using driver: $current_driver"
     done
 }
 
