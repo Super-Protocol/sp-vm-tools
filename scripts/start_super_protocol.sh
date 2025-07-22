@@ -431,13 +431,6 @@ prepare_gpus_for_vfio() {
     
     echo "Debug: Found CX7 Bridge devices: ${cx7_bridge_ids[@]}"
 
-    echo "Unloading NVIDIA modules..."
-    modprobe -r nvidia_uvm nvidia_drm nvidia_modeset nvidia || true
-
-    # Unload Mellanox modules for CX7 Bridge devices
-    echo "Unloading Mellanox modules..."
-    modprobe -r mlx5_ib mlx5_core || true
-
     echo "Loading VFIO modules..."
     modprobe vfio
     modprobe vfio-pci
@@ -454,28 +447,16 @@ prepare_gpus_for_vfio() {
         echo "Current driver for $device_type $device: $current_driver"
 
         if [[ "$current_driver" != "vfio-pci" ]]; then
-            # Handle specific driver removal
-            case "$current_driver" in
-                "nvidia")
-                    echo "Forcing removal of NVIDIA modules..."
-                    rmmod -f nvidia_uvm nvidia_drm nvidia_modeset nvidia 2>/dev/null || true
-                    ;;
-                "mlx5_core")
-                    echo "Forcing removal of Mellanox modules..."
-                    rmmod -f mlx5_ib mlx5_core 2>/dev/null || true
-                    ;;
-            esac
-
             # Unbind from current driver if bound
             if [[ -e "/sys/bus/pci/devices/0000:$device/driver" ]]; then
                 echo "Unbinding from current driver"
-                echo "0000:$device" > /sys/bus/pci/devices/0000:$device/driver/unbind
+                echo "0000:$device" > /sys/bus/pci/devices/0000:$device/driver/unbind 2>/dev/null || true
             fi
 
             # Add to vfio-pci
             echo "Adding device to vfio-pci"
             echo "vfio-pci" > /sys/bus/pci/devices/0000:$device/driver_override
-            echo "0000:$device" > /sys/bus/pci/drivers/vfio-pci/bind
+            echo "0000:$device" > /sys/bus/pci/drivers/vfio-pci/bind 2>/dev/null || true
         else
             echo "$device_type $device is already bound to vfio-pci"
         fi
