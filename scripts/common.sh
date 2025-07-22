@@ -172,6 +172,141 @@ EOF
   return 0
 }
 
+setup_cx7_bridge_vfio() {
+    echo "Setting up CX7 Bridge devices for VFIO passthrough..."
+
+    # Check IOMMU
+    if [ ! -d "/sys/kernel/iommu_groups" ] || [ -z "$(find /sys/kernel/iommu_groups/ -type l 2>/dev/null)" ]; then
+        echo "❌ IOMMU not enabled. Adding to GRUB configuration..."
+        
+        if ! grep -q 'intel_iommu=on' /etc/default/grub; then
+            if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub; then
+                sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)/\1 intel_iommu=on iommu=pt/' /etc/default/grub
+            else
+                echo 'GRUB_CMDLINE_LINUX_DEFAULT="intel_iommu=on iommu=pt"' >> /etc/default/grub
+            fi
+        fi
+        
+        echo "⚠️  IOMMU added to GRUB. Reboot required."
+        return 1
+    fi
+
+    # Find CX7 Bridge devices
+    echo "Scanning for CX7 Bridge devices..."
+    cx7_devices=()
+    for dev_path in /sys/bus/pci/devices/*/; do
+        dev_bdf=$(basename "$dev_path")
+        vpd_file="${dev_path}vpd"
+        
+        if [[ -f "$vpd_file" ]] && grep -q "SW_MNG" "$vpd_file" 2>/dev/null; then
+            device_info=$(lspci -s "$dev_bdf" 2>/dev/null || echo "Unknown")
+            if [[ $device_info == *"Mellanox"* && $device_info == *"ConnectX-7"* ]]; then
+                cx7_devices+=("$dev_bdf")
+                echo "Found: $dev_bdf"
+            fi
+        fi
+    done
+
+    if [ ${#cx7_devices[@]} -eq 0 ]; then
+        echo "No CX7 Bridge devices found (not a B200 system?)"
+        return 0
+    fi
+
+    # Get PCI ID for CX7 (all should have same vendor:device ID)
+    dev_bdf="${cx7_devices[0]}"
+    vendor_id=$(cat "/sys/bus/pci/devices/$dev_bdf/vendor" | sed 's/0x//')
+    device_id=$(cat "/sys/bus/pci/devices/$dev_bdf/device" | sed 's/0x//')
+    cx7_pci_id="${vendor_id}:${device_id}"
+
+    echo "CX7 Bridge PCI ID: $cx7_pci_id"
+
+    # Update VFIO configuration - simply add CX7 PCI ID
+    existing_ids=""
+    if [ -f /etc/modprobe.d/vfio.conf ]; then
+        existing_ids=$(grep -oP '(?<=ids=)[^ ]+' /etc/modprobe.d/vfio.conf 2>/dev/null || true)
+    fi
+
+    if [[ -n "$existing_ids" && "$existing_ids" != *"$cx7_pci_id"* ]]; then
+        # Add CX7 ID to existing
+        new_ids="${existing_ids},${cx7_pci_id}"
+    elif [[ -z "$existing_ids" ]]; then
+        # No existing IDs, just add CX7
+        new_ids="$cx7_pci_id"  
+    else
+        # Already contains CX7 ID
+        new_ids="$existing_ids"
+    fi
+
+    echo "options vfio-pci ids=$new_ids" > /etc/modprobe.d/vfio.conf
+    echo "Updated /etc/modprobe.d/vfio.conf with: $new_ids"
+
+    # Ensure VFIO modules load
+    echo 'vfio-pci' > /etc/modules-load.d/vfio-pci.conf
+
+    # Update initramfs
+    update-initramfs -u
+
+    echo "${SUCCESS} CX7 Bridge VFIO setup complete"
+    echo "Found ${#cx7_devices[@]} CX7 Bridge devices: ${cx7_devices[*]}"
+    echo "After reboot, these will be bound to vfio-pci automatically"
+
+    return 0
+}
+
+verify_cx7_vfio_setup() {
+    echo "Verifying CX7 Bridge VFIO setup..."
+    
+    # Check if VFIO modules are loaded
+    echo "VFIO modules status:"
+    for module in vfio vfio_iommu_type1 vfio_pci; do
+        if lsmod | grep -q "^$module"; then
+            echo "  ✓ $module: loaded"
+        else
+            echo "  ✗ $module: not loaded"
+        fi
+    done
+    
+    # Check VFIO configuration
+    echo ""
+    echo "VFIO configuration:"
+    if [ -f /etc/modprobe.d/vfio.conf ]; then
+        echo "  ✓ /etc/modprobe.d/vfio.conf exists:"
+        cat /etc/modprobe.d/vfio.conf | sed 's/^/    /'
+    else
+        echo "  ✗ /etc/modprobe.d/vfio.conf not found"
+    fi
+    
+    # Check for CX7 Bridge devices
+    echo ""
+    echo "CX7 Bridge devices status:"
+    found_cx7=false
+    for dev_path in /sys/bus/pci/devices/*/; do
+        dev_bdf=$(basename "$dev_path")
+        vpd_file="${dev_path}vpd"
+        
+        if [[ -f "$vpd_file" ]] && grep -q "SW_MNG" "$vpd_file" 2>/dev/null; then
+            found_cx7=true
+            current_driver=""
+            if [ -L "${dev_path}driver" ]; then
+                current_driver=$(readlink "${dev_path}driver" | xargs basename)
+            fi
+            
+            iommu_group=""
+            if [ -f "${dev_path}iommu_group/group" ]; then
+                iommu_group=$(cat "${dev_path}iommu_group/group")
+            fi
+            
+            echo "  - $dev_bdf: driver=$current_driver, IOMMU group=$iommu_group"
+        fi
+    done
+    
+    if [ "$found_cx7" = false ]; then
+        echo "  No CX7 Bridge devices found"
+    fi
+    
+    return 0
+}
+
 detect_raid_config() {
     echo "Detecting RAID configuration..."
     
