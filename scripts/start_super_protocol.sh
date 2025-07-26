@@ -402,282 +402,102 @@ check_packages() {
     fi
 }
 
-prepare_devices_for_vfio() {
+prepare_gpus_for_vfio() {
     local gpu_ids=("$@")
-    
-    echo "=== GPU-Only VFIO Device Binding ==="
-    
-    # Auto-detect NVSwitch devices (GPU interconnect)
+
+    # Detect NVSwitch devices (old code for compatibility)
     local nvswitch_ids=($(lspci -mm -n -d 10de:22a3 | cut -d' ' -f1))
     echo "Debug: Found NVSwitch devices: ${nvswitch_ids[@]}"
-    
-    # Function to find GPU-paired ConnectX devices
-    find_gpu_paired_connectx() {
-        local gpu_connectx_devices=()
-        
-        echo "Scanning for GPU-paired ConnectX devices..."
-        
-        # For each GPU, look for paired ConnectX devices
-        for gpu in "${gpu_ids[@]}"; do
-            # Extract domain and bus from GPU BDF
-            local gpu_domain=$(echo "$gpu" | cut -d: -f1)
-            local gpu_bus=$(echo "$gpu" | cut -d: -f2)
-            
-            echo "Checking for ConnectX devices paired with GPU $gpu (domain:$gpu_domain, bus:$gpu_bus)"
-            
-            # Look for Mellanox devices in the same domain
-            while IFS= read -r line; do
-                local bdf=$(echo "$line" | cut -d' ' -f1)
-                local device_domain=$(echo "$bdf" | cut -d: -f1)
-                local device_bus=$(echo "$bdf" | cut -d: -f2)
-                
-                # Only consider devices in the same domain as the GPU
-                if [[ "$device_domain" == "$gpu_domain" ]]; then
-                    local device_info=$(lspci -s "$bdf" 2>/dev/null || echo "Unknown")
-                    
-                    # Check if this is a ConnectX InfiniBand device (not Ethernet)
-                    if [[ $device_info == *"Infiniband"* && $device_info == *"ConnectX"* ]]; then
-                        # Check if this device is on the same bus as GPU or adjacent bus
-                        local bus_diff=$((0x$device_bus - 0x$gpu_bus))
-                        if [[ $bus_diff -ge -1 && $bus_diff -le 1 ]]; then
-                            gpu_connectx_devices+=("$bdf")
-                            echo "Found GPU-paired ConnectX: $bdf ($device_info)"
-                            echo "  -> Paired with GPU $gpu (bus distance: $bus_diff)"
-                        fi
-                    fi
-                fi
-            done < <(lspci -mm -n -d 15b3: | grep -v "^$")
-        done
-        
-        echo "${gpu_connectx_devices[@]}"
-    }
-    
-    # Get GPU-paired ConnectX devices
-    local gpu_connectx_devices=($(find_gpu_paired_connectx))
-    
-    # Detect CX7 Bridge devices with SW_MNG marker (NVLink management)
+
+    # Detect CX7 Bridge devices for NVLink management
     local cx7_bridge_ids=()
-    echo "Scanning for CX7 NVLink Bridge devices..."
+    echo "Scanning for CX7 Bridge devices..."
     for dev_path in /sys/bus/pci/devices/*/; do
         dev_bdf=$(basename "$dev_path")
         vpd_file="${dev_path}vpd"
         
-        # Check VPD file for SW_MNG marker (indicates NVLink management function)
+        # Check if device has VPD file and contains SW_MNG marker
         if [[ -f "$vpd_file" ]] && grep -q "SW_MNG" "$vpd_file" 2>/dev/null; then
             # Get device info to confirm it's ConnectX-7
             device_info=$(lspci -s "$dev_bdf" 2>/dev/null || echo "Unknown device")
             if [[ $device_info == *"Mellanox"* && $device_info == *"ConnectX-7"* ]]; then
-                cx7_bridge_ids+=("$dev_bdf")
-                echo "Found CX7 NVLink Bridge: $dev_bdf"
+                # Remove 0000: prefix for consistency with other device arrays
+                dev_short=${dev_bdf#0000:}
+                cx7_bridge_ids+=("$dev_short")
+                echo "Found CX7 Bridge device: $dev_short"
             fi
         fi
     done
     
-    echo ""
-    echo "=== Device Summary ==="
-    echo "Debug: Found ${#nvswitch_ids[@]} NVSwitch devices: ${nvswitch_ids[@]}"
-    echo "Debug: Found ${#gpu_connectx_devices[@]} GPU-paired ConnectX devices: ${gpu_connectx_devices[@]}"
-    echo "Debug: Found ${#cx7_bridge_ids[@]} CX7 NVLink Bridge devices: ${cx7_bridge_ids[@]}"
-    echo "Debug: Processing ${#gpu_ids[@]} GPU devices: ${gpu_ids[@]}"
-    
-    # Load VFIO modules
-    echo ""
+    echo "Debug: Found CX7 Bridge devices: ${cx7_bridge_ids[@]}"
+
     echo "Loading VFIO modules..."
     modprobe vfio
     modprobe vfio-pci
-    
-    # Universal function to bind device to vfio-pci
+
+    # Function to bind device to vfio-pci
     bind_to_vfio() {
         local device=$1
         local device_type=$2
-        
-        local full_bdf="$device"
-        
-        echo "Preparing $device_type $device for VFIO passthrough (full BDF: $full_bdf)"
-        
-        # Check if device exists in sysfs
-        if [[ ! -d "/sys/bus/pci/devices/$full_bdf" ]]; then
-            echo "Error: Device $full_bdf not found in sysfs"
-            return 1
-        fi
-        
+
+        echo "Preparing $device_type $device for VFIO passthrough"
+
         # Check current driver
-        local current_driver=""
-        if [[ -e "/sys/bus/pci/devices/$full_bdf/driver" ]]; then
-            current_driver=$(readlink "/sys/bus/pci/devices/$full_bdf/driver" 2>/dev/null | xargs basename 2>/dev/null)
-        fi
-        
-        echo "Current driver for $device_type $device: ${current_driver:-none}"
-        
+        local current_driver=$(lspci -k -s "$device" | grep "Kernel driver in use:" | awk '{print $5}')
+        echo "Current driver for $device_type $device: $current_driver"
+
         if [[ "$current_driver" != "vfio-pci" ]]; then
             # Unbind from current driver if bound
-            if [[ -n "$current_driver" && -e "/sys/bus/pci/devices/$full_bdf/driver" ]]; then
-                echo "Unbinding from current driver: $current_driver"
-                if echo "$full_bdf" > "/sys/bus/pci/drivers/$current_driver/unbind" 2>/dev/null; then
-                    echo "Successfully unbound from $current_driver"
-                else
-                    echo "Warning: Failed to unbind from $current_driver"
-                fi
-                sleep 0.5
+            if [[ -e "/sys/bus/pci/devices/0000:$device/driver" ]]; then
+                echo "Unbinding from current driver"
+                echo "0000:$device" > /sys/bus/pci/devices/0000:$device/driver/unbind 2>/dev/null || true
             fi
-            
-            # Get vendor:device ID for adding to vfio-pci
-            local vendor_device=$(lspci -nn -s "$full_bdf" | grep -o '\[.*:.*\]' | tr -d '[]' | tr ':' ' ')
-            if [[ -n "$vendor_device" ]]; then
-                echo "Adding device ID $vendor_device to vfio-pci"
-                if echo "$vendor_device" > /sys/bus/pci/drivers/vfio-pci/new_id 2>/dev/null; then
-                    echo "Successfully added device ID to vfio-pci"
-                else
-                    echo "Note: Device ID might already be known to vfio-pci"
-                fi
-            else
-                echo "Warning: Could not extract vendor:device ID from lspci output"
-            fi
-            
-            # Set driver_override to force vfio-pci usage
-            echo "Setting driver override to vfio-pci"
-            if echo "vfio-pci" > "/sys/bus/pci/devices/$full_bdf/driver_override" 2>/dev/null; then
-                echo "Successfully set driver override"
-            else
-                echo "Warning: Failed to set driver override"
-            fi
-            
-            # Bind to vfio-pci
-            echo "Binding device to vfio-pci"
-            if echo "$full_bdf" > /sys/bus/pci/drivers/vfio-pci/bind 2>/dev/null; then
-                echo "Successfully bound to vfio-pci"
-            else
-                echo "Warning: Direct bind failed, trying alternative method"
-                echo 1 > /sys/bus/pci/rescan 2>/dev/null || true
-            fi
-            sleep 0.5
+
+            # Add to vfio-pci
+            echo "Adding device to vfio-pci"
+            echo "vfio-pci" > /sys/bus/pci/devices/0000:$device/driver_override
+            echo "0000:$device" > /sys/bus/pci/drivers/vfio-pci/bind 2>/dev/null || true
         else
             echo "$device_type $device is already bound to vfio-pci"
         fi
-        
+
         # Verify binding
-        local final_driver=""
-        if [[ -e "/sys/bus/pci/devices/$full_bdf/driver" ]]; then
-            final_driver=$(readlink "/sys/bus/pci/devices/$full_bdf/driver" 2>/dev/null | xargs basename 2>/dev/null)
-        fi
-        
-        if [[ "$final_driver" != "vfio-pci" ]]; then
-            echo "❌ Failed to bind $device_type $device to vfio-pci (current driver: ${final_driver:-none})"
-            return 1
-        else
-            echo "✅ Successfully bound $device_type $device to vfio-pci"
-            return 0
+        current_driver=$(lspci -k -s "$device" | grep "Kernel driver in use:" | awk '{print $5}')
+        if [[ "$current_driver" != "vfio-pci" ]]; then
+            echo "Error: Failed to bind $device_type $device to vfio-pci (current driver: $current_driver)"
+            exit 1
         fi
     }
-    
-    # Success counters
-    local total_devices=0
-    local successful_bindings=0
-    
-    # Process GPUs (main devices)
-    echo ""
-    echo "=== Processing GPU devices ==="
+
+    # Process GPUs
     for gpu in "${gpu_ids[@]}"; do
-        ((total_devices++))
-        if bind_to_vfio "$gpu" "GPU"; then
-            ((successful_bindings++))
-        fi
+        bind_to_vfio "$gpu" "GPU"
     done
-    
-    # Process NVSwitch devices (GPU interconnect)
-    if [[ ${#nvswitch_ids[@]} -gt 0 ]]; then
-        echo ""
-        echo "=== Processing NVSwitch devices (GPU interconnect) ==="
-        for nvswitch in "${nvswitch_ids[@]}"; do
-            ((total_devices++))
-            if bind_to_vfio "$nvswitch" "NVSwitch"; then
-                ((successful_bindings++))
-            fi
-        done
-    fi
-    
-    # Process GPU-paired ConnectX devices (GPU-to-GPU communication)
-    if [[ ${#gpu_connectx_devices[@]} -gt 0 ]]; then
-        echo ""
-        echo "=== Processing GPU-paired ConnectX devices ==="
-        for connectx_device in "${gpu_connectx_devices[@]}"; do
-            ((total_devices++))
-            if bind_to_vfio "$connectx_device" "GPU-ConnectX"; then
-                ((successful_bindings++))
-            fi
-        done
-    fi
-    
-    # Process CX7 NVLink Bridge devices (NVLink management)
-    if [[ ${#cx7_bridge_ids[@]} -gt 0 ]]; then
-        echo ""
-        echo "=== Processing CX7 NVLink Bridge devices ==="
-        for cx7_bridge in "${cx7_bridge_ids[@]}"; do
-            ((total_devices++))
-            if bind_to_vfio "$cx7_bridge" "CX7-NVLink-Bridge"; then
-                ((successful_bindings++))
-            fi
-        done
-    fi
-    
+
+    # Process NVSwitch devices (for older systems)
+    for nvswitch in "${nvswitch_ids[@]}"; do
+        bind_to_vfio "$nvswitch" "NVSwitch"
+    done
+
+    # Process CX7 Bridge devices (for B200 systems)
+    for cx7_bridge in "${cx7_bridge_ids[@]}"; do
+        bind_to_vfio "$cx7_bridge" "CX7-Bridge"
+    done
+
     # Final verification
-    echo ""
-    echo "=== Final verification ==="
-    echo "GPU devices:"
+    echo "Verifying device bindings..."
     for gpu in "${gpu_ids[@]}"; do
-        local current_driver=""
-        if [[ -e "/sys/bus/pci/devices/$gpu/driver" ]]; then
-            current_driver=$(readlink "/sys/bus/pci/devices/$gpu/driver" 2>/dev/null | xargs basename 2>/dev/null)
-        fi
-        echo "  GPU $gpu: ${current_driver:-unbound}"
+        current_driver=$(lspci -k -s "$gpu" | grep "Kernel driver in use:" | awk '{print $5}')
+        echo "GPU $gpu is using driver: $current_driver"
     done
-    
-    if [[ ${#gpu_connectx_devices[@]} -gt 0 ]]; then
-        echo "GPU-paired ConnectX devices:"
-        for connectx_device in "${gpu_connectx_devices[@]}"; do
-            local current_driver=""
-            if [[ -e "/sys/bus/pci/devices/$connectx_device/driver" ]]; then
-                current_driver=$(readlink "/sys/bus/pci/devices/$connectx_device/driver" 2>/dev/null | xargs basename 2>/dev/null)
-            fi
-            echo "  ConnectX $connectx_device: ${current_driver:-unbound}"
-        done
-    fi
-    
-    if [[ ${#cx7_bridge_ids[@]} -gt 0 ]]; then
-        echo "CX7 NVLink Bridge devices:"
-        for cx7_bridge in "${cx7_bridge_ids[@]}"; do
-            local current_driver=""
-            if [[ -e "/sys/bus/pci/devices/$cx7_bridge/driver" ]]; then
-                current_driver=$(readlink "/sys/bus/pci/devices/$cx7_bridge/driver" 2>/dev/null | xargs basename 2>/dev/null)
-            fi
-            echo "  CX7-Bridge $cx7_bridge: ${current_driver:-unbound}"
-        done
-    fi
-    
-    if [[ ${#nvswitch_ids[@]} -gt 0 ]]; then
-        echo "NVSwitch devices:"
-        for nvswitch in "${nvswitch_ids[@]}"; do
-            local current_driver=""
-            if [[ -e "/sys/bus/pci/devices/$nvswitch/driver" ]]; then
-                current_driver=$(readlink "/sys/bus/pci/devices/$nvswitch/driver" 2>/dev/null | xargs basename 2>/dev/null)
-            fi
-            echo "  NVSwitch $nvswitch: ${current_driver:-unbound}"
-        done
-    fi
-    
-    echo ""
-    echo "=== Summary ==="
-    echo "Successfully bound: $successful_bindings/$total_devices devices"
-    echo "All devices bound to vfio-pci:"
-    ls /sys/bus/pci/drivers/vfio-pci/ | grep ":" | sort
-    
-    if [[ $successful_bindings -eq $total_devices ]]; then
-        echo "✅ All GPU-related devices successfully prepared for VFIO passthrough!"
-        return 0
-    else
-        echo "⚠️  Some devices failed to bind to vfio-pci"
-        return 1
-    fi
+    for nvswitch in "${nvswitch_ids[@]}"; do
+        current_driver=$(lspci -k -s "$nvswitch" | grep "Kernel driver in use:" | awk '{print $5}')
+        echo "NVSwitch $nvswitch is using driver: $current_driver"
+    done
+    for cx7_bridge in "${cx7_bridge_ids[@]}"; do
+        current_driver=$(lspci -k -s "$cx7_bridge" | grep "Kernel driver in use:" | awk '{print $5}')
+        echo "CX7-Bridge $cx7_bridge is using driver: $current_driver"
+    done
 }
 
 validate_yaml_files() {
@@ -916,7 +736,8 @@ main() {
     check_params
     check_packages
 
-    prepare_devices_for_vfio "${USED_GPUS[@]}"
+    # Prepare GPUs for VFIO passthrough
+    prepare_gpus_for_vfio "${USED_GPUS[@]}"
 
     # Find QEMU path before using it
     find_qemu_path
