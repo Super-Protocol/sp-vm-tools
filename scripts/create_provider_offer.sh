@@ -208,14 +208,159 @@ get_max_network_speed() {
     echo $max_speed
 }
 
+#!/bin/bash
+
+# Enhanced function to get GPU memory from name or known models
 get_gpu_memory_from_name() {
     local gpu_name=$1
-    # Try to extract memory size from GPU name (e.g., "H200 SXM 141GB" or "H100 PCIe 80GB")
+    
+    # First try to extract memory size from GPU name (e.g., "H200 SXM 141GB" or "H100 PCIe 80GB")
     if [[ $gpu_name =~ [^0-9]([0-9]+)GB ]]; then
         echo "${BASH_REMATCH[1]}"
         return 0
     fi
+    
+    # Fallback: Known GPU memory sizes based on model names
+    # Convert to lowercase for easier matching
+    local gpu_lower=$(echo "$gpu_name" | tr '[:upper:]' '[:lower:]')
+    
+    # NVIDIA H-series
+    if [[ $gpu_lower =~ h200 ]]; then
+        echo "141"  # H200 typically has 141GB
+        return 0
+    elif [[ $gpu_lower =~ h100 ]]; then
+        if [[ $gpu_lower =~ sxm ]]; then
+            echo "80"   # H100 SXM typically 80GB
+        else
+            echo "80"   # H100 PCIe typically 80GB
+        fi
+        return 0
+    elif [[ $gpu_lower =~ h800 ]]; then
+        echo "80"   # H800 typically 80GB
+        return 0
+    fi
+    
+    # NVIDIA A-series
+    if [[ $gpu_lower =~ a100 ]]; then
+        if [[ $gpu_lower =~ sxm ]]; then
+            echo "80"   # A100 SXM4 80GB
+        else
+            echo "40"   # A100 PCIe typically 40GB, some 80GB
+        fi
+        return 0
+    elif [[ $gpu_lower =~ a800 ]]; then
+        echo "80"   # A800 typically 80GB
+        return 0
+    elif [[ $gpu_lower =~ a6000 ]]; then
+        echo "48"   # RTX A6000 48GB
+        return 0
+    elif [[ $gpu_lower =~ a5000 ]]; then
+        echo "24"   # RTX A5000 24GB
+        return 0
+    elif [[ $gpu_lower =~ a4000 ]]; then
+        echo "16"   # RTX A4000 16GB
+        return 0
+    fi
+    
+    # NVIDIA RTX series
+    if [[ $gpu_lower =~ rtx.*4090 ]]; then
+        echo "24"   # RTX 4090 24GB
+        return 0
+    elif [[ $gpu_lower =~ rtx.*4080 ]]; then
+        echo "16"   # RTX 4080 16GB
+        return 0
+    elif [[ $gpu_lower =~ rtx.*3090 ]]; then
+        echo "24"   # RTX 3090 24GB
+        return 0
+    elif [[ $gpu_lower =~ rtx.*3080 ]]; then
+        echo "10"   # RTX 3080 10GB (some 12GB variants exist)
+        return 0
+    fi
+    
+    # NVIDIA V-series
+    if [[ $gpu_lower =~ v100 ]]; then
+        if [[ $gpu_lower =~ sxm ]]; then
+            echo "32"   # V100 SXM2 32GB
+        else
+            echo "16"   # V100 PCIe 16GB
+        fi
+        return 0
+    fi
+    
+    # NVIDIA T-series
+    if [[ $gpu_lower =~ t4 ]]; then
+        echo "16"   # Tesla T4 16GB
+        return 0
+    fi
+    
+    # GB100/B200 series (newer models)
+    if [[ $gpu_lower =~ gb100 ]] || [[ $gpu_lower =~ b200 ]]; then
+        echo "192"  # GB100/B200 typically 192GB (adjust based on actual specs)
+        return 0
+    elif [[ $gpu_lower =~ b100 ]]; then
+        echo "128"  # B100 estimated (adjust based on actual specs)
+        return 0
+    fi
+    
+    # Default fallback - try to detect using nvidia-smi if available
     return 1
+}
+
+# Enhanced function to get VRAM using multiple methods
+get_vram_size() {
+    local gpu_name=$1
+    local vram_gb=""
+    
+    # Method 1: Try to get from GPU name
+    vram_gb=$(get_gpu_memory_from_name "$gpu_name")
+    if [ $? -eq 0 ] && [ $vram_gb -gt 0 ]; then
+        echo "$vram_gb"
+        return 0
+    fi
+    
+    # Method 2: Try nvidia-smi if available
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        local vram_mb=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n 1 | tr -d ' ')
+        if [[ $vram_mb =~ ^[0-9]+$ ]] && [ $vram_mb -gt 0 ]; then
+            vram_gb=$((vram_mb / 1024))
+            echo "$vram_gb"
+            return 0
+        fi
+    fi
+    
+    # Method 3: Try to read from /proc/driver/nvidia/gpus/
+    if [ -d "/proc/driver/nvidia/gpus/" ]; then
+        for gpu_dir in /proc/driver/nvidia/gpus/*/information; do
+            if [ -f "$gpu_dir" ]; then
+                local vram_info=$(grep -i "Video Memory" "$gpu_dir" 2>/dev/null || true)
+                if [ ! -z "$vram_info" ]; then
+                    # Extract memory size in MB and convert to GB
+                    local vram_mb=$(echo "$vram_info" | grep -o '[0-9]\+' | head -n 1)
+                    if [ ! -z "$vram_mb" ] && [ $vram_mb -gt 0 ]; then
+                        vram_gb=$((vram_mb / 1024))
+                        echo "$vram_gb"
+                        return 0
+                    fi
+                fi
+            fi
+        done
+    fi
+    
+    # Method 4: Default based on GPU type (conservative estimates)
+    echo "Attempting fallback VRAM detection for: $gpu_name" >&2
+    local gpu_lower=$(echo "$gpu_name" | tr '[:upper:]' '[:lower:]')
+    
+    if [[ $gpu_lower =~ gb100|b200 ]]; then
+        echo "192"  # Conservative estimate for GB100/B200
+    elif [[ $gpu_lower =~ h100|h200 ]]; then
+        echo "80"   # Conservative estimate for H100/H200
+    elif [[ $gpu_lower =~ a100 ]]; then
+        echo "40"   # Conservative estimate for A100
+    else
+        echo "16"   # Very conservative fallback
+    fi
+    
+    return 0
 }
 
 # Function to get CPU frequency in GHz
@@ -344,7 +489,8 @@ disk_bytes=$(to_bytes "$final_disk_gb")
 ram_type=$(get_ram_type)
 disk_type=$(get_disk_type)
 
-# GPU detection
+# Replace the GPU detection section in your main script with this enhanced version:
+# GPU detection (enhanced version)
 gpu_present=0
 vram_bytes=0
 gpu_cores=0
@@ -361,7 +507,7 @@ if ! command -v lspci &> /dev/null; then
 fi
 
 # Get list of NVIDIA GPUs
-gpu_list=$(lspci -nnk -d 10de: | grep -E '3D controller' || true)
+gpu_list=$(lspci -nnk -d 10de: | grep -E '3D controller|VGA compatible controller' || true)
 if [ ! -z "$gpu_list" ]; then
     gpu_present=1
     gpu_cores=$(echo "$gpu_list" | wc -l)
@@ -382,16 +528,27 @@ if [ ! -z "$gpu_list" ]; then
     if [ ! -z "$gpu_info" ]; then
         # Extract full name including "NVIDIA Corporation"
         gpu_name=$(echo "$gpu_info" | sed -n 's/.*\(NVIDIA Corporation.*\[[^]]*\]\).*/\1/p' | sed 's/[[:space:]]*$//')
+        
+        # If the above regex fails, try a simpler extraction
+        if [ -z "$gpu_name" ]; then
+            gpu_name=$(echo "$gpu_info" | cut -d':' -f3 | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+        fi
     fi
     
-    # Get VRAM size from GPU name
-    vram_gb=$(get_gpu_memory_from_name "$gpu_info")
+    # Get VRAM size using enhanced detection
+    echo "Detecting VRAM for GPU: $gpu_name"
+    vram_gb=$(get_vram_size "$gpu_name")
     if [ $? -eq 0 ] && [ $vram_gb -gt 0 ]; then
         total_vram_gb=$((vram_gb * gpu_cores))
         
         # Apply capacity divider to VRAM
         final_vram_gb=$(calc "$total_vram_gb / $CAPACITY_DIVIDER")
         vram_bytes=$(to_bytes "$final_vram_gb")
+        
+        echo "Detected VRAM: ${vram_gb}GB per GPU, Total: ${total_vram_gb}GB, Final (after capacity divider): ${final_vram_gb}GB"
+    else
+        echo "Warning: Could not detect VRAM size for GPU: $gpu_name"
+        vram_bytes=0
     fi
     
     # Format GPU description with capacity divider applied
