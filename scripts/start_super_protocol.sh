@@ -156,6 +156,13 @@ parse_args() {
     done
 }
 
+get_cbitpos() {
+    modprobe cpuid
+    EBX=$(dd if=/dev/cpu/0/cpuid ibs=16 count=32 skip=134217728 | tail -c 16 | od -An -t u4 -j 4 -N 4 | sed -re 's|^ *||')
+    CBITPOS=$((EBX & 0x3f))
+    echo "Detected cbitpos: $CBITPOS"
+}
+
 detect_cpu_type() {
     if [[ -n "$VM_MODE" ]]; then
         echo "CPU type was overwritten by '--mode' cmd arg. value: '$VM_MODE'";
@@ -817,9 +824,9 @@ main() {
     done
 
     if [[ "${VM_MODE}" == "sev-snp" ]]; then
-        GPU_PASSTHROUGH+=" -global driver=vfio-pci,property=x-no-mmap,value=on"
+        GPU_PASSTHROUGH=$(echo "$GPU_PASSTHROUGH" | sed 's/-device vfio-pci,host=\([^,]*\),bus=\([^,]*\)/-device vfio-pci,host=\1,bus=\2,romfile=/g')
     fi
-    
+
     # Initialize machine parameters based on mode
     MACHINE_PARAMS=""
     CPU_PARAMS="-cpu host"
@@ -841,10 +848,11 @@ main() {
                 echo "Error: SEV is not supported on this system"
                 exit 1
             fi
-            MACHINE_PARAMS="q35,memory-encryption=sev0,vmport=off,memory-backend=ram1"
-             CC_PARAMS+=" -cpu EPYC-Milan \
-             -object memory-backend-memfd,id=ram1,size=${VM_RAM}G,share=true,prealloc=false \
-             -object sev-snp-guest,id=sev0,policy=0x30000,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on "
+            get_cbitpos
+            
+            MACHINE_PARAMS="q35,confidential-guest-support=sev0,vmport=off"
+            CC_PARAMS+=" -cpu EPYC-v4"
+            CC_SPECIFIC_PARAMS=" -object sev-snp-guest,id=sev0,cbitpos=${CBITPOS},reduced-phys-bits=1,policy=0x30000"
             ;;
         "untrusted")
             MACHINE_PARAMS="q35,kernel_irqchip=split"
