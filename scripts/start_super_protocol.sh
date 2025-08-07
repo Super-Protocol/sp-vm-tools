@@ -816,6 +816,10 @@ main() {
         CHASSIS=$((CHASSIS + 1))
     done
 
+    if [[ "${VM_MODE}" == "sev-snp" ]]; then
+        GPU_PASSTHROUGH+=" -global driver=vfio-pci,property=x-no-mmap,value=on"
+    fi
+    
     # Initialize machine parameters based on mode
     MACHINE_PARAMS=""
     CPU_PARAMS="-cpu host"
@@ -838,8 +842,8 @@ main() {
                 exit 1
             fi
             MACHINE_PARAMS="q35,memory-encryption=sev0,vmport=off,memory-backend=ram1"
-            CC_PARAMS+=" -cpu EPYC-v4 \
-             -object memory-backend-memfd,id=ram1,size=${VM_RAM}G,share=false,prealloc=true \
+             CC_PARAMS+=" -cpu EPYC-Milan \
+             -object memory-backend-memfd,id=ram1,size=${VM_RAM}G,share=true,prealloc=false \
              -object sev-snp-guest,id=sev0,policy=0x30000,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on "
             ;;
         "untrusted")
