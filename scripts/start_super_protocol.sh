@@ -756,7 +756,7 @@ main() {
     # Add GPUs
     for GPU in "${USED_GPUS[@]}"; do
         echo "Debug: Adding GPU to QEMU: $GPU with chassis $CHASSIS"
-        if [[ "${VM_MODE}" == "tdx"  || "${VM_MODE}" == "sev-snp" ]]; then
+        if [[ "${VM_MODE}" == "tdx" ]]  || [[ "${VM_MODE}" == "sev-snp" ]]; then
             GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
@@ -770,7 +770,7 @@ main() {
     # Add NVSwitch devices (for older systems)  
     for NVSWITCH in "${AVAILABLE_NVSWITCHES[@]}"; do
         echo "Debug: Adding NVSwitch to QEMU: $NVSWITCH with chassis $CHASSIS"
-        if [[ "${VM_MODE}" == "tdx"  || "${VM_MODE}" == "sev-snp" ]]; then
+        if [[ "${VM_MODE}" == "tdx" ]] || [[ "${VM_MODE}" == "sev-snp" ]]; then
             GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"  # ← Переместить СЮДА
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$NVSWITCH,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
@@ -805,7 +805,7 @@ main() {
     # Add CX7 bridges with individual iommufd for each device
     for CX7_BRIDGE in "${AVAILABLE_CX7_BRIDGES[@]}"; do
         echo "Debug: Adding CX7 Bridge to QEMU: $CX7_BRIDGE with chassis $CHASSIS"
-        if [[ "${VM_MODE}" == "tdx" ] || "${VM_MODE}" == "sev-snp" ]; then
+        if [[ "${VM_MODE}" == "tdx" ]] || [[ "${VM_MODE}" == "sev-snp" ]]; then
             GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$CX7_BRIDGE,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
