@@ -840,7 +840,7 @@ main() {
             MACHINE_PARAMS="q35,memory-encryption=sev0,vmport=off,memory-backend=ram1"
             CC_PARAMS+=" -cpu EPYC-v4 \
              -object memory-backend-memfd,id=ram1,size=${VM_RAM}G,share=false,prealloc=true \
-             -object sev-snp-guest,id=sev0,policy=0x30000,cbitpos=47,reduced-phys-bits=5,kernel-hashes=on "
+             -object sev-snp-guest,id=sev0,policy=0x30000,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on "
             ;;
         "untrusted")
             MACHINE_PARAMS="q35,kernel_irqchip=split"
