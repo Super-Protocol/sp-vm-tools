@@ -771,7 +771,7 @@ main() {
     for NVSWITCH in "${AVAILABLE_NVSWITCHES[@]}"; do
         echo "Debug: Adding NVSwitch to QEMU: $NVSWITCH with chassis $CHASSIS"
         if [[ "${VM_MODE}" == "tdx" ]] || [[ "${VM_MODE}" == "sev-snp" ]]; then
-            GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"  # ← Переместить СЮДА
+            GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$NVSWITCH,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
         else
