@@ -823,10 +823,6 @@ main() {
         CHASSIS=$((CHASSIS + 1))
     done
 
-    if [[ "${VM_MODE}" == "sev-snp" ]]; then
-        GPU_PASSTHROUGH=$(echo "$GPU_PASSTHROUGH" | sed 's/-device vfio-pci,host=\([^,]*\),bus=\([^,]*\)/-device vfio-pci,host=\1,bus=\2,romfile=/g')
-    fi
-
     # Initialize machine parameters based on mode
     MACHINE_PARAMS=""
     CPU_PARAMS="-cpu host"
@@ -851,7 +847,7 @@ main() {
             get_cbitpos
             
             MACHINE_PARAMS="q35,confidential-guest-support=sev0,vmport=off"
-            CPU_PARAMS="-cpu EPYC-v4"
+            CPU_PARAMS="-cpu EPYC-Milan"
             CC_SPECIFIC_PARAMS=" -object sev-snp-guest,id=sev0,cbitpos=${CBITPOS},reduced-phys-bits=1,policy=0x30000"
             ;;
         "untrusted")
