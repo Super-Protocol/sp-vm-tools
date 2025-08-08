@@ -823,6 +823,10 @@ main() {
         CHASSIS=$((CHASSIS + 1))
     done
 
+    if [[ "${VM_MODE}" == "sev-snp" ]]; then
+        GPU_PASSTHROUGH=$(echo "$GPU_PASSTHROUGH" | sed 's/-device vfio-pci,host=\([^,]*\),bus=\([^,]*\),romfile=,iommufd=\([^,]*\)/-device vfio-pci,host=\1,bus=\2,romfile=,iommufd=\3,x-no-mmap=on,x-balloon-allowed=off/g')
+    fi
+
     # Initialize machine parameters based on mode
     MACHINE_PARAMS=""
     CPU_PARAMS="-cpu host"
