@@ -766,7 +766,7 @@ main() {
         if [[ "${VM_MODE}" == "tdx" ]]  || [[ "${VM_MODE}" == "sev-snp" ]]; then
             GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
-            GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
+            GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS,romfile="
         else
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS"
@@ -823,10 +823,6 @@ main() {
         CHASSIS=$((CHASSIS + 1))
     done
 
-    if [[ "${VM_MODE}" == "sev-snp" ]]; then
-        GPU_PASSTHROUGH=$(echo "$GPU_PASSTHROUGH" | sed 's/-device vfio-pci,host=\([^,]*\),bus=\([^,]*\),romfile=,iommufd=\([^,]*\)/-device vfio-pci,host=\1,bus=\2,romfile=,iommufd=\3,x-no-mmap=on,x-balloon-allowed=off/g')
-    fi
-
     # Initialize machine parameters based on mode
     MACHINE_PARAMS=""
     CPU_PARAMS="-cpu host"
@@ -851,8 +847,8 @@ main() {
             get_cbitpos
             
             MACHINE_PARAMS="q35,confidential-guest-support=sev0,vmport=off"
-            CPU_PARAMS="-cpu EPYC-Milan"
-            CC_SPECIFIC_PARAMS=" -object sev-snp-guest,id=sev0,cbitpos=${CBITPOS},reduced-phys-bits=1,policy=0x30000,kernel-hashes=on"
+            CPU_PARAMS="-cpu EPYC-v4"
+            CC_SPECIFIC_PARAMS=" -object sev-snp-guest,id=sev0,cbitpos=${CBITPOS},reduced-phys-bits=1,policy=0x30000"
             ;;
         "untrusted")
             MACHINE_PARAMS="q35,kernel_irqchip=split"
