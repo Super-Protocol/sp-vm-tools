@@ -846,8 +846,7 @@ main() {
             fi
             get_cbitpos
             
-            CC_PARAMS+=" -object memory-backend-ram,id=mem0,size=${VM_RAM}G "
-            MACHINE_PARAMS="q35,confidential-guest-support=sev0,vmport=off,memory-backend=mem0"
+            MACHINE_PARAMS="q35,confidential-guest-support=sev0,vmport=off"
             CPU_PARAMS="-cpu EPYC-Milan"
             CC_SPECIFIC_PARAMS=" -object sev-snp-guest,id=sev0,cbitpos=${CBITPOS},reduced-phys-bits=1,policy=0x30000,kernel-hashes=on"
             ;;
