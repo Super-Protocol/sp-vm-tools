@@ -848,7 +848,7 @@ main() {
             
             MACHINE_PARAMS="q35,confidential-guest-support=sev0,vmport=off"
             CPU_PARAMS="-cpu EPYC-Milan"
-            CC_SPECIFIC_PARAMS=" -object sev-snp-guest,id=sev0,cbitpos=${CBITPOS},reduced-phys-bits=1,policy=0x30000"
+            CC_SPECIFIC_PARAMS=" -object sev-snp-guest,id=sev0,cbitpos=${CBITPOS},reduced-phys-bits=1,policy=0x30000,kernel-hashes=on"
             ;;
         "untrusted")
             MACHINE_PARAMS="q35,kernel_irqchip=split"
