@@ -321,47 +321,6 @@ bootstrap() {
         exit 1
     fi
 
-    # Download latest release if no archive provided
-    print_section_header "Release Package Setup"
-    ARCHIVE_PATH=""
-    if [ "$#" -ne 1 ]; then
-        echo "No archive provided, downloading latest release..."
-        ARCHIVE_PATH=$(download_latest_release "snp") || {
-            echo "Failed to download release"
-            exit 1
-        }
-    else
-        ARCHIVE_PATH="$1"
-    fi
-    
-    # Check if the archive exists
-    if [ ! -f "${ARCHIVE_PATH}" ]; then
-        echo "Archive not found: ${ARCHIVE_PATH}"
-        exit 1
-    fi
-
-    echo "Using archive: ${ARCHIVE_PATH}"
-
-    # Create a temporary directory for extraction
-    print_section_header "Package Extraction"
-    TMP_DIR=$(mktemp -d)
-    DEB_DIR="${TMP_DIR}/package"
-    mkdir -p "${DEB_DIR}"
-
-    # Extract the archive to the temporary directory
-    echo "Extracting archive..."
-    tar -xf "${ARCHIVE_PATH}" -C "${DEB_DIR}"
-
-    print_section_header "Kernel Installation"
-    echo "Installing kernel and required packages first..."
-    install_debs "${DEB_DIR}"
-
-    print_section_header "Kernel Configuration"
-    echo "Configuring kernel boot parameters..."
-    if [ "$NEW_KERNEL_VERSION" != "$CURRENT_KERNEL" ]; then
-        setup_grub "$NEW_KERNEL_VERSION" "snp"
-    fi
-
     print_section_header "SNP Firmware Update"
     echo "Updating SNP firmware..."
     update_snp_firmware "${TMP_DIR}" "${AMD_GEN}"
