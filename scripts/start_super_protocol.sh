@@ -851,7 +851,7 @@ main() {
             get_cbitpos
             
             MACHINE_PARAMS="q35,confidential-guest-support=sev0,vmport=off"
-            CC_PARAMS+=" -cpu EPYC-v4"
+            CPU_PARAMS="-cpu EPYC-v4"
             CC_SPECIFIC_PARAMS=" -object sev-snp-guest,id=sev0,cbitpos=${CBITPOS},reduced-phys-bits=1,policy=0x30000"
             ;;
         "untrusted")
