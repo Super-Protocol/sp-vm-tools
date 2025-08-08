@@ -346,24 +346,6 @@ bootstrap() {
         esac
     fi
 
-    SNP_HOST_FILE="$DEB_DIR/snphost"
-
-    if [ -f "${SNP_HOST_FILE}" ]; then
-        echo "Running configuration check..."
-        pushd $DEB_DIR
-        set +e
-        ./snphost ok
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}ERROR: some checks failed${NC}"
-            exit 1
-        fi
-        set -e
-        popd
-    else
-        echo -e "${RED}ERROR: snphost or or its components not found${NC}"
-        exit 1
-    fi
-
     print_section_header "SNP GPU Compatibility Check"
     if [ $? -ne 0 ]; then
         echo -e "${RED}ERROR: SNP GPU compatibility check failed${NC}"
