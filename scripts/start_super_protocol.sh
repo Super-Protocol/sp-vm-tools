@@ -873,7 +873,7 @@ main() {
     ROOT_HASH=$(grep 'Root hash' "${ROOTFS_HASH_PATH}" | awk '{print $3}')
 
     CLEARCPUID_PARAM=" " # Space is important
-    BUILD_PARAM=""
+    SNP_ADDIDITIONAL_PARAMS=""
     VSOCK_CID=""
 
     if [[ "${VM_MODE}" == "tdx" ]]; then
@@ -882,7 +882,7 @@ main() {
     fi
 
     if [[ "${VM_MODE}" == "sev-snp" ]]; then
-        BUILD_PARAM=" build=$RELEASE"
+        SNP_ADDIDITIONAL_PARAMS=" build=$RELEASE pci=realloc,nocrs"
     fi
 
     if [[ ${DEBUG_MODE} == true ]]; then
@@ -893,7 +893,7 @@ main() {
                         argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} \
                         sp-debug=true${BUILD_PARAM}"
     else
-        KERNEL_CMD_LINE="root=/dev/vda1${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}${BUILD_PARAM}"
+        KERNEL_CMD_LINE="root=/dev/vda1${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}${SNP_ADDIDITIONAL_PARAMS}"
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
