@@ -134,7 +134,6 @@ parse_args() {
             --https_port) HTTPS_PORT=$2; shift ;;
             --log_file) LOG_FILE=$2; shift ;;
             --debug) DEBUG_MODE=$2; shift ;;
-            --argo_sp_env) ARGO_SP_ENV=$2; shift ;;
             --release) RELEASE=$2; shift ;;
             --mode) VM_MODE=$2; shift ;;
             --guest-cid) GUEST_CID=$2; shift ;;
