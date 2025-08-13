@@ -867,9 +867,9 @@ main() {
 
     QEMU_COMMAND="${QEMU_PATH} \
         -enable-kvm \
-        -drive file=${IMAGE_PATH},if=virtio,format=raw \
+        -drive file=${IMAGE_PATH},if=virtio,format=raw,readonly=on \
         -drive file=${STATE_DISK_PATH},if=virtio,format=qcow2 \
-        -drive file=${PROVIDER_CONFIG_DISK_PATH},if=virtio,format=raw \
+        -drive file=${PROVIDER_CONFIG_DISK_PATH},if=virtio,format=raw,readonly=on \
         -smp cores=${VM_CPU} \
         -m ${VM_RAM}G \
         ${CPU_PARAMS} \
