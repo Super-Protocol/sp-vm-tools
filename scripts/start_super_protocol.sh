@@ -145,6 +145,13 @@ parse_args() {
     done
 }
 
+get_cbitpos() {
+    modprobe cpuid
+    EBX=$(dd if=/dev/cpu/0/cpuid ibs=16 count=32 skip=134217728 | tail -c 16 | od -An -t u4 -j 4 -N 4 | sed -re 's|^ *||')
+    CBITPOS=$((EBX & 0x3f))
+    echo "Detected cbitpos: $CBITPOS"
+}
+
 detect_cpu_type() {
     if [[ -n "$VM_MODE" ]]; then
         echo "CPU type was overwritten by '--mode' cmd arg. value: '$VM_MODE'";
@@ -742,10 +749,10 @@ main() {
     # Add GPUs
     for GPU in "${USED_GPUS[@]}"; do
         echo "Debug: Adding GPU to QEMU: $GPU with chassis $CHASSIS"
-        if [[ "${VM_MODE}" == "tdx" ]]; then
+        if [[ "${VM_MODE}" == "tdx" ]]  || [[ "${VM_MODE}" == "sev-snp" ]]; then
             GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
-            GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
+            GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS,romfile="
         else
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS"
@@ -756,8 +763,8 @@ main() {
     # Add NVSwitch devices (for older systems)
     for NVSWITCH in "${AVAILABLE_NVSWITCHES[@]}"; do
         echo "Debug: Adding NVSwitch to QEMU: $NVSWITCH with chassis $CHASSIS"
-        if [[ "${VM_MODE}" == "tdx" ]]; then
-            GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"  # ← Переместить СЮДА
+        if [[ "${VM_MODE}" == "tdx" ]] || [[ "${VM_MODE}" == "sev-snp" ]]; then
+            GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$NVSWITCH,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
         else
@@ -791,7 +798,7 @@ main() {
     # Add CX7 bridges with individual iommufd for each device
     for CX7_BRIDGE in "${AVAILABLE_CX7_BRIDGES[@]}"; do
         echo "Debug: Adding CX7 Bridge to QEMU: $CX7_BRIDGE with chassis $CHASSIS"
-        if [[ "${VM_MODE}" == "tdx" ]]; then
+        if [[ "${VM_MODE}" == "tdx" ]] || [[ "${VM_MODE}" == "sev-snp" ]]; then
             GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$CX7_BRIDGE,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
@@ -823,10 +830,11 @@ main() {
                 echo "Error: SEV is not supported on this system"
                 exit 1
             fi
-            MACHINE_PARAMS="q35,memory-encryption=sev0,vmport=off,memory-backend=ram1"
-            CC_PARAMS+=" -cpu EPYC-Milan \
-             -object memory-backend-memfd,id=ram1,size=${VM_RAM}G,share=true,prealloc=false \
-             -object sev-snp-guest,id=sev0,policy=0x30000,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on "
+            get_cbitpos
+            
+            MACHINE_PARAMS="q35,confidential-guest-support=sev0,vmport=off"
+            CPU_PARAMS="-cpu EPYC-Milan"
+            CC_SPECIFIC_PARAMS=" -object sev-snp-guest,id=sev0,cbitpos=${CBITPOS},reduced-phys-bits=1,policy=0x30000,kernel-hashes=on"
             ;;
         "untrusted")
             MACHINE_PARAMS="q35,kernel_irqchip=split"
