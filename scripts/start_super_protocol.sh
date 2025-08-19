@@ -1,5 +1,6 @@
 #!/bin/bash
-set -e;
+
+set -euo pipefail;
 
 # Add error handler
 trap 'exit_handler $? $LINENO' ERR
@@ -34,6 +35,8 @@ DEFAULT_MAC_PREFIX="52:54:00:12:34"
 DEFAULT_MAC_SUFFIX="56"
 QEMU_PATH=""
 DEFAULT_DEBUG=false
+DEFAULT_ARGO_BRANCH="main"
+DEFAULT_ARGO_SP_ENV="main"
 LOCAL_BUILD_DIR=""
 
 # VM mode
@@ -84,6 +87,8 @@ usage() {
     echo "  --https_port <port>          HTTPS port (default: no port forward)"
     echo "  --log_file <file>            Log file (default: no)"
     echo "  --debug <true|false>         Enable debug mode (default: ${DEFAULT_DEBUG})"
+    echo "  --argo_branch <name>         Name of argo branch for init SP components (default: ${DEFAULT_ARGO_BRANCH})"
+    echo "  --argo_sp_env <name>         Name of argo environment for init SP components (default: ${DEFAULT_ARGO_SP_ENV})"
     echo "  --release <name>             Release name (default: latest)"
     echo "  --mode <mode>                VM mode: untrusted, tdx, sev-snp (default: ${DEFAULT_VM_MODE})"
     echo "  --guest-cid <id>             Guest CID for vsock (default: ${DEFAULT_GUEST_CID})"
@@ -102,6 +107,8 @@ STATE_DISK_SIZE=0
 MAC_ADDRESS=${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX}
 PROVIDER_CONFIG=""
 DEBUG_MODE=${DEFAULT_DEBUG}
+ARGO_BRANCH=${DEFAULT_ARGO_BRANCH}
+ARGO_SP_ENV=${DEFAULT_ARGO_SP_ENV}
 RELEASE=""
 RELEASE_FILEPATH=""
 
@@ -114,6 +121,9 @@ BASE_NIC=$(get_next_available_id 0 nic_id)
 
 BIOS_PATH=""
 IMAGE_PATH=""
+ROOTFS_HASH_PATH=""
+KERNEL_PATH=""
+PROVIDER_CONFIG_DISK_PATH=""
 
 parse_args() {
     # Parse arguments
@@ -134,6 +144,8 @@ parse_args() {
             --https_port) HTTPS_PORT=$2; shift ;;
             --log_file) LOG_FILE=$2; shift ;;
             --debug) DEBUG_MODE=$2; shift ;;
+            --argo_branch) ARGO_BRANCH=$2; shift ;;
+            --argo_sp_env) ARGO_SP_ENV=$2; shift ;;
             --release) RELEASE=$2; shift ;;
             --mode) VM_MODE=$2; shift ;;
             --guest-cid) GUEST_CID=$2; shift ;;
@@ -262,9 +274,9 @@ parse_and_download_release_files() {
     # First, validate that we can read all required entries from JSON
     required_keys=()
     if [[ "${VM_MODE}" == "sev-snp" ]]; then
-        required_keys=("image" "bios_amd")
+        required_keys=("image" "bios_amd" "kernel" "rootfs_hash")
     else
-        required_keys=("image" "bios")
+        required_keys=("image" "bios" "kernel" "rootfs_hash")
     fi
 
     for key in "${required_keys[@]}"; do
@@ -287,6 +299,8 @@ parse_and_download_release_files() {
 
         case $key in
             image) IMAGE_PATH=$local_path; echo "Set IMAGE_PATH to ${local_path}" ;;
+            kernel) KERNEL_PATH=$local_path; echo "Set KERNEL_PATH to ${local_path}" ;;
+            rootfs_hash) ROOTFS_HASH_PATH=$local_path; echo "Set ROOTFS_HASH_PATH to ${local_path}" ;;
             bios)
                 if [[ "${VM_MODE}" != "sev-snp" ]]; then
                     BIOS_PATH=$local_path
@@ -337,10 +351,12 @@ parse_and_download_release_files() {
     done < <(jq -c 'to_entries[]' "$RELEASE_JSON")
 
     # Verify that all required paths are set
-    if [[ -z "${IMAGE_PATH}" ]] || [[ -z "${BIOS_PATH}" ]]; then
+    if [[ -z "${IMAGE_PATH}" ]] || [[ -z "${BIOS_PATH}" ]] || [[ -z "${ROOTFS_HASH_PATH}" ]] || [[ -z "${KERNEL_PATH}" ]]; then
         echo "Error: Not all required files were processed successfully"
         echo "IMAGE_PATH: ${IMAGE_PATH}"
         echo "BIOS_PATH: ${BIOS_PATH}"
+        echo "ROOTFS_HASH_PATH: ${ROOTFS_HASH_PATH}"
+        echo "KERNEL_PATH: ${KERNEL_PATH}"
         exit 1
     fi
 }
@@ -566,8 +582,8 @@ check_params() {
     TOTAL_RAM=$(free -g | awk '/^Mem:/{print $2}')
 
     # Get list of all NVIDIA GPUs and NVSwitch devices
-    AVAILABLE_GPUS=($(lspci -nnk -d 10de: | grep -E '3D controller' | awk '{print $1}'))
-    AVAILABLE_NVSWITCHES=($(lspci -mm -n -d 10de:22a3 | cut -d' ' -f1))
+    AVAILABLE_GPUS=($( { lspci -nnk -d 10de: | grep -E '3D controller' | awk '{print $1}'; } || echo))
+    AVAILABLE_NVSWITCHES=($( { lspci -mm -n -d 10de:22a3 | cut -d' ' -f1; } || echo))
 
     echo "Debug: Found GPUs: ${AVAILABLE_GPUS[@]}"
 
@@ -702,6 +718,8 @@ check_params() {
     fi
 
     if [[ ${DEBUG_MODE} == "true" ]]; then
+        echo "   Argo branch: $ARGO_BRANCH"
+        echo "   Argo SP env: $ARGO_SP_ENV"
         echo "   SSH Port: $SSH_PORT"
         if [[ -n "$HTTP_PORT" ]]; then
             echo "   HTTP Port: $HTTP_PORT"
@@ -855,6 +873,8 @@ main() {
         NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$HTTPS_PORT-:443"
     fi
     DEBUG_PARAMS=""
+    KERNEL_CMD_LINE=""
+    ROOTFS_HASH="$(cat "$ROOTFS_HASH_PATH")";
 
     CLEARCPUID_PARAM=" " # Space is important
     BUILD_PARAM=""
@@ -871,13 +891,22 @@ main() {
 
     if [[ ${DEBUG_MODE} == true ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
+         KERNEL_CMD_LINE="root=LABEL=rootfs console=ttyS0${CLEARCPUID_PARAM}\
+                        systemd.log_level=trace systemd.log_target=log \
+                        rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH} \
+                        argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} \
+                        sp-debug=true${BUILD_PARAM}"
+    else
+        KERNEL_CMD_LINE="root=LABEL=rootfs${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH}${BUILD_PARAM}"
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
         -enable-kvm \
+        -append \"${KERNEL_CMD_LINE}\" \
         -drive file=${IMAGE_PATH},if=virtio,format=raw,readonly=on \
         -drive file=${STATE_DISK_PATH},if=virtio,format=qcow2 \
         -drive file=${PROVIDER_CONFIG_DISK_PATH},if=virtio,format=raw,readonly=on \
+        -kernel ${KERNEL_PATH} \
         -smp cores=${VM_CPU} \
         -m ${VM_RAM}G \
         ${CPU_PARAMS} \
