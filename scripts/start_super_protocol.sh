@@ -916,7 +916,6 @@ main() {
         -nographic \
         ${CC_PARAMS} \
         -bios ${BIOS_PATH} \
-        -smbios type=0,uefi=off \
         -vga none \
         -nodefaults \
         -serial stdio \
