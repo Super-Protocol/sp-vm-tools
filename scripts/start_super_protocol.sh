@@ -124,6 +124,8 @@ IMAGE_PATH=""
 ROOTFS_HASH_PATH=""
 KERNEL_PATH=""
 PROVIDER_CONFIG_DISK_PATH=""
+SNP_VCPU="EPYC-v4"
+PHYS_BITS=48
 
 parse_args() {
     # Parse arguments
@@ -181,6 +183,57 @@ detect_cpu_type() {
         VM_MODE="$DEFAULT_VM_MODE";
     else
         echo "detected CPU type: $VM_MODE";
+    fi
+}
+
+detect_snp_vCPU() {
+    CPU_MODEL=$(lscpu | grep "^Model name:" | sed 's/Model name: *//')
+    if [[ ! "$CPU_MODEL" =~ "AMD" ]]; then
+        echo "ERROR: This function is only intended for AMD processors."
+        exit 1
+    fi
+    AMD_GEN="unknown"
+    if [[ "$CPU_MODEL" =~ ^AMD[[:space:]]*EPYC[[:space:]]*7[0-9]{2}3.*$ ]]; then
+        echo "AMD Milan CPU Found"
+        AMD_GEN="Milan"
+        SNP_VCPU="EPYC-v3"
+    elif [[ "$CPU_MODEL" =~ ^AMD[[:space:]]*EPYC[[:space:]]*9[0-9]{2}4.*$ ]]; then
+        echo "This processor is AMD Genoa."
+        AMD_GEN="Genoa"
+        SNP_VCPU="EPYC-v4"
+    elif [[ "$CPU_MODEL" =~ ^AMD[[:space:]]*EPYC[[:space:]]*9[0-9]{2}5.*$ ]]; then
+        echo "This processor is AMD Turin."
+        AMD_GEN="Turin"
+        SNP_VCPU="EPYC-v4"
+    else
+        echo "Unknown AMD CPU model: $CPU_MODEL. Defaulting to vCPU: $SNP_VCPU"
+    fi
+}
+
+detect_phys_bits() {
+    # Parse the "Address sizes" line from lscpu and extract the virtual bits number.
+    # Example line: "Address sizes:                        43 bits physical, 48 bits virtual"
+    local line virtual_bits
+    line=$(lscpu | grep "Address sizes" || true)
+    if [[ -z "$line" ]]; then
+        echo "Warning: could not detect address sizes via lscpu"
+        return 0
+    fi
+
+    # Extract the number that precedes "bits virtual" (portable approach)
+    virtual_bits=$(echo "$line" | grep -oE '[0-9]+ bits virtual' | grep -oE '[0-9]+' || true)
+    if [[ -z "$virtual_bits" ]]; then
+        echo "Warning: failed to parse virtual bits from: $line"
+        return 0
+    fi
+
+    echo "Detected virtual address bits: $virtual_bits"
+    # Cap the value at 52 as requested
+    if (( virtual_bits > 52 )); then
+        echo "Capping physical bits to 52"
+        PHYS_BITS=52
+    else
+        PHYS_BITS=$virtual_bits
     fi
 }
 
@@ -849,9 +902,11 @@ main() {
                 exit 1
             fi
             get_cbitpos
+            detect_snp_vCPU
+            detect_phys_bits
             
             MACHINE_PARAMS="q35,confidential-guest-support=sev0,vmport=off"
-            CPU_PARAMS="-cpu EPYC-Milan"
+            CPU_PARAMS="-cpu ${SNP_VCPU},phys-bits=${PHYS_BITS}"
             CC_SPECIFIC_PARAMS=" -object sev-snp-guest,id=sev0,cbitpos=${CBITPOS},reduced-phys-bits=1,policy=0x30000,kernel-hashes=on"
             ;;
         "untrusted")
@@ -877,7 +932,7 @@ main() {
     ROOTFS_HASH="$(cat "$ROOTFS_HASH_PATH")";
 
     CLEARCPUID_PARAM=" " # Space is important
-    BUILD_PARAM=""
+    SNP_ADDITIONAL_PARAMS=""
     VSOCK_CID=""
 
     if [[ "${VM_MODE}" == "tdx" ]]; then
@@ -886,7 +941,7 @@ main() {
     fi
 
     if [[ "${VM_MODE}" == "sev-snp" ]]; then
-        BUILD_PARAM=" build=$RELEASE"
+        SNP_ADDITIONAL_PARAMS=" build=$RELEASE pci=realloc,nocrs"
     fi
 
     if [[ ${DEBUG_MODE} == true ]]; then
@@ -895,9 +950,9 @@ main() {
                         systemd.log_level=trace systemd.log_target=log \
                         rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH} \
                         argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} \
-                        sp-debug=true${BUILD_PARAM}"
+                        sp-debug=true${SNP_ADDITIONAL_PARAMS}"
     else
-        KERNEL_CMD_LINE="root=LABEL=rootfs${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH}${BUILD_PARAM}"
+    KERNEL_CMD_LINE="root=LABEL=rootfs${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH}${SNP_ADDITIONAL_PARAMS}"
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
