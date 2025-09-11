@@ -952,7 +952,7 @@ main() {
                         argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} \
                         sp-debug=true${SNP_ADDITIONAL_PARAMS}"
     else
-    KERNEL_CMD_LINE="root=LABEL=rootfs${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH}${SNP_ADDITIONAL_PARAMS}"
+        KERNEL_CMD_LINE="root=LABEL=rootfs${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH}${SNP_ADDITIONAL_PARAMS}"
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
