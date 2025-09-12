@@ -262,11 +262,14 @@ update_snp_firmware() {
     local firmware_name=""
     local destination_filename=""
     if [[ "$model" == "Milan" ]]; then
-        firmware_name="amd_sev_fam19h_model0xh_1.55.21"
+        firmware_name="amd_sev_fam19h_model0xh_1.55.29"
         destination_filename="amd_sev_fam19h_model0xh.sbin"
     elif [[ "$model" == "Genoa" ]]; then
-        firmware_name="amd_sev_fam19h_model1xh_1.55.37"
+        firmware_name="amd_sev_fam19h_model1xh_1.55.49"
         destination_filename="amd_sev_fam19h_model1xh.sbin"
+    elif [[ "$model" == "Turin" ]]; then
+        firmware_name="amd_sev_fam1ah_model0xh_1.55.65"
+        destination_filename="amd_sev_fam1ah_model0xh.sbin"
     else
         echo "Skipping firmware update: Model is not Milan or Genoa."
         return 0
@@ -305,6 +308,9 @@ bootstrap() {
     elif [[ "$CPU_MODEL" =~ ^AMD[[:space:]]*EPYC[[:space:]]*9[0-9]{2}4.*$ ]]; then
         echo "This processor is AMD Genoa."
         AMD_GEN="Genoa"
+    elif [[ "$CPU_MODEL" =~ ^AMD[[:space:]]*EPYC[[:space:]]*9[0-9]{2}5.*$ ]]; then
+        echo "This processor is AMD Turin."
+        AMD_GEN="Turin"
     else
         echo "Unknown CPU model: <$CPU_MODEL>"
         read -p "Do you want to continue? (y/n): " choice
