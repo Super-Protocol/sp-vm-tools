@@ -28,6 +28,7 @@ DEFAULT_CACHE="${HOME}/.cache/superprotocol" # Default cache path
 
 DEFAULT_IP_ADDRESS="0.0.0.0"
 DEFAULT_SSH_PORT=2222
+DEFAULT_WG_PORT=51820
 DEFAULT_GUEST_CID=3
 
 LOG_FILE=""
@@ -83,6 +84,7 @@ usage() {
     echo "  --mac_address <address>      MAC address (default: ${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX})"
     echo "  --ip_address <address>       IP address (default: ${DEFAULT_IP_ADDRESS})"
     echo "  --ssh_port <port>            SSH port (default: ${DEFAULT_SSH_PORT})"
+    echo "  --wg_port <port>             WireGuard port (default: ${DEFAULT_WG_PORT})"
     echo "  --http_port <port>           HTTP port (default: no port forward)"
     echo "  --https_port <port>          HTTPS port (default: no port forward)"
     echo "  --log_file <file>            Log file (default: no)"
@@ -114,6 +116,7 @@ RELEASE_FILEPATH=""
 
 IP_ADDRESS=${DEFAULT_IP_ADDRESS}
 SSH_PORT=${DEFAULT_SSH_PORT}
+WG_PORT=${DEFAULT_WG_PORT}
 HTTP_PORT=""
 HTTPS_PORT=""
 BASE_CID=$(get_next_available_id 2 guest-cid)
@@ -142,6 +145,7 @@ parse_args() {
             --mac_address) MAC_ADDRESS=$2; shift ;;
             --ip_address) IP_ADDRESS=$2; shift ;;
             --ssh_port) SSH_PORT=$2; shift ;;
+            --wg_port) WG_PORT=$2; shift ;;
             --http_port) HTTP_PORT=$2; shift ;;
             --https_port) HTTPS_PORT=$2; shift ;;
             --log_file) LOG_FILE=$2; shift ;;
@@ -774,6 +778,7 @@ check_params() {
         echo "   Argo branch: $ARGO_BRANCH"
         echo "   Argo SP env: $ARGO_SP_ENV"
         echo "   SSH Port: $SSH_PORT"
+        echo "   WireGuard Port: $WG_PORT"
         if [[ -n "$HTTP_PORT" ]]; then
             echo "   HTTP Port: $HTTP_PORT"
         fi
@@ -944,9 +949,10 @@ main() {
         SNP_ADDITIONAL_PARAMS=" build=$RELEASE pci=realloc,nocrs"
     fi
 
+    NETWORK_SETTINGS+=",hostfwd=udp:127.0.0.1:$WG_PORT-:51820"
     if [[ ${DEBUG_MODE} == true ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
-         KERNEL_CMD_LINE="root=LABEL=rootfs console=ttyS0${CLEARCPUID_PARAM}\
+        KERNEL_CMD_LINE="root=LABEL=rootfs console=ttyS0${CLEARCPUID_PARAM}\
                         systemd.log_level=trace systemd.log_target=log \
                         rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH} \
                         argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} \
