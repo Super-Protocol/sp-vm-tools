@@ -949,7 +949,7 @@ main() {
         SNP_ADDITIONAL_PARAMS=" build=$RELEASE pci=realloc,nocrs"
     fi
 
-    NETWORK_SETTINGS+=",hostfwd=udp:127.0.0.1:$WG_PORT-:51820"
+    NETWORK_SETTINGS+=",hostfwd=udp:0.0.0.0:$WG_PORT-:51820"
     if [[ ${DEBUG_MODE} == true ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
         KERNEL_CMD_LINE="root=LABEL=rootfs console=ttyS0${CLEARCPUID_PARAM}\
