@@ -262,7 +262,7 @@ update_snp_firmware() {
     local firmware_name=""
     local destination_filename=""
     if [[ "$model" == "Milan" ]]; then
-        firmware_name="amd_sev_fam19h_model0xh_1.55.29"
+        firmware_name="amd_sev_fam19h_model0xh_1.55.36"
         destination_filename="amd_sev_fam19h_model0xh.sbin"
     elif [[ "$model" == "Genoa" ]]; then
         firmware_name="amd_sev_fam19h_model1xh_1.55.49"
