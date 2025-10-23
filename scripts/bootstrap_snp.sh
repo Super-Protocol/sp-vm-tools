@@ -288,6 +288,13 @@ update_snp_firmware() {
     mkdir -p /lib/firmware/amd
     unzip "${firmware_name}.zip"
     cp -vf "${firmware_name}.sbin" "/lib/firmware/amd/${destination_filename}"
+
+    # reload modules to pick up new firmware without reboot
+    rmmod kvm_amd
+    rmmod ccp
+    modprobe ccp
+    modprobe kvm_amd
+
     popd
 }
 
