@@ -1,5 +1,6 @@
 #!/bin/bash
-set -e
+
+set -euo pipefail;
 
 # Add error handler
 trap 'exit_handler $? $LINENO' ERR
@@ -24,7 +25,6 @@ RELEASE_ASSET="vm.json"
 DEFAULT_CORES=$(( $(nproc) - 2 )) # All cores minus 2
 DEFAULT_MEM=$(( $(free -g | awk '/^Mem:/{print $2}') - 8 ))
 DEFAULT_CACHE="${HOME}/.cache/superprotocol" # Default cache path
-DEFAULT_MOUNT_CONFIG="/sp"
 
 DEFAULT_IP_ADDRESS="0.0.0.0"
 DEFAULT_SSH_PORT=2222
@@ -75,8 +75,9 @@ usage() {
     echo "  --cores <number>             Number of CPU cores (default: ${DEFAULT_CORES})"
     echo "  --mem <size>                 Amount of memory (default: ${DEFAULT_MEM})"
     echo "  --gpu <gpu_id>               Specify GPU(s) (default: all available gpu, specify --gpu none to disable gpu passthrough)"
-    echo "  --disk_path <path>           Path to disk image (default: <cache>/state_disk.qcow2)"
-    echo "  --disk_size <size>           Size of disk (default: autodetermining, but no less than 512G)"
+    echo "  --state_disk_path <path>           Path to state disk image (default: <cache>/state_disk.qcow2)"
+    echo "  --state_disk_size <size>           Size of state disk (default: autodetermining, but no less than 512G)"
+    echo "  --provider_config_disk_path <path> Path to temp privider config disk image (default: <cache>/provider_config.img)"
     echo "  --cache <path>               Cache directory (default: ${DEFAULT_CACHE})"
     echo "  --provider_config <file>     Provider configuration file (default: no)"
     echo "  --mac_address <address>      MAC address (default: ${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX})"
@@ -105,7 +106,6 @@ STATE_DISK_PATH=""
 STATE_DISK_SIZE=0
 MAC_ADDRESS=${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX}
 PROVIDER_CONFIG=""
-MOUNT_CONFIG=${DEFAULT_MOUNT_CONFIG}
 DEBUG_MODE=${DEFAULT_DEBUG}
 ARGO_BRANCH=${DEFAULT_ARGO_BRANCH}
 ARGO_SP_ENV=${DEFAULT_ARGO_SP_ENV}
@@ -120,9 +120,12 @@ BASE_CID=$(get_next_available_id 2 guest-cid)
 BASE_NIC=$(get_next_available_id 0 nic_id)
 
 BIOS_PATH=""
-ROOTFS_PATH=""
+IMAGE_PATH=""
 ROOTFS_HASH_PATH=""
 KERNEL_PATH=""
+PROVIDER_CONFIG_DISK_PATH=""
+SNP_VCPU="EPYC-v4"
+PHYS_BITS=48
 
 parse_args() {
     # Parse arguments
@@ -131,11 +134,11 @@ parse_args() {
             --cores) VM_CPU=$2; shift ;;
             --mem) VM_RAM=$(echo $2 | sed 's/G//'); shift ;;
             --gpu) USED_GPUS+=("$2"); shift ;;
-            --disk_path) STATE_DISK_PATH=$2; shift ;;
-            --disk_size) STATE_DISK_SIZE=$2; shift ;;
+            --state_disk_path) STATE_DISK_PATH=$2; shift ;;
+            --state_disk_size) STATE_DISK_SIZE=$2; shift ;;
+            --provider_config_disk_path) PROVIDER_CONFIG_DISK_PATH=$2; shift ;;
             --cache) CACHE=$2; shift ;;
             --provider_config) PROVIDER_CONFIG=$2; shift ;;
-            --mount_config) MOUNT_CONFIG=$2; shift ;;
             --mac_address) MAC_ADDRESS=$2; shift ;;
             --ip_address) IP_ADDRESS=$2; shift ;;
             --ssh_port) SSH_PORT=$2; shift ;;
@@ -156,6 +159,13 @@ parse_args() {
     done
 }
 
+get_cbitpos() {
+    modprobe cpuid
+    EBX=$(dd if=/dev/cpu/0/cpuid ibs=16 count=32 skip=134217728 | tail -c 16 | od -An -t u4 -j 4 -N 4 | sed -re 's|^ *||')
+    CBITPOS=$((EBX & 0x3f))
+    echo "Detected cbitpos: $CBITPOS"
+}
+
 detect_cpu_type() {
     if [[ -n "$VM_MODE" ]]; then
         echo "CPU type was overwritten by '--mode' cmd arg. value: '$VM_MODE'";
@@ -173,6 +183,57 @@ detect_cpu_type() {
         VM_MODE="$DEFAULT_VM_MODE";
     else
         echo "detected CPU type: $VM_MODE";
+    fi
+}
+
+detect_snp_vCPU() {
+    CPU_MODEL=$(lscpu | grep "^Model name:" | sed 's/Model name: *//')
+    if [[ ! "$CPU_MODEL" =~ "AMD" ]]; then
+        echo "ERROR: This function is only intended for AMD processors."
+        exit 1
+    fi
+    AMD_GEN="unknown"
+    if [[ "$CPU_MODEL" =~ ^AMD[[:space:]]*EPYC[[:space:]]*7[0-9]{2}3.*$ ]]; then
+        echo "AMD Milan CPU Found"
+        AMD_GEN="Milan"
+        SNP_VCPU="EPYC-v3"
+    elif [[ "$CPU_MODEL" =~ ^AMD[[:space:]]*EPYC[[:space:]]*9[0-9]{2}4.*$ ]]; then
+        echo "This processor is AMD Genoa."
+        AMD_GEN="Genoa"
+        SNP_VCPU="EPYC-v4"
+    elif [[ "$CPU_MODEL" =~ ^AMD[[:space:]]*EPYC[[:space:]]*9[0-9]{2}5.*$ ]]; then
+        echo "This processor is AMD Turin."
+        AMD_GEN="Turin"
+        SNP_VCPU="EPYC-v4"
+    else
+        echo "Unknown AMD CPU model: $CPU_MODEL. Defaulting to vCPU: $SNP_VCPU"
+    fi
+}
+
+detect_phys_bits() {
+    # Parse the "Address sizes" line from lscpu and extract the virtual bits number.
+    # Example line: "Address sizes:                        43 bits physical, 48 bits virtual"
+    local line virtual_bits
+    line=$(lscpu | grep "Address sizes" || true)
+    if [[ -z "$line" ]]; then
+        echo "Warning: could not detect address sizes via lscpu"
+        return 0
+    fi
+
+    # Extract the number that precedes "bits virtual" (portable approach)
+    virtual_bits=$(echo "$line" | grep -oE '[0-9]+ bits virtual' | grep -oE '[0-9]+' || true)
+    if [[ -z "$virtual_bits" ]]; then
+        echo "Warning: failed to parse virtual bits from: $line"
+        return 0
+    fi
+
+    echo "Detected virtual address bits: $virtual_bits"
+    # Cap the value at 52 as requested
+    if (( virtual_bits > 52 )); then
+        echo "Capping physical bits to 52"
+        PHYS_BITS=52
+    else
+        PHYS_BITS=$virtual_bits
     fi
 }
 
@@ -266,9 +327,9 @@ parse_and_download_release_files() {
     # First, validate that we can read all required entries from JSON
     required_keys=()
     if [[ "${VM_MODE}" == "sev-snp" ]]; then
-        required_keys=("rootfs" "bios_amd" "root_hash" "kernel")
+        required_keys=("image" "bios_amd" "kernel" "rootfs_hash")
     else
-        required_keys=("rootfs" "bios" "root_hash" "kernel")
+        required_keys=("image" "bios" "kernel" "rootfs_hash")
     fi
 
     for key in "${required_keys[@]}"; do
@@ -290,7 +351,9 @@ parse_and_download_release_files() {
         local_path="$DOWNLOAD_DIR/$filename"
 
         case $key in
-            rootfs) ROOTFS_PATH=$local_path; echo "Set ROOTFS_PATH to ${local_path}" ;;
+            image) IMAGE_PATH=$local_path; echo "Set IMAGE_PATH to ${local_path}" ;;
+            kernel) KERNEL_PATH=$local_path; echo "Set KERNEL_PATH to ${local_path}" ;;
+            rootfs_hash) ROOTFS_HASH_PATH=$local_path; echo "Set ROOTFS_HASH_PATH to ${local_path}" ;;
             bios)
                 if [[ "${VM_MODE}" != "sev-snp" ]]; then
                     BIOS_PATH=$local_path
@@ -303,8 +366,6 @@ parse_and_download_release_files() {
                     echo "Set BIOS_PATH to ${local_path}"
                 fi
                 ;;
-            root_hash) ROOTFS_HASH_PATH=$local_path; echo "Set ROOTFS_HASH_PATH to ${local_path}" ;;
-            kernel) KERNEL_PATH=$local_path; echo "Set KERNEL_PATH to ${local_path}" ;;
             *) echo "Warning: Unknown key ${key} in release JSON" ;;
         esac
 
@@ -343,9 +404,9 @@ parse_and_download_release_files() {
     done < <(jq -c 'to_entries[]' "$RELEASE_JSON")
 
     # Verify that all required paths are set
-    if [[ -z "${ROOTFS_PATH}" ]] || [[ -z "${BIOS_PATH}" ]] || [[ -z "${ROOTFS_HASH_PATH}" ]] || [[ -z "${KERNEL_PATH}" ]]; then
+    if [[ -z "${IMAGE_PATH}" ]] || [[ -z "${BIOS_PATH}" ]] || [[ -z "${ROOTFS_HASH_PATH}" ]] || [[ -z "${KERNEL_PATH}" ]]; then
         echo "Error: Not all required files were processed successfully"
-        echo "ROOTFS_PATH: ${ROOTFS_PATH}"
+        echo "IMAGE_PATH: ${IMAGE_PATH}"
         echo "BIOS_PATH: ${BIOS_PATH}"
         echo "ROOTFS_HASH_PATH: ${ROOTFS_HASH_PATH}"
         echo "KERNEL_PATH: ${KERNEL_PATH}"
@@ -574,8 +635,8 @@ check_params() {
     TOTAL_RAM=$(free -g | awk '/^Mem:/{print $2}')
 
     # Get list of all NVIDIA GPUs and NVSwitch devices
-    AVAILABLE_GPUS=($(lspci -nnk -d 10de: | grep -E '3D controller' | awk '{print $1}'))
-    AVAILABLE_NVSWITCHES=($(lspci -mm -n -d 10de:22a3 | cut -d' ' -f1))
+    AVAILABLE_GPUS=($( { lspci -nnk -d 10de: | grep -E '3D controller' | awk '{print $1}'; } || echo))
+    AVAILABLE_NVSWITCHES=($( { lspci -mm -n -d 10de:22a3 | cut -d' ' -f1; } || echo))
 
     echo "Debug: Found GPUs: ${AVAILABLE_GPUS[@]}"
 
@@ -607,6 +668,9 @@ check_params() {
 
     if [[ -z "$STATE_DISK_PATH" ]]; then
         STATE_DISK_PATH="$CACHE/state.qcow2"
+    fi
+    if [[ -z "$PROVIDER_CONFIG_DISK_PATH" ]]; then
+        PROVIDER_CONFIG_DISK_PATH="$CACHE/provider_config.img"
     fi
 
     echo "Removing old state disk..."
@@ -756,10 +820,10 @@ main() {
     # Add GPUs
     for GPU in "${USED_GPUS[@]}"; do
         echo "Debug: Adding GPU to QEMU: $GPU with chassis $CHASSIS"
-        if [[ "${VM_MODE}" == "tdx" ]]; then
+        if [[ "${VM_MODE}" == "tdx" ]]  || [[ "${VM_MODE}" == "sev-snp" ]]; then
             GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
-            GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
+            GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS,romfile="
         else
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$GPU,bus=pci.$CHASSIS"
@@ -767,11 +831,11 @@ main() {
         CHASSIS=$((CHASSIS + 1))
     done
 
-    # Add NVSwitch devices (for older systems)  
+    # Add NVSwitch devices (for older systems)
     for NVSWITCH in "${AVAILABLE_NVSWITCHES[@]}"; do
         echo "Debug: Adding NVSwitch to QEMU: $NVSWITCH with chassis $CHASSIS"
-        if [[ "${VM_MODE}" == "tdx" ]]; then
-            GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"  # ← Переместить СЮДА
+        if [[ "${VM_MODE}" == "tdx" ]] || [[ "${VM_MODE}" == "sev-snp" ]]; then
+            GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$NVSWITCH,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
         else
@@ -788,7 +852,7 @@ main() {
     for dev_path in /sys/bus/pci/devices/*/; do
         dev_bdf=$(basename "$dev_path")
         vpd_file="${dev_path}vpd"
-        
+
         # Check if device has VPD file and contains SW_MNG marker
         if [[ -f "$vpd_file" ]] && grep -q "SW_MNG" "$vpd_file" 2>/dev/null; then
             # Get device info to confirm it's ConnectX-7
@@ -805,7 +869,7 @@ main() {
     # Add CX7 bridges with individual iommufd for each device
     for CX7_BRIDGE in "${AVAILABLE_CX7_BRIDGES[@]}"; do
         echo "Debug: Adding CX7 Bridge to QEMU: $CX7_BRIDGE with chassis $CHASSIS"
-        if [[ "${VM_MODE}" == "tdx" ]]; then
+        if [[ "${VM_MODE}" == "tdx" ]] || [[ "${VM_MODE}" == "sev-snp" ]]; then
             GPU_PASSTHROUGH+=" -object iommufd,id=iommufd$CHASSIS"
             GPU_PASSTHROUGH+=" -device pcie-root-port,id=pci.$CHASSIS,bus=pcie.0,chassis=$CHASSIS"
             GPU_PASSTHROUGH+=" -device vfio-pci,host=$CX7_BRIDGE,bus=pci.$CHASSIS,iommufd=iommufd$CHASSIS"
@@ -837,10 +901,13 @@ main() {
                 echo "Error: SEV is not supported on this system"
                 exit 1
             fi
-            MACHINE_PARAMS="q35,memory-encryption=sev0,vmport=off,memory-backend=ram1"
-            CC_PARAMS+=" -cpu EPYC-Milan \
-             -object memory-backend-memfd,id=ram1,size=${VM_RAM}G,share=true,prealloc=false \
-             -object sev-snp-guest,id=sev0,policy=0x30000,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on "
+            get_cbitpos
+            detect_snp_vCPU
+            detect_phys_bits
+            
+            MACHINE_PARAMS="q35,confidential-guest-support=sev0,vmport=off"
+            CPU_PARAMS="-cpu ${SNP_VCPU},phys-bits=${PHYS_BITS}"
+            CC_SPECIFIC_PARAMS=" -object sev-snp-guest,id=sev0,cbitpos=${CBITPOS},reduced-phys-bits=1,policy=0x30000,kernel-hashes=on"
             ;;
         "untrusted")
             MACHINE_PARAMS="q35,kernel_irqchip=split"
@@ -862,10 +929,10 @@ main() {
     fi
     DEBUG_PARAMS=""
     KERNEL_CMD_LINE=""
-    ROOT_HASH=$(grep 'Root hash' "${ROOTFS_HASH_PATH}" | awk '{print $3}')
+    ROOTFS_HASH="$(cat "$ROOTFS_HASH_PATH")";
 
     CLEARCPUID_PARAM=" " # Space is important
-    BUILD_PARAM=""
+    SNP_ADDITIONAL_PARAMS=""
     VSOCK_CID=""
 
     if [[ "${VM_MODE}" == "tdx" ]]; then
@@ -874,25 +941,26 @@ main() {
     fi
 
     if [[ "${VM_MODE}" == "sev-snp" ]]; then
-        BUILD_PARAM=" build=$RELEASE"
+        SNP_ADDITIONAL_PARAMS=" build=$RELEASE pci=realloc,nocrs"
     fi
 
     if [[ ${DEBUG_MODE} == true ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
-        KERNEL_CMD_LINE="root=/dev/vda1 console=ttyS0${CLEARCPUID_PARAM}\
+         KERNEL_CMD_LINE="root=LABEL=rootfs console=ttyS0${CLEARCPUID_PARAM}\
                         systemd.log_level=trace systemd.log_target=log \
-                        rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH} \
+                        rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH} \
                         argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} \
-                        sp-debug=true${BUILD_PARAM}"
+                        sp-debug=true${SNP_ADDITIONAL_PARAMS}"
     else
-        KERNEL_CMD_LINE="root=/dev/vda1${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOT_HASH}${BUILD_PARAM}"
+        KERNEL_CMD_LINE="root=LABEL=rootfs${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH}${SNP_ADDITIONAL_PARAMS}"
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
         -enable-kvm \
         -append \"${KERNEL_CMD_LINE}\" \
-        -drive file=${ROOTFS_PATH},if=virtio,format=raw \
+        -drive file=${IMAGE_PATH},if=virtio,format=raw,readonly=on \
         -drive file=${STATE_DISK_PATH},if=virtio,format=qcow2 \
+        -drive file=${PROVIDER_CONFIG_DISK_PATH},if=virtio,format=raw,readonly=on \
         -kernel ${KERNEL_PATH} \
         -smp cores=${VM_CPU} \
         -m ${VM_RAM}G \
@@ -910,15 +978,23 @@ main() {
         ${GPU_PASSTHROUGH} \
         "
 
-    if [ -n "${PROVIDER_CONFIG}" ] && [ -d "${PROVIDER_CONFIG}" ]; then
-        QEMU_COMMAND+=" -fsdev local,security_model=passthrough,id=fsdev0,path=${PROVIDER_CONFIG} \
-            -device virtio-9p-pci,fsdev=fsdev0,mount_tag=sharedfolder,disable-legacy=on,iommu_platform=true"
-    fi
-
     # Create VM state disk
     rm -f ${STATE_DISK_PATH}
     qemu-img create -f qcow2 ${STATE_DISK_PATH} ${STATE_DISK_SIZE}G
     echo "Starting QEMU with the following command:"
+
+    # Create provider config disk
+    rm -f ${PROVIDER_CONFIG_DISK_PATH}
+    dd if=/dev/zero "of=${PROVIDER_CONFIG_DISK_PATH}" bs=1M count=1;
+    mkfs.ext4 -O ^has_journal,^huge_file,^meta_bg,^ext_attr -L provider_config "$PROVIDER_CONFIG_DISK_PATH";
+    PROVIDER_CONFIG_LOOP_DEVICE="$(losetup --find --show --partscan "$PROVIDER_CONFIG_DISK_PATH")";
+    PROVIDER_CONFIG_TEMP_MOUNT_POINT="$(mktemp -d)";
+    mount "$PROVIDER_CONFIG_LOOP_DEVICE" "$PROVIDER_CONFIG_TEMP_MOUNT_POINT";
+    cp -r $PROVIDER_CONFIG/* "$PROVIDER_CONFIG_TEMP_MOUNT_POINT";
+    rm -rf "$PROVIDER_CONFIG_TEMP_MOUNT_POINT/lost+found";
+    umount "$PROVIDER_CONFIG_TEMP_MOUNT_POINT";
+    losetup -d "$PROVIDER_CONFIG_LOOP_DEVICE";
+    rm -r "$PROVIDER_CONFIG_TEMP_MOUNT_POINT";
 
     NORMALIZED_COMMAND=$(echo "$QEMU_COMMAND" | tr -s ' ')
     # Replace " -" with a newline
