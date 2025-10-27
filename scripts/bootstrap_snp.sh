@@ -290,10 +290,10 @@ update_snp_firmware() {
     cp -vf "${firmware_name}.sbin" "/lib/firmware/amd/${destination_filename}"
 
     # reload modules to pick up new firmware without reboot
-    rmmod kvm_amd
-    rmmod ccp
-    modprobe ccp
-    modprobe kvm_amd
+    rmmod kvm_amd || echo "Warning: Failed to unload kvm_amd"
+    rmmod ccp || echo "Warning: Failed to unload ccp"
+    modprobe ccp || { echo "Failed to load ccp"; return 1; }
+    modprobe kvm_amd || { echo "Failed to load kvm_amd"; return 1; }
 
     popd
 }
