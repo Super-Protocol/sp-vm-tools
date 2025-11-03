@@ -262,11 +262,14 @@ update_snp_firmware() {
     local firmware_name=""
     local destination_filename=""
     if [[ "$model" == "Milan" ]]; then
-        firmware_name="amd_sev_fam19h_model0xh_1.55.21"
+        firmware_name="amd_sev_fam19h_model0xh_1.55.36"
         destination_filename="amd_sev_fam19h_model0xh.sbin"
     elif [[ "$model" == "Genoa" ]]; then
-        firmware_name="amd_sev_fam19h_model1xh_1.55.37"
+        firmware_name="amd_sev_fam19h_model1xh_1.55.49"
         destination_filename="amd_sev_fam19h_model1xh.sbin"
+    elif [[ "$model" == "Turin" ]]; then
+        firmware_name="amd_sev_fam1ah_model0xh_1.55.65"
+        destination_filename="amd_sev_fam1ah_model0xh.sbin"
     else
         echo "Skipping firmware update: Model is not Milan or Genoa."
         return 0
@@ -285,6 +288,13 @@ update_snp_firmware() {
     mkdir -p /lib/firmware/amd
     unzip "${firmware_name}.zip"
     cp -vf "${firmware_name}.sbin" "/lib/firmware/amd/${destination_filename}"
+
+    # reload modules to pick up new firmware without reboot
+    rmmod kvm_amd || echo "Warning: Failed to unload kvm_amd"
+    rmmod ccp || echo "Warning: Failed to unload ccp"
+    modprobe ccp || { echo "Failed to load ccp"; return 1; }
+    modprobe kvm_amd || { echo "Failed to load kvm_amd"; return 1; }
+
     popd
 }
 
@@ -305,6 +315,9 @@ bootstrap() {
     elif [[ "$CPU_MODEL" =~ ^AMD[[:space:]]*EPYC[[:space:]]*9[0-9]{2}4.*$ ]]; then
         echo "This processor is AMD Genoa."
         AMD_GEN="Genoa"
+    elif [[ "$CPU_MODEL" =~ ^AMD[[:space:]]*EPYC[[:space:]]*9[0-9]{2}5.*$ ]]; then
+        echo "This processor is AMD Turin."
+        AMD_GEN="Turin"
     else
         echo "Unknown CPU model: <$CPU_MODEL>"
         read -p "Do you want to continue? (y/n): " choice
