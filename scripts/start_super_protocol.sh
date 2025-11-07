@@ -28,6 +28,7 @@ DEFAULT_CACHE="${HOME}/.cache/superprotocol" # Default cache path
 
 DEFAULT_IP_ADDRESS="0.0.0.0"
 DEFAULT_SSH_PORT=2222
+DEFAULT_SWARM_DB_GOSSIP_PORT=7946
 DEFAULT_GUEST_CID=3
 
 LOG_FILE=""
@@ -85,6 +86,7 @@ usage() {
     echo "  --ssh_port <port>            SSH port (default: ${DEFAULT_SSH_PORT})"
     echo "  --http_port <port>           HTTP port (default: no port forward)"
     echo "  --https_port <port>          HTTPS port (default: no port forward)"
+    echo "  --swarm_db_gossip_port <port> Swarm DB Gossip Port"
     echo "  --log_file <file>            Log file (default: no)"
     echo "  --debug <true|false>         Enable debug mode (default: ${DEFAULT_DEBUG})"
     echo "  --argo_branch <name>         Name of argo branch for init SP components (default: ${DEFAULT_ARGO_BRANCH})"
@@ -116,6 +118,7 @@ IP_ADDRESS=${DEFAULT_IP_ADDRESS}
 SSH_PORT=${DEFAULT_SSH_PORT}
 HTTP_PORT=""
 HTTPS_PORT=""
+SWARM_DB_GOSSIP_PORT=${DEFAULT_SWARM_DB_GOSSIP_PORT}
 BASE_CID=$(get_next_available_id 2 guest-cid)
 BASE_NIC=$(get_next_available_id 0 nic_id)
 
@@ -144,6 +147,7 @@ parse_args() {
             --ssh_port) SSH_PORT=$2; shift ;;
             --http_port) HTTP_PORT=$2; shift ;;
             --https_port) HTTPS_PORT=$2; shift ;;
+            --swarm_db_gossip_port) SWARM_DB_GOSSIP_PORT=$2; shift;;
             --log_file) LOG_FILE=$2; shift ;;
             --debug) DEBUG_MODE=$2; shift ;;
             --argo_branch) ARGO_BRANCH=$2; shift ;;
@@ -774,6 +778,7 @@ check_params() {
         echo "   Argo branch: $ARGO_BRANCH"
         echo "   Argo SP env: $ARGO_SP_ENV"
         echo "   SSH Port: $SSH_PORT"
+        echo "   Swarm DB Gossip Port: $SWARM_DB_GOSSIP_PORT"
         if [[ -n "$HTTP_PORT" ]]; then
             echo "   HTTP Port: $HTTP_PORT"
         fi
@@ -927,6 +932,8 @@ main() {
     if [[ -n "$HTTPS_PORT" ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$HTTPS_PORT-:443"
     fi
+    NETWORK_SETTINGS+=",hostfwd=udp:0.0.0.0:$SWARM_DB_GOSSIP_PORT-:7946"
+    NETWORK_SETTINGS+=",hostfwd=tcp:0.0.0.0:$SWARM_DB_GOSSIP_PORT-:7946"
     DEBUG_PARAMS=""
     KERNEL_CMD_LINE=""
     ROOTFS_HASH="$(cat "$ROOTFS_HASH_PATH")";
