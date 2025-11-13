@@ -40,6 +40,7 @@ DEFAULT_DEBUG=false
 DEFAULT_ARGO_BRANCH="main"
 DEFAULT_ARGO_SP_ENV="main"
 LOCAL_BUILD_DIR=""
+DEFAULT_ROOT_WRITABLE=false
 
 # VM mode
 VM_MODE=""
@@ -97,6 +98,7 @@ usage() {
     echo "  --mode <mode>                VM mode: untrusted, tdx, sev-snp (default: ${DEFAULT_VM_MODE})"
     echo "  --guest-cid <id>             Guest CID for vsock (default: ${DEFAULT_GUEST_CID})"
     echo "  --build_dir <path>           Path to the local builded kata container (default: no)"
+    echo "  --root_writable <true|false> Make root filesystem writable (default: ${DEFAULT_ROOT_WRITABLE})"
     echo ""
 }
 
@@ -115,6 +117,7 @@ ARGO_BRANCH=${DEFAULT_ARGO_BRANCH}
 ARGO_SP_ENV=${DEFAULT_ARGO_SP_ENV}
 RELEASE=""
 RELEASE_FILEPATH=""
+ROOT_WRITABLE=${DEFAULT_ROOT_WRITABLE}
 
 IP_ADDRESS=${DEFAULT_IP_ADDRESS}
 SSH_PORT=${DEFAULT_SSH_PORT}
@@ -160,6 +163,7 @@ parse_args() {
             --mode) VM_MODE=$2; shift ;;
             --guest-cid) GUEST_CID=$2; shift ;;
             --build_dir) LOCAL_BUILD_DIR=$2; shift ;;
+            --root_writable) ROOT_WRITABLE=$2; shift ;;
             --help) usage; exit 0;;
             *) echo "Unknown parameter: $1"; usage ; exit 1 ;;
         esac
@@ -804,6 +808,12 @@ check_params() {
     fi
     echo "• Superprotocol release: ${RELEASE:-latest}"
     echo "• VM Mode: ${VM_MODE}"
+    if [[ "${ROOT_WRITABLE}" == "true" || "${ROOT_WRITABLE}" == "false" ]]; then
+        echo "• Rootfs writable: ${ROOT_WRITABLE}"
+    else
+        echo "Error: <root_writable> option must be true or false"
+        exit 1
+    fi
 }
 
 main() {
@@ -960,19 +970,32 @@ main() {
 
     if [[ ${DEBUG_MODE} == true ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
+        ROOT_VERITY_OR_RW=" rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH}"
+        if [[ "${ROOT_WRITABLE}" == "true" ]]; then
+            ROOT_VERITY_OR_RW=" rw"
+        fi
          KERNEL_CMD_LINE="root=LABEL=rootfs console=ttyS0${CLEARCPUID_PARAM}\
                         systemd.log_level=trace systemd.log_target=log \
-                        rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH} \
+                        ${ROOT_VERITY_OR_RW} \
                         argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} \
                         sp-debug=true${SNP_ADDITIONAL_PARAMS}"
     else
-        KERNEL_CMD_LINE="root=LABEL=rootfs${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH}${SNP_ADDITIONAL_PARAMS}"
+        ROOT_VERITY_OR_RW="rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH}"
+        if [[ "${ROOT_WRITABLE}" == "true" ]]; then
+            ROOT_VERITY_OR_RW="rw"
+        fi
+        KERNEL_CMD_LINE="root=LABEL=rootfs${CLEARCPUID_PARAM}${ROOT_VERITY_OR_RW}${SNP_ADDITIONAL_PARAMS}"
+    fi
+
+    IMAGE_DRIVE=" -drive file=${IMAGE_PATH},if=virtio,format=raw"
+    if [[ "${ROOT_WRITABLE}" != "true" ]]; then
+        IMAGE_DRIVE+=",readonly=on"
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
         -enable-kvm \
         -append \"${KERNEL_CMD_LINE}\" \
-        -drive file=${IMAGE_PATH},if=virtio,format=raw,readonly=on \
+        ${IMAGE_DRIVE} \
         -drive file=${STATE_DISK_PATH},if=virtio,format=qcow2 \
         -drive file=${PROVIDER_CONFIG_DISK_PATH},if=virtio,format=raw,readonly=on \
         -kernel ${KERNEL_PATH} \
