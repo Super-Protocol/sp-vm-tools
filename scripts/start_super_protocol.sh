@@ -31,7 +31,6 @@ DEFAULT_SSH_PORT=2222
 DEFAULT_WG_PORT=51820
 DEFAULT_SWARM_DB_GOSSIP_PORT=7946
 DEFAULT_GUEST_CID=3
-DEFAULT_WG_PORT_RANGE=""
 
 LOG_FILE=""
 DEFAULT_MAC_PREFIX="52:54:00:12:34"
@@ -87,7 +86,6 @@ usage() {
     echo "  --ip_address <address>       IP address (default: ${DEFAULT_IP_ADDRESS})"
     echo "  --ssh_port <port>            SSH port (default: ${DEFAULT_SSH_PORT})"
     echo "  --wg_port <port>             WireGuard port (default: ${DEFAULT_WG_PORT})"
-    echo "  --wg_port_range <start-end>  Optional UDP host port range forwarded to guest 51820"
     echo "  --http_port <port>           HTTP port (default: no port forward)"
     echo "  --https_port <port>          HTTPS port (default: no port forward)"
     echo "  --swarm_db_gossip_port <port> Swarm DB Gossip Port"
@@ -121,7 +119,6 @@ RELEASE_FILEPATH=""
 IP_ADDRESS=${DEFAULT_IP_ADDRESS}
 SSH_PORT=${DEFAULT_SSH_PORT}
 WG_PORT=${DEFAULT_WG_PORT}
-WG_PORT_RANGE=${DEFAULT_WG_PORT_RANGE}
 HTTP_PORT=""
 HTTPS_PORT=""
 SWARM_DB_GOSSIP_PORT=${DEFAULT_SWARM_DB_GOSSIP_PORT}
@@ -152,7 +149,6 @@ parse_args() {
             --ip_address) IP_ADDRESS=$2; shift ;;
             --ssh_port) SSH_PORT=$2; shift ;;
             --wg_port) WG_PORT=$2; shift ;;
-            --wg_port_range) WG_PORT_RANGE=$2; shift ;;
             --http_port) HTTP_PORT=$2; shift ;;
             --https_port) HTTPS_PORT=$2; shift ;;
             --swarm_db_gossip_port) SWARM_DB_GOSSIP_PORT=$2; shift;;
@@ -943,23 +939,6 @@ main() {
     fi
 
     NETWORK_SETTINGS+=",hostfwd=udp:0.0.0.0:$WG_PORT-:51820"
-    if [[ -n "$WG_PORT_RANGE" ]]; then
-        if [[ ! "$WG_PORT_RANGE" =~ ^[0-9]+-[0-9]+$ ]]; then
-            echo "Invalid --wg_port_range value '$WG_PORT_RANGE'. Expected format: start-end"
-            exit 1
-        fi
-        IFS='-' read -r WG_PORT_START WG_PORT_END <<< "$WG_PORT_RANGE"
-        if (( WG_PORT_START > WG_PORT_END )); then
-            echo "Invalid --wg_port_range: start must be <= end"
-            exit 1
-        fi
-        for (( p=WG_PORT_START; p<=WG_PORT_END; p++ )); do
-            if (( p == WG_PORT )); then
-                continue
-            fi
-            NETWORK_SETTINGS+=",hostfwd=udp:0.0.0.0:$p-:51820"
-        done
-    fi
     NETWORK_SETTINGS+=",hostfwd=udp:0.0.0.0:$SWARM_DB_GOSSIP_PORT-:7946"
     NETWORK_SETTINGS+=",hostfwd=tcp:0.0.0.0:$SWARM_DB_GOSSIP_PORT-:7946"
     DEBUG_PARAMS=""
