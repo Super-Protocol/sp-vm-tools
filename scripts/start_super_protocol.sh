@@ -988,7 +988,19 @@ main() {
     fi
 
     IMAGE_DRIVE=" -drive file=${IMAGE_PATH},if=virtio,format=raw"
-    if [[ "${ROOT_WRITABLE}" != "true" ]]; then
+    if [[ "${ROOT_WRITABLE}" == "true" ]]; then
+        # Use qcow2 overlay to keep the base image immutable while allowing writes
+        OVERLAY_DIR="${CACHE}/overlays"
+        OVERLAY_IMAGE_PATH="${OVERLAY_DIR}/root_overlay.qcow2"
+        mkdir -p "${OVERLAY_DIR}"
+        if [[ ! -f "${OVERLAY_IMAGE_PATH}" ]]; then
+            echo "Creating qcow2 overlay at ${OVERLAY_IMAGE_PATH} with backing ${IMAGE_PATH}"
+            qemu-img create -f qcow2 -F raw -b "${IMAGE_PATH}" "${OVERLAY_IMAGE_PATH}"
+        else
+            echo "Using existing qcow2 overlay at ${OVERLAY_IMAGE_PATH}"
+        fi
+        IMAGE_DRIVE=" -drive file=${OVERLAY_IMAGE_PATH},if=virtio,format=qcow2"
+    else
         IMAGE_DRIVE+=",readonly=on"
     fi
 
