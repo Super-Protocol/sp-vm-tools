@@ -993,9 +993,11 @@ main() {
         OVERLAY_DIR="${CACHE}/overlays"
         OVERLAY_IMAGE_PATH="${OVERLAY_DIR}/root_overlay.qcow2"
         mkdir -p "${OVERLAY_DIR}"
-        rm -rf $OVERLAY_IMAGE_PATH
-        echo "Creating qcow2 overlay at ${OVERLAY_IMAGE_PATH} with backing ${IMAGE_PATH}"
-        qemu-img create -f qcow2 -F raw -b "${IMAGE_PATH}" "${OVERLAY_IMAGE_PATH}"
+        if [[ ! -f "${OVERLAY_IMAGE_PATH}" ]]; then
+            echo "Creating qcow2 overlay at ${OVERLAY_IMAGE_PATH} with backing ${IMAGE_PATH}"
+            qemu-img create -f qcow2 -F raw -b "${IMAGE_PATH}" "${OVERLAY_IMAGE_PATH}"
+        else
+            echo "Using existing qcow2 overlay at ${OVERLAY_IMAGE_PATH}"
         fi
         IMAGE_DRIVE=" -drive file=${OVERLAY_IMAGE_PATH},if=virtio,format=qcow2"
     else
