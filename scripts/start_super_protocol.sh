@@ -31,6 +31,7 @@ DEFAULT_SSH_PORT=2222
 DEFAULT_WG_PORT=51820
 DEFAULT_SWARM_DB_GOSSIP_PORT=7946
 DEFAULT_GUEST_CID=3
+DEFAULT_SWARM_INIT=false
 
 LOG_FILE=""
 DEFAULT_MAC_PREFIX="52:54:00:12:34"
@@ -97,6 +98,7 @@ usage() {
     echo "  --mode <mode>                VM mode: untrusted, tdx, sev-snp (default: ${DEFAULT_VM_MODE})"
     echo "  --guest-cid <id>             Guest CID for vsock (default: ${DEFAULT_GUEST_CID})"
     echo "  --build_dir <path>           Path to the local builded kata container (default: no)"
+    echo "  --swarm-init                 Enable swarm-init mode (adds vm_mode=swarm-init to kernel cmdline)"
     echo ""
 }
 
@@ -111,6 +113,7 @@ STATE_DISK_SIZE=0
 MAC_ADDRESS=${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX}
 PROVIDER_CONFIG=""
 DEBUG_MODE=${DEFAULT_DEBUG}
+SWARM_INIT=${DEFAULT_SWARM_INIT}
 ARGO_BRANCH=${DEFAULT_ARGO_BRANCH}
 ARGO_SP_ENV=${DEFAULT_ARGO_SP_ENV}
 RELEASE=""
@@ -160,6 +163,7 @@ parse_args() {
             --mode) VM_MODE=$2; shift ;;
             --guest-cid) GUEST_CID=$2; shift ;;
             --build_dir) LOCAL_BUILD_DIR=$2; shift ;;
+            --swarm-init) SWARM_INIT=true ;;
             --help) usage; exit 0;;
             *) echo "Unknown parameter: $1"; usage ; exit 1 ;;
         esac
@@ -967,6 +971,10 @@ main() {
                         sp-debug=true${SNP_ADDITIONAL_PARAMS}"
     else
         KERNEL_CMD_LINE="root=LABEL=rootfs${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH}${SNP_ADDITIONAL_PARAMS}"
+    fi
+
+    if [[ ${SWARM_INIT} == true ]]; then
+        KERNEL_CMD_LINE+=" vm_mode=swarm-init"
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
