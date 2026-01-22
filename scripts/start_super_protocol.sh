@@ -32,6 +32,7 @@ DEFAULT_WG_PORT=51820
 DEFAULT_SWARM_DB_GOSSIP_PORT=7946
 DEFAULT_GUEST_CID=3
 DEFAULT_SWARM_INIT=false
+DEFAULT_ALLOW_UNTRUSTED=false
 
 LOG_FILE=""
 DEFAULT_MAC_PREFIX="52:54:00:12:34"
@@ -99,6 +100,7 @@ usage() {
     echo "  --guest-cid <id>             Guest CID for vsock (default: ${DEFAULT_GUEST_CID})"
     echo "  --build_dir <path>           Path to the local builded kata container (default: no)"
     echo "  --swarm-init                 Enable swarm-init mode (adds vm_mode=swarm-init to kernel cmdline)"
+    echo "  --allow-untrusted            Allow untrusted mode (adds allow_untrusted=true to kernel cmdline, requires --swarm-init)"
     echo ""
 }
 
@@ -114,6 +116,7 @@ MAC_ADDRESS=${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX}
 PROVIDER_CONFIG=""
 DEBUG_MODE=${DEFAULT_DEBUG}
 SWARM_INIT=${DEFAULT_SWARM_INIT}
+ALLOW_UNTRUSTED=${DEFAULT_ALLOW_UNTRUSTED}
 ARGO_BRANCH=${DEFAULT_ARGO_BRANCH}
 ARGO_SP_ENV=${DEFAULT_ARGO_SP_ENV}
 RELEASE=""
@@ -164,6 +167,7 @@ parse_args() {
             --guest-cid) GUEST_CID=$2; shift ;;
             --build_dir) LOCAL_BUILD_DIR=$2; shift ;;
             --swarm-init) SWARM_INIT=true ;;
+            --allow-untrusted) ALLOW_UNTRUSTED=true ;;
             --help) usage; exit 0;;
             *) echo "Unknown parameter: $1"; usage ; exit 1 ;;
         esac
@@ -808,6 +812,12 @@ check_params() {
     fi
     echo "• Superprotocol release: ${RELEASE:-latest}"
     echo "• VM Mode: ${VM_MODE}"
+    
+    # Validate allow-untrusted requires swarm-init
+    if [[ ${ALLOW_UNTRUSTED} == true ]] && [[ ${SWARM_INIT} == false ]]; then
+        echo "Error: --allow-untrusted can only be used with --swarm-init"
+        exit 1
+    fi
 }
 
 main() {
@@ -975,6 +985,10 @@ main() {
 
     if [[ ${SWARM_INIT} == true ]]; then
         KERNEL_CMD_LINE+=" vm_mode=swarm-init"
+    fi
+    
+    if [[ ${ALLOW_UNTRUSTED} == true ]]; then
+        KERNEL_CMD_LINE+=" allow_untrusted=true"
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
