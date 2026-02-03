@@ -30,6 +30,7 @@ DEFAULT_IP_ADDRESS="0.0.0.0"
 DEFAULT_SSH_PORT=2222
 DEFAULT_WG_PORT=51820
 DEFAULT_SWARM_DB_GOSSIP_PORT=7946
+DEFAULT_PKI_PORT=8443
 DEFAULT_GUEST_CID=3
 DEFAULT_SWARM_INIT=false
 DEFAULT_ALLOW_UNTRUSTED=false
@@ -90,6 +91,7 @@ usage() {
     echo "  --wg_port <port>             WireGuard port (default: ${DEFAULT_WG_PORT})"
     echo "  --http_port <port>           HTTP port (default: no port forward)"
     echo "  --https_port <port>          HTTPS port (default: no port forward)"
+    echo "  --pki_port <port>            PKI port (default: no port forward)"
     echo "  --swarm_db_gossip_port <port> Swarm DB Gossip Port"
     echo "  --log_file <file>            Log file (default: no)"
     echo "  --debug <true|false>         Enable debug mode (default: ${DEFAULT_DEBUG})"
@@ -127,6 +129,7 @@ SSH_PORT=${DEFAULT_SSH_PORT}
 WG_PORT=${DEFAULT_WG_PORT}
 HTTP_PORT=""
 HTTPS_PORT=""
+PKI_PORT=""
 SWARM_DB_GOSSIP_PORT=${DEFAULT_SWARM_DB_GOSSIP_PORT}
 BASE_CID=$(get_next_available_id 2 guest-cid)
 BASE_NIC=$(get_next_available_id 0 nic_id)
@@ -157,6 +160,7 @@ parse_args() {
             --wg_port) WG_PORT=$2; shift ;;
             --http_port) HTTP_PORT=$2; shift ;;
             --https_port) HTTPS_PORT=$2; shift ;;
+            --pki_port) PKI_PORT=$2; shift ;;
             --swarm_db_gossip_port) SWARM_DB_GOSSIP_PORT=$2; shift;;
             --log_file) LOG_FILE=$2; shift ;;
             --debug) DEBUG_MODE=$2; shift ;;
@@ -711,6 +715,13 @@ check_params() {
             exit 1
         fi
     fi
+    if [[ -n "$PKI_PORT" ]]; then
+        echo "Checking pki port aviability..."
+        if nc -z "$IP_ADDRESS" "$PKI_PORT"; then
+            echo "pki port $PKI_PORT already bound!"
+            exit 1
+        fi
+    fi
 
 
     echo "Checking mount point..."
@@ -797,6 +808,9 @@ check_params() {
         fi
         if [[ -n "$HTTPS_PORT" ]]; then
             echo "   HTTPS Port: $HTTPS_PORT"
+        fi
+        if [[ -n "$PKI_PORT" ]]; then
+            echo "   PKI Port: $PKI_PORT"
         fi
 
         if [[ -z "${LOG_FILE}" ]]; then
@@ -950,6 +964,9 @@ main() {
     fi
     if [[ -n "$HTTPS_PORT" ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$HTTPS_PORT-:443"
+    fi
+    if [[ -n "$PKI_PORT" ]]; then
+        NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$PKI_PORT-:8443"
     fi
 
     NETWORK_SETTINGS+=",hostfwd=udp:0.0.0.0:$WG_PORT-:51820"
