@@ -77,32 +77,32 @@ usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --cores <number>             Number of CPU cores (default: ${DEFAULT_CORES})"
-    echo "  --mem <size>                 Amount of memory (default: ${DEFAULT_MEM})"
-    echo "  --gpu <gpu_id>               Specify GPU(s) (default: all available gpu, specify --gpu none to disable gpu passthrough)"
-    echo "  --state_disk_path <path>           Path to state disk image (default: <cache>/state_disk.qcow2)"
-    echo "  --state_disk_size <size>           Size of state disk (default: autodetermining, but no less than 512G)"
-    echo "  --provider_config_disk_path <path> Path to temp privider config disk image (default: <cache>/provider_config.img)"
-    echo "  --cache <path>               Cache directory (default: ${DEFAULT_CACHE})"
-    echo "  --provider_config <file>     Provider configuration file (default: no)"
-    echo "  --mac_address <address>      MAC address (default: ${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX})"
-    echo "  --ip_address <address>       IP address (default: ${DEFAULT_IP_ADDRESS})"
-    echo "  --ssh_port <port>            SSH port (default: ${DEFAULT_SSH_PORT})"
-    echo "  --wg_port <port>             WireGuard port (default: ${DEFAULT_WG_PORT})"
-    echo "  --http_port <port>           HTTP port (default: no port forward)"
-    echo "  --https_port <port>          HTTPS port (default: no port forward)"
-    echo "  --pki_port <port>            PKI port (default: no port forward)"
-    echo "  --swarm_db_gossip_port <port> Swarm DB Gossip Port"
-    echo "  --log_file <file>            Log file (default: no)"
-    echo "  --debug <true|false>         Enable debug mode (default: ${DEFAULT_DEBUG})"
-    echo "  --argo_branch <name>         Name of argo branch for init SP components (default: ${DEFAULT_ARGO_BRANCH})"
-    echo "  --argo_sp_env <name>         Name of argo environment for init SP components (default: ${DEFAULT_ARGO_SP_ENV})"
-    echo "  --release <name>             Release name (default: latest)"
-    echo "  --mode <mode>                VM mode: untrusted, tdx, sev-snp (default: ${DEFAULT_VM_MODE})"
-    echo "  --guest-cid <id>             Guest CID for vsock (default: ${DEFAULT_GUEST_CID})"
-    echo "  --build_dir <path>           Path to the local builded kata container (default: no)"
-    echo "  --swarm-init                 Enable swarm-init mode (adds vm_mode=swarm-init to kernel cmdline)"
-    echo "  --allow-untrusted            Allow untrusted mode (adds allow_untrusted=true to kernel cmdline, requires --swarm-init)"
+    echo "  --cores <number>               Number of CPU cores (default: ${DEFAULT_CORES})"
+    echo "  --mem <size>                   Amount of memory (default: ${DEFAULT_MEM})"
+    echo "  --gpu <gpu_id>                 Specify GPU(s) (default: all available gpu, specify --gpu none to disable gpu passthrough)"
+    echo "  --state_disk_path <path>       Path to state disk image (default: <cache>/state_disk.qcow2)"
+    echo "  --state_disk_size <size>       Size of state disk (default: autodetermining, but no less than 512G)"
+    echo "  --provider_config_disk_path    <path> Path to temp privider config disk image (default: <cache>/provider_config.img)"
+    echo "  --cache <path>                 Cache directory (default: ${DEFAULT_CACHE})"
+    echo "  --provider_config <file>       Provider configuration file (default: no)"
+    echo "  --mac_address <address>        MAC address (default: ${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX})"
+    echo "  --ip_address <address>         IP address (default: ${DEFAULT_IP_ADDRESS})"
+    echo "  --ssh_port <port>              SSH port (default: ${DEFAULT_SSH_PORT})"
+    echo "  --wg_port <port>               WireGuard port (default: ${DEFAULT_WG_PORT})"
+    echo "  --http_port <port>             HTTP port (default: no port forward)"
+    echo "  --https_port <port>            HTTPS port (default: no port forward)"
+    echo "  --pki_port <port>              PKI port (default: no port forward)"
+    echo "  --swarm_db_gossip_port <port>  Swarm DB Gossip Port"
+    echo "  --log_file <file>              Log file (default: no)"
+    echo "  --debug <true|false>           Enable debug mode (default: ${DEFAULT_DEBUG})"
+    echo "  --argo_branch <name>           Name of argo branch for init SP components (default: ${DEFAULT_ARGO_BRANCH})"
+    echo "  --argo_sp_env <name>           Name of argo environment for init SP components (default: ${DEFAULT_ARGO_SP_ENV})"
+    echo "  --release <name>               Release name (default: latest)"
+    echo "  --mode <mode>                  VM mode: untrusted, tdx, sev-snp (default: ${DEFAULT_VM_MODE})"
+    echo "  --guest-cid <id>               Guest CID for vsock (default: ${DEFAULT_GUEST_CID})"
+    echo "  --build_dir <path>             Path to the local builded kata container (default: no)"
+    echo "  --swarm-init <true|false>      Enable swarm-init mode (default: ${DEFAULT_SWARM_INIT})"
+    echo "  --allow-untrusted <true|false> Allow untrusted mode (default: ${DEFAULT_ALLOW_UNTRUSTED})"
     echo ""
 }
 
@@ -170,8 +170,8 @@ parse_args() {
             --mode) VM_MODE=$2; shift ;;
             --guest-cid) GUEST_CID=$2; shift ;;
             --build_dir) LOCAL_BUILD_DIR=$2; shift ;;
-            --swarm-init) SWARM_INIT=true ;;
-            --allow-untrusted) ALLOW_UNTRUSTED=true ;;
+            --swarm-init) SWARM_INIT=$2; shift ;;
+            --allow-untrusted) ALLOW_UNTRUSTED=$2; shift ;;
             --help) usage; exit 0;;
             *) echo "Unknown parameter: $1"; usage ; exit 1 ;;
         esac
@@ -827,8 +827,22 @@ check_params() {
     echo "• Superprotocol release: ${RELEASE:-latest}"
     echo "• VM Mode: ${VM_MODE}"
     
-    # Validate allow-untrusted requires swarm-init
-    if [[ ${ALLOW_UNTRUSTED} == true ]] && [[ ${SWARM_INIT} == false ]]; then
+    if [[ "${SWARM_INIT}" == "true" || "${SWARM_INIT}" == "false" ]]; then
+        echo "• Swarm init: ${SWARM_INIT}"
+    else
+        echo "Error: <swarm-init> option must be true or false"
+        exit 1
+    fi
+
+    if [[ "${ALLOW_UNTRUSTED}" == "true" || "${ALLOW_UNTRUSTED}" == "false" ]]; then
+        echo "• Allow untrusted: ${ALLOW_UNTRUSTED}"
+    else
+        echo "Error: <allow-untrusted> option must be true or false"
+        exit 1
+    fi
+
+    # Validate allow-untrusted requires swarm-init=true
+    if [[ "${ALLOW_UNTRUSTED}" == "true" ]] && [[ "${SWARM_INIT}" == "false" ]]; then
         echo "Error: --allow-untrusted can only be used with --swarm-init"
         exit 1
     fi
