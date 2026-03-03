@@ -32,6 +32,7 @@ DEFAULT_WG_PORT=51820
 DEFAULT_SWARM_DB_GOSSIP_PORT=7946
 DEFAULT_GUEST_CID=3
 DEFAULT_SWARM_INIT=false
+DEFAULT_ALLOW_UNTRUSTED=false
 
 LOG_FILE=""
 DEFAULT_MAC_PREFIX="52:54:00:12:34"
@@ -75,30 +76,32 @@ usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --cores <number>             Number of CPU cores (default: ${DEFAULT_CORES})"
-    echo "  --mem <size>                 Amount of memory (default: ${DEFAULT_MEM})"
-    echo "  --gpu <gpu_id>               Specify GPU(s) (default: all available gpu, specify --gpu none to disable gpu passthrough)"
-    echo "  --state_disk_path <path>           Path to state disk image (default: <cache>/state_disk.qcow2)"
-    echo "  --state_disk_size <size>           Size of state disk (default: autodetermining, but no less than 512G)"
-    echo "  --provider_config_disk_path <path> Path to temp privider config disk image (default: <cache>/provider_config.img)"
-    echo "  --cache <path>               Cache directory (default: ${DEFAULT_CACHE})"
-    echo "  --provider_config <file>     Provider configuration file (default: no)"
-    echo "  --mac_address <address>      MAC address (default: ${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX})"
-    echo "  --ip_address <address>       IP address (default: ${DEFAULT_IP_ADDRESS})"
-    echo "  --ssh_port <port>            SSH port (default: ${DEFAULT_SSH_PORT})"
-    echo "  --wg_port <port>             WireGuard port (default: ${DEFAULT_WG_PORT})"
-    echo "  --http_port <port>           HTTP port (default: no port forward)"
-    echo "  --https_port <port>          HTTPS port (default: no port forward)"
-    echo "  --swarm_db_gossip_port <port> Swarm DB Gossip Port"
-    echo "  --log_file <file>            Log file (default: no)"
-    echo "  --debug <true|false>         Enable debug mode (default: ${DEFAULT_DEBUG})"
-    echo "  --argo_branch <name>         Name of argo branch for init SP components (default: ${DEFAULT_ARGO_BRANCH})"
-    echo "  --argo_sp_env <name>         Name of argo environment for init SP components (default: ${DEFAULT_ARGO_SP_ENV})"
-    echo "  --release <name>             Release name (default: latest)"
-    echo "  --mode <mode>                VM mode: untrusted, tdx, sev-snp (default: ${DEFAULT_VM_MODE})"
-    echo "  --guest-cid <id>             Guest CID for vsock (default: ${DEFAULT_GUEST_CID})"
-    echo "  --build_dir <path>           Path to the local builded kata container (default: no)"
-    echo "  --swarm-init                 Enable swarm-init mode (adds vm_mode=swarm-init to kernel cmdline)"
+    echo "  --cores <number>               Number of CPU cores (default: ${DEFAULT_CORES})"
+    echo "  --mem <size>                   Amount of memory (default: ${DEFAULT_MEM})"
+    echo "  --gpu <gpu_id>                 Specify GPU(s) (default: all available gpu, specify --gpu none to disable gpu passthrough)"
+    echo "  --state_disk_path <path>       Path to state disk image (default: <cache>/state_disk.qcow2)"
+    echo "  --state_disk_size <size>       Size of state disk (default: autodetermining, but no less than 512G)"
+    echo "  --provider_config_disk_path    <path> Path to temp privider config disk image (default: <cache>/provider_config.img)"
+    echo "  --cache <path>                 Cache directory (default: ${DEFAULT_CACHE})"
+    echo "  --provider_config <file>       Provider configuration file (default: no)"
+    echo "  --mac_address <address>        MAC address (default: ${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX})"
+    echo "  --ip_address <address>         IP address (default: ${DEFAULT_IP_ADDRESS})"
+    echo "  --ssh_port <port>              SSH port (default: ${DEFAULT_SSH_PORT})"
+    echo "  --wg_port <port>               WireGuard port (default: ${DEFAULT_WG_PORT})"
+    echo "  --http_port <port>             HTTP port (default: no port forward)"
+    echo "  --https_port <port>            HTTPS port (default: no port forward)"
+    echo "  --pki_port <port>              PKI port (default: no port forward)"
+    echo "  --swarm_db_gossip_port <port>  Swarm DB Gossip Port"
+    echo "  --log_file <file>              Log file (default: no)"
+    echo "  --debug <true|false>           Enable debug mode (default: ${DEFAULT_DEBUG})"
+    echo "  --argo_branch <name>           Name of argo branch for init SP components (default: ${DEFAULT_ARGO_BRANCH})"
+    echo "  --argo_sp_env <name>           Name of argo environment for init SP components (default: ${DEFAULT_ARGO_SP_ENV})"
+    echo "  --release <name>               Release name (default: latest)"
+    echo "  --mode <mode>                  VM mode: untrusted, tdx, sev-snp (default: ${DEFAULT_VM_MODE})"
+    echo "  --guest-cid <id>               Guest CID for vsock (default: ${DEFAULT_GUEST_CID})"
+    echo "  --build_dir <path>             Path to the local builded kata container (default: no)"
+    echo "  --swarm-init <true|false>      Enable swarm-init mode (default: ${DEFAULT_SWARM_INIT})"
+    echo "  --allow-untrusted <true|false> Allow untrusted mode (default: ${DEFAULT_ALLOW_UNTRUSTED})"
     echo ""
 }
 
@@ -114,6 +117,7 @@ MAC_ADDRESS=${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX}
 PROVIDER_CONFIG=""
 DEBUG_MODE=${DEFAULT_DEBUG}
 SWARM_INIT=${DEFAULT_SWARM_INIT}
+ALLOW_UNTRUSTED=${DEFAULT_ALLOW_UNTRUSTED}
 ARGO_BRANCH=${DEFAULT_ARGO_BRANCH}
 ARGO_SP_ENV=${DEFAULT_ARGO_SP_ENV}
 RELEASE=""
@@ -124,6 +128,7 @@ SSH_PORT=${DEFAULT_SSH_PORT}
 WG_PORT=${DEFAULT_WG_PORT}
 HTTP_PORT=""
 HTTPS_PORT=""
+PKI_PORT=""
 SWARM_DB_GOSSIP_PORT=${DEFAULT_SWARM_DB_GOSSIP_PORT}
 BASE_CID=$(get_next_available_id 2 guest-cid)
 BASE_NIC=$(get_next_available_id 0 nic_id)
@@ -154,6 +159,7 @@ parse_args() {
             --wg_port) WG_PORT=$2; shift ;;
             --http_port) HTTP_PORT=$2; shift ;;
             --https_port) HTTPS_PORT=$2; shift ;;
+            --pki_port) PKI_PORT=$2; shift ;;
             --swarm_db_gossip_port) SWARM_DB_GOSSIP_PORT=$2; shift;;
             --log_file) LOG_FILE=$2; shift ;;
             --debug) DEBUG_MODE=$2; shift ;;
@@ -163,7 +169,8 @@ parse_args() {
             --mode) VM_MODE=$2; shift ;;
             --guest-cid) GUEST_CID=$2; shift ;;
             --build_dir) LOCAL_BUILD_DIR=$2; shift ;;
-            --swarm-init) SWARM_INIT=true ;;
+            --swarm-init) SWARM_INIT=$2; shift ;;
+            --allow-untrusted) ALLOW_UNTRUSTED=$2; shift ;;
             --help) usage; exit 0;;
             *) echo "Unknown parameter: $1"; usage ; exit 1 ;;
         esac
@@ -707,6 +714,13 @@ check_params() {
             exit 1
         fi
     fi
+    if [[ -n "$PKI_PORT" ]]; then
+        echo "Checking pki port aviability..."
+        if nc -z "$IP_ADDRESS" "$PKI_PORT"; then
+            echo "pki port $PKI_PORT already bound!"
+            exit 1
+        fi
+    fi
 
 
     echo "Checking mount point..."
@@ -794,6 +808,9 @@ check_params() {
         if [[ -n "$HTTPS_PORT" ]]; then
             echo "   HTTPS Port: $HTTPS_PORT"
         fi
+        if [[ -n "$PKI_PORT" ]]; then
+            echo "   PKI Port: $PKI_PORT"
+        fi
 
         if [[ -z "${LOG_FILE}" ]]; then
             echo "Error: <log_file> option can't be empty in debug mode"
@@ -808,6 +825,26 @@ check_params() {
     fi
     echo "• Superprotocol release: ${RELEASE:-latest}"
     echo "• VM Mode: ${VM_MODE}"
+    
+    if [[ "${SWARM_INIT}" == "true" || "${SWARM_INIT}" == "false" ]]; then
+        echo "• Swarm init: ${SWARM_INIT}"
+    else
+        echo "Error: <swarm-init> option must be true or false"
+        exit 1
+    fi
+
+    if [[ "${ALLOW_UNTRUSTED}" == "true" || "${ALLOW_UNTRUSTED}" == "false" ]]; then
+        echo "• Allow untrusted: ${ALLOW_UNTRUSTED}"
+    else
+        echo "Error: <allow-untrusted> option must be true or false"
+        exit 1
+    fi
+
+    # Validate allow-untrusted requires swarm-init=true
+    if [[ "${ALLOW_UNTRUSTED}" == "true" ]] && [[ "${SWARM_INIT}" == "false" ]]; then
+        echo "Error: --allow-untrusted can only be used with --swarm-init"
+        exit 1
+    fi
 }
 
 main() {
@@ -941,6 +978,9 @@ main() {
     if [[ -n "$HTTPS_PORT" ]]; then
         NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$HTTPS_PORT-:443"
     fi
+    if [[ -n "$PKI_PORT" ]]; then
+        NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$PKI_PORT-:8443"
+    fi
 
     NETWORK_SETTINGS+=",hostfwd=udp:0.0.0.0:$WG_PORT-:51820"
     NETWORK_SETTINGS+=",hostfwd=udp:0.0.0.0:$SWARM_DB_GOSSIP_PORT-:7946"
@@ -975,6 +1015,10 @@ main() {
 
     if [[ ${SWARM_INIT} == true ]]; then
         KERNEL_CMD_LINE+=" vm_mode=swarm-init"
+    fi
+    
+    if [[ ${ALLOW_UNTRUSTED} == true ]]; then
+        KERNEL_CMD_LINE+=" allow_untrusted=true"
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
