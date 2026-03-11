@@ -31,7 +31,6 @@ DEFAULT_SSH_PORT=2222
 DEFAULT_WG_PORT=51820
 DEFAULT_SWARM_DB_GOSSIP_PORT=7946
 DEFAULT_DNS_PORT=53
-DEFAULT_K8S_API_PORT=6443
 DEFAULT_GUEST_CID=3
 DEFAULT_SWARM_INIT=false
 DEFAULT_ALLOW_UNTRUSTED=false
@@ -95,7 +94,6 @@ usage() {
     echo "  --pki_port <port>              PKI port (default: no port forward)"
     echo "  --swarm_db_gossip_port <port>  Swarm DB Gossip Port (default: ${DEFAULT_SWARM_DB_GOSSIP_PORT})"
     echo "  --dns_port <port>              DNS port (default: ${DEFAULT_DNS_PORT})"
-    echo "  --k8s_api_port <port>          Kubernetes API port (default: ${DEFAULT_K8S_API_PORT})"
     echo "  --log_file <file>              Log file (default: no)"
     echo "  --debug <true|false>           Enable debug mode (default: ${DEFAULT_DEBUG})"
     echo "  --argo_branch <name>           Name of argo branch for init SP components (default: ${DEFAULT_ARGO_BRANCH})"
@@ -135,7 +133,6 @@ HTTPS_PORT=""
 PKI_PORT=""
 SWARM_DB_GOSSIP_PORT=${DEFAULT_SWARM_DB_GOSSIP_PORT}
 DNS_PORT=${DEFAULT_DNS_PORT}
-K8S_API_PORT=${DEFAULT_K8S_API_PORT}
 BASE_CID=$(get_next_available_id 2 guest-cid)
 BASE_NIC=$(get_next_available_id 0 nic_id)
 
@@ -168,7 +165,6 @@ parse_args() {
             --pki_port) PKI_PORT=$2; shift ;;
             --swarm_db_gossip_port) SWARM_DB_GOSSIP_PORT=$2; shift;;
             --dns_port) DNS_PORT=$2; shift ;;
-            --k8s_api_port) K8S_API_PORT=$2; shift ;;
             --log_file) LOG_FILE=$2; shift ;;
             --debug) DEBUG_MODE=$2; shift ;;
             --argo_branch) ARGO_BRANCH=$2; shift ;;
@@ -811,7 +807,6 @@ check_params() {
         echo "   WireGuard Port: $WG_PORT"
         echo "   Swarm DB Gossip Port: $SWARM_DB_GOSSIP_PORT"
         echo "   DNS Port: $DNS_PORT"
-        echo "   K8s API Port: $K8S_API_PORT"
         if [[ -n "$HTTP_PORT" ]]; then
             echo "   HTTP Port: $HTTP_PORT"
         fi
@@ -997,7 +992,6 @@ main() {
     NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$SWARM_DB_GOSSIP_PORT-:7946"
     NETWORK_SETTINGS+=",hostfwd=udp:$IP_ADDRESS:$DNS_PORT-:53"
     NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$DNS_PORT-:53"
-    NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$K8S_API_PORT-:6443"
     DEBUG_PARAMS=""
     KERNEL_CMD_LINE=""
     ROOTFS_HASH="$(cat "$ROOTFS_HASH_PATH")";
