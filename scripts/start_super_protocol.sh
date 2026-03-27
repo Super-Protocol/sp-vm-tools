@@ -961,9 +961,10 @@ main() {
             detect_snp_vCPU
             detect_phys_bits
             
-            MACHINE_PARAMS="q35,confidential-guest-support=sev0,vmport=off"
+            MACHINE_PARAMS="q35,confidential-guest-support=sev0,vmport=off,memory-backend=mem0"
             CPU_PARAMS="-cpu ${SNP_VCPU},phys-bits=${PHYS_BITS}"
             CC_SPECIFIC_PARAMS=" -object sev-snp-guest,id=sev0,cbitpos=${CBITPOS},reduced-phys-bits=1,policy=0x30000,kernel-hashes=on"
+            CC_PARAMS+=" -object memory-backend-ram,id=mem0,size=${VM_RAM}G,prealloc=on,prealloc-threads=$(nproc)"
             ;;
         "untrusted")
             MACHINE_PARAMS="q35,kernel_irqchip=split"
