@@ -984,7 +984,7 @@ main() {
         NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$HTTPS_PORT-:443"
     fi
     if [[ -n "$PKI_PORT" ]]; then
-        NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$PKI_PORT-:8443"
+        NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$PKI_PORT-:9443"
     fi
 
     NETWORK_SETTINGS+=",hostfwd=udp:$IP_ADDRESS:$WG_PORT-:51820"
