@@ -127,6 +127,11 @@ To list running VMs started by this tool:
 ```bash
 ./scripts/get_super_running_vms.sh
 ```
+
+## Running a Swarm VM
+
+For the full Swarm flow — provider configuration, building the VM image with `buildx`, launching it on a bootstrapped host, and the GCP/Terraform variant — see [docs/swarm.md](docs/swarm.md).
+
 ## License
 
 See [LICENSE](LICENSE).
