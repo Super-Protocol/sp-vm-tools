@@ -19,6 +19,14 @@ It also includes a short section on launching the same image in Google Cloud via
 ssh gp-ws-01
 ```
 
+> Run the rest of this guide inside a `tmux` (or `screen`) session. The image
+> build and the VM itself are long-running; if your SSH connection drops you'll
+> lose the build or the VM together with it.
+>
+> ```bash
+> tmux new -s swarm        # or: tmux attach -t swarm
+> ```
+
 ## 2. Clone the repositories
 
 `sp-vm` depends on `swarm-cloud` via git submodules, so a recursive clone (or `git submodule update --init --recursive`) is mandatory.
