@@ -58,6 +58,24 @@ A Swarm cluster has two kinds of nodes, and the `config.yaml` differs slightly b
   - `pki_authority.caBundle` and `pki_authority.servers` **must** point to the bootstrap node's PKI (e.g. `ca.swarm.<your-subdomain>.<your-domain>`).
   - `pki_authority.networkID` must match the value used on the bootstrap node.
 
+#### Fetching `caBundle` from the bootstrap node
+
+The bootstrap node exposes its PKI authority on port `9443`. Pull the CA bundle and paste it under `pki_authority.caBundle` on every joining node:
+
+```bash
+curl -k https://<bootstrap-ip>:9443/api/v1/pki/certs/ca
+```
+
+Indent the PEM block under `caBundle: |` so the YAML stays valid, e.g.:
+
+```yaml
+pki_authority:
+  caBundle: |
+    -----BEGIN CERTIFICATE-----
+    MIIB...
+    -----END CERTIFICATE-----
+```
+
 ### Component images
 
 The images below are pulled by the VM at runtime. Tags in `config.yaml` (`swarm_node`, `swarm_cloud_api`, `swarm_cloud_ui`, `auth_service`, `pki_authority`, etc.) select which version of each image is used. The `gatekeeper_*_image` fields take a fully-qualified image reference.
