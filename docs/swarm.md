@@ -60,6 +60,7 @@ A Swarm cluster has two kinds of nodes, and the `config.yaml` differs slightly b
 - **Bootstrap node** — the first node in the cluster. Start it on its own:
   - `swarm_db.join_addresses: []` (empty).
   - `pki_authority.caBundle` and `pki_authority.servers` are **not** required.
+  - Launch `start_super_protocol.sh` with `--swarm-init true` so the VM bootstraps a new Swarm cluster instead of trying to join one.
   - After it is up, note its external IP (and the gossip port, default `7946`).
 - **Joining nodes** — every subsequent node:
   - `swarm_db.join_addresses: ["<bootstrap-ip>:7946"]` (you can list several gossip endpoints).
@@ -294,8 +295,13 @@ sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
   --ssh_port 2222 \
   --swarm_db_gossip_port 7946 \
   --guest-cid 122 \
-  --wg_port 51821
+  --wg_port 51821 \
+  --swarm-init true        # only on the bootstrap node; omit on joining nodes
 ```
+
+> Pass `--swarm-init true` **only when starting the very first (bootstrap) node** of a new
+> Swarm cluster. Joining nodes must be started without this flag (default `false`) so they
+> connect to the gossip endpoints listed in `swarm_db.join_addresses`.
 
 ### Key flags
 
@@ -313,6 +319,7 @@ sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
 | `--guest-cid` | `122` | Guest CID for vsock. |
 | `--wg_port` | `51821` | Host WireGuard port forwarded to the VM. |
 | `--swarm_db_gossip_port` | `7946` | Swarm DB gossip port for inter-node clustering (requires the Swarm branch of `sp-vm-tools`). |
+| `--swarm-init` | `true` | Bootstrap a new Swarm cluster. Pass `true` **only on the first (bootstrap) node**; omit (or set `false`) on joining nodes. |
 
 ## 7. Verify the VM is up
 
