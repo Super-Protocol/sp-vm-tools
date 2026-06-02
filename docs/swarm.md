@@ -206,6 +206,13 @@ Expected layout on the host:
 
 ## 4. SSH access to the VM
 
+> **Debug mode only.** SSH into the VM (and therefore the `authorized_keys` /
+> `ssh_public_keys` fields) is only available when the VM is started in debug
+> mode — i.e. with `--debug true` for `start_super_protocol.sh`, or
+> `serial_port_enable = true` together with a debug image in the Terraform
+> flow. In a non-debug (production) image the SSH server is disabled and the
+> keys are ignored.
+
 Generate a key on the build host and add the public part to the provider configuration:
 
 ```bash
@@ -414,6 +421,9 @@ ssh_public_keys = [
   "ssh-ed25519 AAAA... user@host",
   # add additional keys here
 ]
+# NOTE: ssh_public_keys are honored only in debug images. For a production
+# (non-debug) deployment the SSH server inside the VM is disabled and these
+# keys are ignored.
 ```
 
 Apply:
