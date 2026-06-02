@@ -45,6 +45,34 @@ The Swarm provider configuration lives in `sp-vm/provider-configs/swarm/` and co
 - `auth-service.yaml` — OAuth2 provider credentials for the Auth Service (optional).
 - `authorized_keys` — SSH public keys to authorize for the VM (created in the next step).
 
+### Bootstrap node vs joining nodes
+
+A Swarm cluster has two kinds of nodes, and the `config.yaml` differs slightly between them:
+
+- **Bootstrap node** — the first node in the cluster. Start it on its own:
+  - `swarm_db.join_addresses: []` (empty).
+  - `pki_authority.caBundle` and `pki_authority.servers` are **not** required.
+  - After it is up, note its external IP (and the gossip port, default `7946`).
+- **Joining nodes** — every subsequent node:
+  - `swarm_db.join_addresses: ["<bootstrap-ip>:7946"]` (you can list several gossip endpoints).
+  - `pki_authority.caBundle` and `pki_authority.servers` **must** point to the bootstrap node's PKI (e.g. `ca.swarm.<your-subdomain>.<your-domain>`).
+  - `pki_authority.networkID` must match the value used on the bootstrap node.
+
+### Component images
+
+The images below are pulled by the VM at runtime. Tags in `config.yaml` (`swarm_node`, `swarm_cloud_api`, `swarm_cloud_ui`, `auth_service`, `pki_authority`, etc.) select which version of each image is used. The `gatekeeper_*_image` fields take a fully-qualified image reference.
+
+| Component | Image |
+|---|---|
+| `swarm_node` | `ghcr.io/super-protocol/swarm-cloud/swarm-node:<tag>` |
+| `swarm_cloud_api` | `ghcr.io/super-protocol/swarm-cloud/swarm-cloud-backend:<tag>` |
+| `swarm_cloud_ui` | `ghcr.io/super-protocol/swarm-cloud/swarm-cloud-ui:<tag>` |
+| `auth_service` | `ghcr.io/super-protocol/swarm-cloud/auth-service:<tag>` |
+| `gatekeeper_s3_image` / `gatekeeper_harbor_image` | `ghcr.io/super-protocol/swarm-cloud/swarm-gatekeeper:<tag>` |
+| `pki_authority` | `ghcr.io/super-protocol/tee-pki-authority-service:<tag>` (e.g. `v5.0.1`) |
+
+The `github.token` from `config.yaml` is used to pull these images from GHCR, so it must have `read:packages` scope.
+
 ### `config.yaml` example
 
 ```yaml
@@ -57,7 +85,7 @@ tags:
   swarm_node: "develop"
   sdk: "develop"
   services: "develop"
-  pki_authority: "develop"
+  pki_authority: "v5.0.1"
   swarm_cloud_api: "develop"
   swarm_cloud_ui: "develop"
   auth_service: "develop"
@@ -67,11 +95,16 @@ tags:
 swarm_db:
   node_name: "my-awesome-swarm-node-1"
   # advertise_addr: "11.22.33.44"   # only needed if the host has multiple external IPs
-  join_addresses: []                # e.g. ["192.168.1.2:7946", "192.168.1.3:7946"]
+
+  # Bootstrap node: leave empty.
+  # Joining nodes: list one or more gossip endpoints of an already-running node, e.g.
+  #   join_addresses: ["<bootstrap-ip>:7946"]
+  join_addresses: []
 
 pki_authority:
-  networkID: "aaa-bbb-ccc"          # Swarm network key
-  # caBundle and servers are required for non-bootstrap nodes
+  networkID: "aaa-bbb-ccc"          # Swarm network key (must be the same on every node in the cluster)
+  # caBundle and servers are required for joining nodes only.
+  # On the bootstrap node you can omit them.
   caBundle: |
     -----BEGIN CERTIFICATE-----
     .....
