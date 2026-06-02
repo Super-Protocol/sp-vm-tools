@@ -41,7 +41,7 @@ git checkout swarm                          # check the current Swarm branch
 git submodule update --init --recursive
 
 cd ../sp-vm-tools
-git checkout feature/swarm                  # check the current Swarm branch
+# `main` already contains the Swarm bits
 ```
 
 ## 3. Provider configuration
