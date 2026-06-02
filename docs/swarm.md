@@ -121,7 +121,8 @@ tags:
 
 swarm_db:
   node_name: "my-awesome-swarm-node-1"
-  # advertise_addr: "11.22.33.44"   # only needed if the host has multiple external IPs
+  # advertise_addr: "11.22.33.44"   # public IP other Swarm nodes use to reach this one;
+                                    # required if the host has multiple interfaces or sits behind NAT
 
   # Bootstrap node: leave empty.
   # Joining nodes: list one or more gossip endpoints of an already-running node, e.g.
@@ -292,6 +293,7 @@ sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
   --state_disk_size 50 \
   --build_dir ./out \
   --cache /data/fixcik/sp-vm/cache \
+  --ip_address <public-ip> \
   --ssh_port 2222 \
   --swarm_db_gossip_port 7946 \
   --guest-cid 122 \
@@ -302,6 +304,11 @@ sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
 > Pass `--swarm-init true` **only when starting the very first (bootstrap) node** of a new
 > Swarm cluster. Joining nodes must be started without this flag (default `false`) so they
 > connect to the gossip endpoints listed in `swarm_db.join_addresses`.
+
+> Set `--ip_address` to the host's public IPv4 (the one other Swarm nodes will reach you
+> on). The default `0.0.0.0` binds every interface, which is fine on a single-homed host
+> but unsafe on multi-NIC machines. Whichever IP you pick must match `swarm_db.advertise_addr`
+> in `config.yaml` and be the address the other nodes' `join_addresses` point to.
 
 ### Key flags
 
@@ -319,6 +326,7 @@ sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
 | `--guest-cid` | `122` | Guest CID for vsock. |
 | `--wg_port` | `51821` | Host WireGuard port forwarded to the VM. |
 | `--swarm_db_gossip_port` | `7946` | Swarm DB gossip port for inter-node clustering (requires the Swarm branch of `sp-vm-tools`). |
+| `--ip_address` | `<public-ip>` | Host interface to bind forwarded ports to. Default `0.0.0.0` binds every interface; set to the public IPv4 reachable by other Swarm nodes (must match `swarm_db.advertise_addr`). |
 | `--swarm-init` | `true` | Bootstrap a new Swarm cluster. Pass `true` **only on the first (bootstrap) node**; omit (or set `false`) on joining nodes. |
 
 ## 7. Verify the VM is up
