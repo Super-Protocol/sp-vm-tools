@@ -108,16 +108,16 @@ github:
 
 tags:
   swarm_db: "v1.1.4"
-  host_agent: "develop"
-  swarm_node: "develop"
+  host_agent: "release-v0.15.0"
+  swarm_node: "0.15.0"
   sdk: "develop"
-  services: "develop"
+  services: "v0.15.0"
   pki_authority: "v5.0.1"
-  swarm_cloud_api: "develop"
-  swarm_cloud_ui: "develop"
-  auth_service: "develop"
-  gatekeeper_s3_image: "ghcr.io/super-protocol/swarm-cloud/swarm-gatekeeper:develop"
-  gatekeeper_harbor_image: "ghcr.io/super-protocol/swarm-cloud/swarm-gatekeeper:develop"
+  swarm_cloud_api: "0.15.0"
+  swarm_cloud_ui: "0.15.0"
+  auth_service: "0.15.0"
+  gatekeeper_s3_image: "ghcr.io/super-protocol/swarm-cloud/swarm-gatekeeper:0.15.0"
+  gatekeeper_harbor_image: "ghcr.io/super-protocol/swarm-cloud/swarm-gatekeeper:0.15.0"
 
 swarm_db:
   node_name: "my-awesome-swarm-node-1"
