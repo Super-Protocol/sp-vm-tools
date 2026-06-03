@@ -99,6 +99,18 @@ The images below are pulled by the VM at runtime. Tags in `config.yaml` (`swarm_
 | `pki_authority` | `ghcr.io/super-protocol/tee-pki-authority-service:<tag>` (e.g. `v5.0.1`) |
 
 The `github.token` from `config.yaml` is used to pull these images from GHCR, so it must have `read:packages` scope.
+How to get the token
+The token is a GitHub Personal Access Token (PAT). To create one:
+
+- Go to GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) (or open https://github.com/settings/tokens directly).
+- Click Generate new token → Generate new token (classic).
+- Give it a descriptive name (e.g. swarm-cloud-ghcr-pull) and set an expiration.
+- Under scopes, select read:packages (sufficient for pulling images from GHCR).
+- Click Generate token and copy the value immediately — GitHub shows it only once. Classic PATs start with ghp_.
+- Make sure your account has access to the super-protocol organization's packages; otherwise the pull will fail with a 403/denied error even with the correct scope.
+
+
+>Note: Fine-grained PATs can also work but require explicit per-package or per-org permission configuration; classic tokens with read:packages are simpler for this use case.
 
 ### `config.yaml` example
 
