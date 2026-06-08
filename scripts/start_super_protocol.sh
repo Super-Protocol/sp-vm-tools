@@ -359,7 +359,7 @@ parse_and_download_release_files() {
         fi
     done
 
-    while read -r entry; do
+    while read -r entry <&3; do
         key=$(echo "$entry" | jq -r '.key')
         bucket=$(echo "$entry" | jq -r '.value.bucket')
         prefix=$(echo "$entry" | jq -r '.value.prefix')
@@ -421,7 +421,7 @@ parse_and_download_release_files() {
         else
             echo "Successfully downloaded and verified $filename."
         fi
-    done < <(jq -c 'to_entries[]' "$RELEASE_JSON")
+    done 3< <(jq -c 'to_entries[]' "$RELEASE_JSON")
 
     # Verify that all required paths are set
     if [[ -z "${IMAGE_PATH}" ]] || [[ -z "${BIOS_PATH}" ]] || [[ -z "${ROOTFS_HASH_PATH}" ]] || [[ -z "${KERNEL_PATH}" ]]; then
