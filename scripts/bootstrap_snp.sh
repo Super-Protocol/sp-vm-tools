@@ -255,6 +255,12 @@ run_comprehensive_snp_gpu_check() {
     return $snp_status
 }
 
+install_prerequisites() {
+    print_section_header "Installing Prerequisites"
+    echo "Installing QEMU from Ubuntu repository..."
+    apt update && DEBIAN_FRONTEND=noninteractive apt install -y qemu-system-x86 qemu-utils
+}
+
 update_snp_firmware() {
     TMP_DIR=$1
     local model=$2
@@ -335,6 +341,8 @@ bootstrap() {
     fi
 
     TMP_DIR=$(mktemp -d)
+
+    install_prerequisites
 
     print_section_header "SNP Firmware Update"
     echo "Updating SNP firmware..."
