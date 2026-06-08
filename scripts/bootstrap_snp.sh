@@ -334,6 +334,8 @@ bootstrap() {
         exit 1
     fi
 
+    TMP_DIR=$(mktemp -d)
+
     print_section_header "SNP Firmware Update"
     echo "Updating SNP firmware..."
     update_snp_firmware "${TMP_DIR}" "${AMD_GEN}"
