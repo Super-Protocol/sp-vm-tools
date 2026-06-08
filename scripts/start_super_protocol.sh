@@ -15,9 +15,6 @@ exit_handler() {
 # Default values
 SCRIPT_DIR=$( cd "$( dirname "$0" )" && pwd )
 
-REQUIRED_TDX_PACKAGES=("sp-qemu-tdx")
-REQUIRED_SNP_PACKAGES=("sp-qemu-snp")
-
 STORJ_TOKEN="1UXqNMwov41q9TgHmyopNg5q2giQ8aTdh1gjKWKjfbWPFrcrnhenp6QZfd5ukyVnYXDx9Cok6RtnQMMnXmoZPrSUMNGZGF9KuLCzvRNmQYHowX14C2xAxtJeH6VCuNX39ist4bRE9L5VT3k41frDVh3cG1gZvsqh4EaDeaJyV6U4xVaqXqULnSb9PozqU97VVLWhfwdnj6XgUM59Wzq7yo7vn8RxwSyn8H74TEiLNGUPPA3frsYZuoqWQkNzbiYev5ByWeLro1TXo7DogD4WALCKfEmpwHs9j9rsX5WZvvZ13ourTiuZp5vTTZkByB2ibxUJqkSoZSpCNVtmDToNVKkMREVySe"
 RELEASE_REPO="Super-Protocol/sp-vm"
 RELEASE_ASSET="vm.json"
@@ -362,7 +359,7 @@ parse_and_download_release_files() {
         fi
     done
 
-    while read -r entry; do
+    while read -r entry <&3; do
         key=$(echo "$entry" | jq -r '.key')
         bucket=$(echo "$entry" | jq -r '.value.bucket')
         prefix=$(echo "$entry" | jq -r '.value.prefix')
@@ -424,7 +421,7 @@ parse_and_download_release_files() {
         else
             echo "Successfully downloaded and verified $filename."
         fi
-    done < <(jq -c 'to_entries[]' "$RELEASE_JSON")
+    done 3< <(jq -c 'to_entries[]' "$RELEASE_JSON")
 
     # Verify that all required paths are set
     if [[ -z "${IMAGE_PATH}" ]] || [[ -z "${BIOS_PATH}" ]] || [[ -z "${ROOTFS_HASH_PATH}" ]] || [[ -z "${KERNEL_PATH}" ]]; then
@@ -461,29 +458,6 @@ check_packages() {
         apt update && apt install -y netcat-openbsd;
     fi
 
-    # Check TDX packages if needed
-    local missing=()
-    if [[ "${VM_MODE}" == "tdx" ]]; then
-        for package in "${REQUIRED_TDX_PACKAGES[@]}"; do
-            if ! dpkg -l | grep -q "^ii.*$package"; then
-                missing+=("$package")
-            fi
-        done
-    fi
-
-    if [[ "${VM_MODE}" == "sev-snp" ]]; then
-        for package in "${REQUIRED_SNP_PACKAGES[@]}"; do
-            if ! dpkg -l | grep -q "^ii.*$package"; then
-                missing+=("$package")
-            fi
-        done
-    fi
-
-    if [ ${#missing[@]} -gt 0 ]; then
-        echo "The following packages are missing: ${missing[*]}"
-        echo "Please install these packages before running the script."
-        exit 1
-    fi
 }
 
 prepare_gpus_for_vfio() {
