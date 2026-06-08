@@ -6,6 +6,14 @@ source_common() {
     source "${script_dir}/common.sh"
 }
 
+get_kernel_log() {
+    if command -v journalctl >/dev/null 2>&1; then
+        journalctl -k -b 2>/dev/null
+    else
+        dmesg 2>/dev/null
+    fi
+}
+
 check_snp_status() {
     print_section_header "SNP Status Validation"
     
@@ -30,34 +38,45 @@ check_snp_status() {
     done
     
     echo ""
-    echo "Checking SEV-SNP dmesg messages..."
-    
-    if dmesg | grep -q "SEV-SNP: RMP table physical range"; then
-        local rmp_range=$(dmesg | grep "SEV-SNP: RMP table physical range" | tail -1)
+    local klog
+    klog="$(get_kernel_log)"
+
+    echo ""
+    echo "Checking SEV-SNP kernel log messages..."
+
+    if echo "$klog" | grep -q "SEV-SNP: RMP table physical range"; then
+        local rmp_range=$(echo "$klog" | grep "SEV-SNP: RMP table physical range" | tail -1)
         echo "  RMP Table: ✓ ($rmp_range)"
     else
         echo "  RMP Table: ✗ FAILED - No RMP table found"
         all_good=false
     fi
-    
-    if dmesg | grep -q "SEV API:"; then
-        local sev_api=$(dmesg | grep "SEV API:" | tail -1 | awk '{print $5}')
+
+    if echo "$klog" | grep -q "SEV API:"; then
+        local sev_api
+        sev_api=$(echo "$klog" | grep "SEV API:" | grep -v "SEV-SNP API:" \
+            | sed -n 's/.*SEV API:\([0-9.]*\).*/\1/p' | tail -1)
         echo "  SEV API: ✓ (version $sev_api)"
     else
         echo "  SEV API: ✗ FAILED - No SEV API info"
         all_good=false
     fi
-    
-    if dmesg | grep -q "SEV-SNP API:"; then
-        local snp_api=$(dmesg | grep "SEV-SNP API:" | tail -1 | awk '{print $5}')
+
+    # SEV-SNP API
+    if echo "$klog" | grep -q "SEV-SNP API:"; then
+        local snp_api
+        snp_api=$(echo "$klog" | grep "SEV-SNP API:" \
+            | sed -n 's/.*SEV-SNP API:\([0-9.]*\).*/\1/p' | tail -1)
         echo "  SEV-SNP API: ✓ (version $snp_api)"
     else
         echo "  SEV-SNP API: ✗ FAILED - No SEV-SNP API info"
         all_good=false
     fi
-    
-    if dmesg | grep -q "SEV-SNP enabled"; then
-        local snp_asids=$(dmesg | grep "SEV-SNP enabled" | tail -1 | sed 's/.*(\(ASIDs.*\))/\1/')
+
+    if echo "$klog" | grep -q "SEV-SNP enabled"; then
+        local snp_asids
+        snp_asids=$(echo "$klog" | grep "SEV-SNP enabled" | tail -1 \
+            | sed 's/.*(\(ASIDs.*\))/\1/')
         echo "  SEV-SNP ASIDs: ✓ ($snp_asids)"
     else
         echo "  SEV-SNP ASIDs: ✗ FAILED - No ASID allocation found"
