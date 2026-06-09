@@ -45,6 +45,13 @@ script via `--provider_config`. It contains:
 
 ### Bootstrap node vs joining nodes
 
+> **Cluster size.** A single bootstrap node will start and is fine for a quick
+> local test, but a real cluster needs a quorum for the consensus layer
+> (Kubernetes/etcd control plane, Swarm DB gossip). Run **at least 3 nodes**
+> (an odd number — 3, 5, …) so the cluster can tolerate a node failure and still
+> reach quorum. Start the bootstrap node first, then join the rest. The Terraform
+> example below reflects this with `node_count = 3`.
+
 A Swarm cluster has two kinds of nodes, and the `config.yaml` differs slightly between them:
 
 - **Bootstrap node** — the first node in the cluster. Start it on its own:
