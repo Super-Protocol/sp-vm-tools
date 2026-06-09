@@ -407,7 +407,7 @@ parse_and_download_release_files() {
         fi
 
         echo "Downloading $filename from sj://$bucket/$prefix/$filename to $local_path..."
-        uplink cp --parallelism 16 --progress --access ${STORJ_TOKEN} "sj://$bucket/$prefix/$filename" "$local_path"
+        uplink cp --parallelism 16 --interactive false --analytics false --progress --access ${STORJ_TOKEN} "sj://$bucket/$prefix/$filename" "$local_path"
 
         if [ $? -ne 0 ]; then
             echo "Error: Failed to download $filename"
