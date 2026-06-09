@@ -37,8 +37,6 @@ DEFAULT_MAC_PREFIX="52:54:00:12:34"
 DEFAULT_MAC_SUFFIX="56"
 QEMU_PATH=""
 DEFAULT_DEBUG=false
-DEFAULT_ARGO_BRANCH="main"
-DEFAULT_ARGO_SP_ENV="main"
 LOCAL_BUILD_DIR=""
 
 # VM mode
@@ -93,8 +91,6 @@ usage() {
     echo "  --dns_port <port>              DNS port (default: ${DEFAULT_DNS_PORT})"
     echo "  --log_file <file>              Log file (default: no)"
     echo "  --debug <true|false>           Enable debug mode (default: ${DEFAULT_DEBUG})"
-    echo "  --argo_branch <name>           Name of argo branch for init SP components (default: ${DEFAULT_ARGO_BRANCH})"
-    echo "  --argo_sp_env <name>           Name of argo environment for init SP components (default: ${DEFAULT_ARGO_SP_ENV})"
     echo "  --release <name>               Release name (default: latest)"
     echo "  --mode <mode>                  VM mode: untrusted, tdx, sev-snp (default: ${DEFAULT_VM_MODE})"
     echo "  --guest-cid <id>               Guest CID for vsock (default: ${DEFAULT_GUEST_CID})"
@@ -117,8 +113,6 @@ PROVIDER_CONFIG=""
 DEBUG_MODE=${DEFAULT_DEBUG}
 SWARM_INIT=${DEFAULT_SWARM_INIT}
 ALLOW_UNTRUSTED=${DEFAULT_ALLOW_UNTRUSTED}
-ARGO_BRANCH=${DEFAULT_ARGO_BRANCH}
-ARGO_SP_ENV=${DEFAULT_ARGO_SP_ENV}
 RELEASE=""
 RELEASE_FILEPATH=""
 
@@ -164,8 +158,6 @@ parse_args() {
             --dns_port) DNS_PORT=$2; shift ;;
             --log_file) LOG_FILE=$2; shift ;;
             --debug) DEBUG_MODE=$2; shift ;;
-            --argo_branch) ARGO_BRANCH=$2; shift ;;
-            --argo_sp_env) ARGO_SP_ENV=$2; shift ;;
             --release) RELEASE=$2; shift ;;
             --mode) VM_MODE=$2; shift ;;
             --guest-cid) GUEST_CID=$2; shift ;;
@@ -775,8 +767,6 @@ check_params() {
     fi
 
     if [[ ${DEBUG_MODE} == "true" ]]; then
-        echo "   Argo branch: $ARGO_BRANCH"
-        echo "   Argo SP env: $ARGO_SP_ENV"
         echo "   SSH Port: $SSH_PORT"
         echo "   WireGuard Port: $WG_PORT"
         echo "   Swarm DB Gossip Port: $SWARM_DB_GOSSIP_PORT"
@@ -988,7 +978,6 @@ main() {
          KERNEL_CMD_LINE="root=LABEL=rootfs console=ttyS0${CLEARCPUID_PARAM}\
                         systemd.log_level=trace systemd.log_target=log \
                         rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH} \
-                        argo_branch=${ARGO_BRANCH} argo_sp_env=${ARGO_SP_ENV} \
                         sp-debug=true${SNP_ADDITIONAL_PARAMS}"
     else
         KERNEL_CMD_LINE="root=LABEL=rootfs${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH}${SNP_ADDITIONAL_PARAMS}"
