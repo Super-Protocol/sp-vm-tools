@@ -19,14 +19,6 @@ It also includes a short section on launching the same image in Google Cloud via
 ssh gp-ws-01
 ```
 
-> Run the rest of this guide inside a `tmux` (or `screen`) session. The image
-> build and the VM itself are long-running; if your SSH connection drops you'll
-> lose the build or the VM together with it.
->
-> ```bash
-> tmux new -s swarm        # or: tmux attach -t swarm
-> ```
-
 ## 2. Clone the repositories
 
 `sp-vm` depends on `swarm-cloud` via git submodules, so a recursive clone (or `git submodule update --init --recursive`) is mandatory.
@@ -76,7 +68,7 @@ curl -k https://<bootstrap-ip>:9443/api/v1/pki/certs/ca
 ```
 
 > To forward port `9443` from the host into the VM, start the bootstrap node
-> with `--pki_port 9443` (see the flags table in section 6). Without it the PKI
+> with `--pki_port 9443` (see the flags table in section 4). Without it the PKI
 > port is not forwarded.
 
 Indent the PEM block under `caBundle: |` so the YAML stays valid, e.g.:
@@ -223,51 +215,16 @@ Expected layout on the host:
 └── auth-service.yaml
 ```
 
-## 4. Build the Swarm VM image
+## 4. Start the Swarm VM
 
-### Create a buildx builder with `security.insecure`
+By default the script downloads the latest already-built VM image (release) from
+the Super Protocol release storage — you do **not** need to build anything.
+The first launch on a fresh host therefore downloads ~11 GB into the cache
+directory before the VM starts.
 
-The build needs privileged operations inside Docker, so a custom builder is required.
-
-```bash
-docker buildx ls
-# If insecure-builder is missing:
-sudo docker buildx create --use --name insecure-builder \
-  --buildkitd-flags '--allow-insecure-entitlement security.insecure'
-```
-
-### Build
-
-```bash
-cd ~/projects/sp-vm
-docker buildx build -t sp-vm-swarm-test-fixcik \
-  --allow security.insecure \
-  --output type=local,dest=./out \
-  --build-arg SP_VM_IMAGE_VERSION=build-1 \
-  --build-arg S3_BUCKET=test src | cat
-```
-
-Notes:
-
-- `--allow security.insecure` is required.
-- The build typically takes 5–15 minutes depending on host performance.
-- The resulting `./out/` directory contains the VM image (~11 GB) and supporting artifacts.
-
-### Verify build artifacts
-
-```bash
-sudo ls -lh ~/projects/sp-vm/out/
-```
-
-Expected files:
-
-- `sp-vm-build-1.img` — VM disk image (~11 GB)
-- `vmlinuz` — Linux kernel for the VM
-- `OVMF.fd` and `OVMF_AMD.fd` — UEFI firmware images
-- `vm.json` — VM metadata
-- `rootfs_hash.txt` — rootfs integrity hash
-
-## 5. Start the Swarm VM
+> If you need a locally built image instead of the released one, see
+> [Building the VM image locally](#building-the-vm-image-locally-optional) at the
+> end of this guide and pass `--build_dir ./out`.
 
 ### Create a cache directory
 
@@ -276,10 +233,21 @@ sudo mkdir -p /data/fixcik/sp-vm/cache
 sudo chown -R "$USER:$USER" /data/fixcik/sp-vm
 ```
 
+### Start a persistent terminal session
+
+> Run the launch inside a `tmux` (or `screen`) session. The image download and
+> the VM itself are long-running; if your SSH connection drops you'll lose the
+> VM (and any in-progress download) together with it.
+>
+> ```bash
+> tmux new -s swarm        # or: tmux attach -t swarm
+> ```
+
 ### Launch (production)
 
-Run from `~/projects/sp-vm`. This is the normal, production launch — no debug
-flags, SSH into the VM disabled:
+Run from `~/projects/sp-vm`. This is the normal, production launch — the latest
+released VM image is downloaded automatically, no debug flags, SSH into the VM
+disabled:
 
 ```bash
 sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
@@ -287,7 +255,6 @@ sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
   --mem 20 \
   --provider_config ./provider-configs/swarm \
   --state_disk_size 50 \
-  --build_dir ./out \
   --cache /data/fixcik/sp-vm/cache \
   --ip_address <public-ip> \
   --swarm_db_gossip_port 7946 \
@@ -296,6 +263,11 @@ sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
   --pki_port 9443 \
   --swarm-init true        # only on the bootstrap node; omit on joining nodes
 ```
+
+> By default the latest release is fetched. Pin a specific build with
+> `--release <name>`. Use a locally built image with `--build_dir ./out`
+> (see the build section at the end).
+
 
 > Pass `--swarm-init true` **only when starting the very first (bootstrap) node** of a new
 > Swarm cluster. Joining nodes must be started without this flag (default `false`) so they
@@ -318,7 +290,8 @@ sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
 | `--mem` | `20` | total RAM − 8 (GiB) | RAM in GiB. |
 | `--state_disk_size` | `50` | auto (≥512) | State disk size in GiB. Auto-detected from the mount if omitted. |
 | `--provider_config` | `./provider-configs/swarm` | _(required)_ | Path to the Swarm provider config directory inside `sp-vm`. |
-| `--build_dir` | `./out` | _(none — downloads release)_ | Directory with the locally built VM image and artifacts. |
+| `--release` | `build-344` | latest | Release name to download. Omit to fetch the latest released image. |
+| `--build_dir` | `./out` | _(none — downloads release)_ | Use a locally built VM image instead of downloading a release (see build section). |
 | `--cache` | `/data/fixcik/sp-vm/cache` | `~/.cache/superprotocol` | Host-side cache directory (replace `fixcik`). |
 | `--ip_address` | `<public-ip>` | `0.0.0.0` | Host interface to bind forwarded ports to. Set to the public IPv4 reachable by other Swarm nodes (must match `swarm_db.advertise_addr`). |
 | `--wg_port` | `51821` | `51820` | Host WireGuard port forwarded to the VM (`:51820` inside). |
@@ -333,7 +306,7 @@ sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
 | `--swarm-init` | `true` | `false` | Bootstrap a new Swarm cluster. Pass `true` **only on the first (bootstrap) node**; omit on joining nodes. |
 | `--allow-untrusted` | `true` | `false` | Allow untrusted mode. Can only be combined with `--swarm-init true`. |
 
-## 6. Verify the VM is up
+## 5. Verify the VM is up
 
 ### Check the VM boot output
 
@@ -361,7 +334,7 @@ Expected files in `/sp/`:
 - `sp-swarm-services.yaml`
 - `authorized_keys`
 
-## 7. Stop the VM
+## 6. Stop the VM
 
 Find the QEMU process and shut it down:
 
@@ -416,7 +389,6 @@ sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
   --mem 20 \
   --provider_config ./provider-configs/swarm \
   --state_disk_size 50 \
-  --build_dir ./out \
   --cache /data/fixcik/sp-vm/cache \
   --ip_address <public-ip> \
   --swarm_db_gossip_port 7946 \
@@ -449,6 +421,64 @@ ssh -p 2222 root@localhost
 
 ```bash
 systemctl status
+```
+
+## Building the VM image locally (optional)
+
+By default the launch script downloads the latest released VM image, so most
+users never need this section. Build locally only when you need a custom or
+unreleased image; then pass `--build_dir ./out` to the launch command.
+
+### Create a buildx builder with `security.insecure`
+
+The build needs privileged operations inside Docker, so a custom builder is required.
+
+```bash
+docker buildx ls
+# If insecure-builder is missing:
+sudo docker buildx create --use --name insecure-builder \
+  --buildkitd-flags '--allow-insecure-entitlement security.insecure'
+```
+
+### Build
+
+```bash
+cd ~/projects/sp-vm
+docker buildx build -t sp-vm-swarm-test-fixcik \
+  --allow security.insecure \
+  --output type=local,dest=./out \
+  --build-arg SP_VM_IMAGE_VERSION=build-1 \
+  --build-arg S3_BUCKET=test src | cat
+```
+
+Notes:
+
+- `--allow security.insecure` is required.
+- The build typically takes 5–15 minutes depending on host performance.
+- The resulting `./out/` directory contains the VM image (~11 GB) and supporting artifacts.
+
+### Verify build artifacts
+
+```bash
+sudo ls -lh ~/projects/sp-vm/out/
+```
+
+Expected files:
+
+- `sp-vm-build-1.img` — VM disk image (~11 GB)
+- `vmlinuz` — Linux kernel for the VM
+- `OVMF.fd` and `OVMF_AMD.fd` — UEFI firmware images
+- `vm.json` — VM metadata
+- `rootfs_hash.txt` — rootfs integrity hash
+
+### Use the built image
+
+Pass the build directory to the launch command from section 4:
+
+```bash
+sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
+  ... \
+  --build_dir ./out
 ```
 
 ## Running on GCP via Terraform
