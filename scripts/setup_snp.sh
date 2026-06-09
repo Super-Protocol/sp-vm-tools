@@ -117,32 +117,6 @@ check_os_prereqs() {
 }
 
 # ---------------------------------------------------------------------------
-# AMD-provided readiness check: `snphost ok`
-#   Documented as the comprehensive CPU/BIOS/FW check. Use it if available.
-# ---------------------------------------------------------------------------
-run_snphost_ok() {
-    print_section_header "AMD snphost readiness check"
-    if command -v snphost >/dev/null 2>&1; then
-        echo -e "${SUCCESS} snphost found; running 'snphost ok'...${NC}"
-        echo "-----------------------------------------------------------"
-        # snphost returns non-zero if any check fails; capture but don't abort,
-        # the manual checks below provide the actionable BIOS guidance.
-        if snphost ok; then
-            echo "-----------------------------------------------------------"
-            echo -e "${SUCCESS} snphost reports the host is ready${NC}"
-            return 0
-        else
-            echo "-----------------------------------------------------------"
-            echo -e "${WARNING} snphost reported one or more failures (see above)${NC}"
-            return 1
-        fi
-    else
-        echo -e "${WARNING} snphost not available (see install note above); using manual checks${NC}"
-        return 2
-    fi
-}
-
-# ---------------------------------------------------------------------------
 # SMEE verification via MSR 0xC0010010 bit 23 (authoritative, per AMD FAQ)
 #   SEV_INIT error 0x13 (HWERROR_PLATFORM) == SMEE not enabled in BIOS.
 # ---------------------------------------------------------------------------
@@ -322,30 +296,6 @@ check_all_bios_settings() {
         results+=("  If you see 'SEV: failed to INIT error 0x1, rc -5' -> PSP BootLoader too old; update system BIOS")
     fi
 
-    # --- IOMMU (mandatory for SNP) ----------------------------------------
-    results+=("IOMMU Settings:")
-    if dmesg | grep -qi "AMD-Vi: Interrupt remapping enabled" || \
-       dmesg | grep -qiE "iommu: Default domain type:"; then
-        results+=("${SUCCESS} IOMMU enabled and active${NC}")
-    elif [ -d /sys/class/iommu ] && [ -n "$(ls -A /sys/class/iommu 2>/dev/null)" ]; then
-        results+=("${SUCCESS} IOMMU groups present${NC}")
-    else
-        results+=("${FAILURE} IOMMU not enabled - SEV-SNP requires it${NC}")
-        results+=("  Location: Advanced -> NBIO Common Options -> IOMMU -> Enable")
-        results+=("  Also add to kernel cmdline: amd_iommu=on iommu=pt")
-        all_passed=false
-    fi
-
-    # --- SMT (informational; SNP works with SMT on) -----------------------
-    results+=("SMT Settings (informational):")
-    if [ -r /sys/devices/system/cpu/smt/active ]; then
-        if [ "$(cat /sys/devices/system/cpu/smt/active)" = "1" ]; then
-            results+=("${SUCCESS} SMT active${NC}")
-        else
-            results+=("${WARNING} SMT inactive (allowed for SNP)${NC}")
-        fi
-    fi
-
     # --- Platform-specific notes ------------------------------------------
     case "$PLATFORM" in
         MILAN)
@@ -360,8 +310,8 @@ check_all_bios_settings() {
             ;;
     esac
 
-    # --- Required BIOS configuration summary (verbatim AMD menu paths) -----
-    results+=("${YELLOW}Required BIOS Configuration (AMD CBS menu):${NC}")
+    # --- Required BIOS configuration summary (verbatim from AMD doc) -------
+    results+=("${YELLOW}Required BIOS Configuration (per AMD doc):${NC}")
     results+=("Advanced -> AMD CBS -> CPU Common Options")
     results+=("    SMEE                              -> Enable")
     results+=("    SEV Control                       -> Enable")
@@ -369,9 +319,6 @@ check_all_bios_settings() {
     results+=("    SNP Memory (RMP Table) Coverage   -> Enabled")
     results+=("Advanced -> NBIO Common Options -> IOMMU/Security")
     results+=("    SEV-SNP Support                   -> Enable")
-    results+=("    IOMMU                             -> Enable")
-    results+=("${YELLOW}Kernel cmdline:${NC}")
-    results+=("    kvm_amd.sev=1 kvm_amd.sev_es=1 kvm_amd.sev_snp=1 amd_iommu=on iommu=pt")
 
     print_section_header "Status"
     for result in "${results[@]}"; do
@@ -407,76 +354,6 @@ ensure_tools() {
     if ! lsmod | grep -q "^msr"; then
         modprobe msr || true
     fi
-
-    # --- snphost (host readiness checker, not in apt) --------------------
-    if command -v snphost >/dev/null 2>&1; then
-        echo -e "${SUCCESS} snphost present${NC}"
-    else
-        echo "snphost not installed; attempting install from latest GitHub release..."
-        install_snphost_latest || \
-            echo -e "${WARNING} snphost auto-install skipped/failed; manual checks below still run${NC}"
-    fi
-}
-
-# ---------------------------------------------------------------------------
-# Install snphost from the latest virtee/snphost GitHub release (.deb, amd64)
-#   Resolves the asset dynamically so it always tracks 'latest'.
-#   Degrades gracefully (returns non-zero) if offline or no matching asset.
-# ---------------------------------------------------------------------------
-install_snphost_latest() {
-    local api="https://api.github.com/repos/virtee/snphost/releases/latest"
-    local tmp deb_url
-
-    command -v curl >/dev/null 2>&1 || { echo "  curl not available"; return 1; }
-
-    tmp=$(mktemp -d)
-    # Fetch release metadata
-    if ! curl -fsSL "$api" -o "${tmp}/release.json"; then
-        echo "  Could not reach GitHub API (offline contour?)"
-        rm -rf "$tmp"
-        return 1
-    fi
-
-    # Pick an amd64/x86_64 .deb asset URL from browser_download_url lines.
-    deb_url=$(grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+"' "${tmp}/release.json" \
-                | sed -E 's/.*"(https[^"]+)"/\1/' \
-                | grep -iE '\.deb$' \
-                | grep -iE 'amd64|x86_64|x86-64' \
-                | head -1)
-
-    # Fall back to any .deb if no arch-tagged one is found
-    if [ -z "$deb_url" ]; then
-        deb_url=$(grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+"' "${tmp}/release.json" \
-                    | sed -E 's/.*"(https[^"]+)"/\1/' \
-                    | grep -iE '\.deb$' \
-                    | head -1)
-    fi
-
-    if [ -z "$deb_url" ]; then
-        echo "  No .deb asset found in latest release; see https://github.com/virtee/snphost/releases/latest"
-        rm -rf "$tmp"
-        return 1
-    fi
-
-    echo "  Downloading: ${deb_url}"
-    if ! curl -fsSL "$deb_url" -o "${tmp}/snphost.deb"; then
-        echo "  Download failed"
-        rm -rf "$tmp"
-        return 1
-    fi
-
-    echo "  Installing snphost.deb..."
-    if dpkg -i "${tmp}/snphost.deb"; then
-        :
-    else
-        # Resolve any missing dependencies (apt update already done earlier)
-        apt-get -f install -y || true
-    fi
-
-    rm -rf "$tmp"
-    command -v snphost >/dev/null 2>&1 \
-        && { echo -e "${SUCCESS} snphost installed ($(snphost --version 2>/dev/null | head -1))${NC}"; return 0; } \
-        || { echo -e "${WARNING} snphost still not on PATH after install${NC}"; return 1; }
 }
 
 check_bios_settings() {
@@ -486,7 +363,6 @@ check_bios_settings() {
 
     detect_platform
     check_os_prereqs || true          # informative; don't abort
-    run_snphost_ok || true            # AMD's own check if present; don't abort
     check_all_bios_settings
     return $?
 }
