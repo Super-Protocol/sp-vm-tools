@@ -590,7 +590,6 @@ uploads the provider config to a GCS bucket that the VM mounts over s3fs.
 cd ~/projects/sp-vm-tools/scripts
 
 ./run_custom_conf_vm.sh \
-  --raw ~/projects/sp-vm/out/sp-vm-build-357.img \
   --image sp-cloud-image \
   --vm sev-snp-swarm-test \
   --zone us-central1-a \
