@@ -242,10 +242,8 @@ check_all_bios_settings() {
         results+=("  Required: modprobe kvm_amd")
         all_passed=false
     else
-        # Map module parameter name -> the CPU flag that gates it.
         for param in sev sev_es sev_snp; do
             local pfile="/sys/module/kvm_amd/parameters/${param}"
-            local cpuflag="$param"   # cpuinfo flags are sev / sev_es / sev_snp
             if [ -f "$pfile" ]; then
                 local val
                 val=$(cat "$pfile")
@@ -253,20 +251,7 @@ check_all_bios_settings() {
                     results+=("${SUCCESS} kvm_amd.${param}=${val}${NC}")
                 else
                     results+=("${FAILURE} kvm_amd.${param}=${val} (expected Y)${NC}")
-                    # Distinguish the layer: missing CPU flag => BIOS; flag present => kernel/module
-                    if ! grep -qw "$cpuflag" /proc/cpuinfo; then
-                        results+=("  Cause: BIOS - CPU does not expose '${cpuflag}'")
-                        if [ "$param" = "sev_snp" ]; then
-                            results+=("  Location: Advanced -> NBIO Common Options -> IOMMU/Security -> SEV-SNP Support -> Enable")
-                        else
-                            results+=("  Location: Advanced -> AMD CBS -> CPU Common Options -> SEV Control -> Enable")
-                        fi
-                    else
-                        results+=("  Cause: kernel - '${cpuflag}' present in CPU, but module param off")
-                        results+=("  Fix: add 'kvm_amd.${param}=1' to kernel cmdline")
-                        results+=("       echo 'options kvm_amd ${param}=1' >> /etc/modprobe.d/kvm.conf")
-                        results+=("       then: update-grub && reboot   (or reload kvm_amd)")
-                    fi
+                    results+=("  Likely resolved once BIOS settings below are applied")
                     all_passed=false
                 fi
             else
