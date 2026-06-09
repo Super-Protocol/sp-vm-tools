@@ -412,11 +412,71 @@ ensure_tools() {
     if command -v snphost >/dev/null 2>&1; then
         echo -e "${SUCCESS} snphost present${NC}"
     else
-        echo -e "${WARNING} snphost not installed; skipping AMD comprehensive check${NC}"
-        echo "  Install the prebuilt release for a full CPU/BIOS/FW check:"
-        echo "    https://github.com/virtee/snphost/releases"
-        echo "  Manual checks below still run."
+        echo "snphost not installed; attempting install from latest GitHub release..."
+        install_snphost_latest || \
+            echo -e "${WARNING} snphost auto-install skipped/failed; manual checks below still run${NC}"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# Install snphost from the latest virtee/snphost GitHub release (.deb, amd64)
+#   Resolves the asset dynamically so it always tracks 'latest'.
+#   Degrades gracefully (returns non-zero) if offline or no matching asset.
+# ---------------------------------------------------------------------------
+install_snphost_latest() {
+    local api="https://api.github.com/repos/virtee/snphost/releases/latest"
+    local tmp deb_url
+
+    command -v curl >/dev/null 2>&1 || { echo "  curl not available"; return 1; }
+
+    tmp=$(mktemp -d)
+    # Fetch release metadata
+    if ! curl -fsSL "$api" -o "${tmp}/release.json"; then
+        echo "  Could not reach GitHub API (offline contour?)"
+        rm -rf "$tmp"
+        return 1
+    fi
+
+    # Pick an amd64/x86_64 .deb asset URL from browser_download_url lines.
+    deb_url=$(grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+"' "${tmp}/release.json" \
+                | sed -E 's/.*"(https[^"]+)"/\1/' \
+                | grep -iE '\.deb$' \
+                | grep -iE 'amd64|x86_64|x86-64' \
+                | head -1)
+
+    # Fall back to any .deb if no arch-tagged one is found
+    if [ -z "$deb_url" ]; then
+        deb_url=$(grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+"' "${tmp}/release.json" \
+                    | sed -E 's/.*"(https[^"]+)"/\1/' \
+                    | grep -iE '\.deb$' \
+                    | head -1)
+    fi
+
+    if [ -z "$deb_url" ]; then
+        echo "  No .deb asset found in latest release; see https://github.com/virtee/snphost/releases/latest"
+        rm -rf "$tmp"
+        return 1
+    fi
+
+    echo "  Downloading: ${deb_url}"
+    if ! curl -fsSL "$deb_url" -o "${tmp}/snphost.deb"; then
+        echo "  Download failed"
+        rm -rf "$tmp"
+        return 1
+    fi
+
+    echo "  Installing snphost.deb..."
+    if dpkg -i "${tmp}/snphost.deb"; then
+        :
+    else
+        # Resolve any missing dependencies (apt update already done earlier)
+        apt-get -f install -y || true
+    fi
+
+    rm -rf "$tmp"
+    command -v snphost >/dev/null 2>&1 \
+        && { echo -e "${SUCCESS} snphost installed ($(snphost --version 2>/dev/null | head -1))${NC}"; return 0; } \
+        || { echo -e "${WARNING} snphost still not on PATH after install${NC}"; return 1; }
 }
 
 check_bios_settings() {
