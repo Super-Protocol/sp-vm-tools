@@ -51,7 +51,7 @@ The Swarm provider configuration lives in `sp-vm/provider-configs/swarm/` and co
 - `config.yaml` — main Swarm configuration (required).
 - `openresty.yaml` — credentials for a custom ACME provider, if you don't use Let's Encrypt (optional).
 - `auth-service.yaml` — OAuth2 provider credentials for the Auth Service (optional).
-- `authorized_keys` — SSH public keys to authorize for the VM (created in the next step).
+- `authorized_keys` — SSH public keys to authorize for the VM (debug mode only; see the debug section near the end).
 
 ### Bootstrap node vs joining nodes
 
@@ -74,6 +74,10 @@ The bootstrap node exposes its PKI authority on port `9443`. Pull the CA bundle 
 ```bash
 curl -k https://<bootstrap-ip>:9443/api/v1/pki/certs/ca
 ```
+
+> To forward port `9443` from the host into the VM, start the bootstrap node
+> with `--pki_port 9443` (see the flags table in section 6). Without it the PKI
+> port is not forwarded.
 
 Indent the PEM block under `caBundle: |` so the YAML stays valid, e.g.:
 
@@ -99,7 +103,9 @@ The images below are pulled by the VM at runtime. Tags in `config.yaml` (`swarm_
 | `pki_authority` | `ghcr.io/super-protocol/tee-pki-authority-service:<tag>` (e.g. `v5.0.1`) |
 
 The `github.token` from `config.yaml` is used to pull these images from GHCR, so it must have `read:packages` scope.
+
 How to get the token
+
 The token is a GitHub Personal Access Token (PAT). To create one:
 
 - Go to GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) (or open https://github.com/settings/tokens directly).
@@ -108,7 +114,6 @@ The token is a GitHub Personal Access Token (PAT). To create one:
 - Under scopes, select read:packages (sufficient for pulling images from GHCR).
 - Click Generate token and copy the value immediately — GitHub shows it only once. Classic PATs start with ghp_.
 - Make sure your account has access to the super-protocol organization's packages; otherwise the pull will fail with a 403/denied error even with the correct scope.
-
 
 >Note: Fine-grained PATs can also work but require explicit per-package or per-org permission configuration; classic tokens with read:packages are simpler for this use case.
 
@@ -218,29 +223,7 @@ Expected layout on the host:
 └── auth-service.yaml
 ```
 
-## 4. SSH access to the VM
-
-> **Debug mode only.** SSH into the VM (and therefore the `authorized_keys` /
-> `ssh_public_keys` fields) is only available when the VM is started in debug
-> mode — i.e. with `--debug true` for `start_super_protocol.sh`, or
-> `serial_port_enable = true` together with a debug image in the Terraform
-> flow. In a non-debug (production) image the SSH server is disabled and the
-> keys are ignored.
-
-Generate a key on the build host and add the public part to the provider configuration:
-
-```bash
-# On gp-ws-01
-ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N '' -C "$USER@gp-ws-01"
-
-sudo touch ~/projects/sp-vm/provider-configs/authorized_keys
-sudo chown "$USER:$USER" ~/projects/sp-vm/provider-configs/authorized_keys
-cat ~/.ssh/id_ed25519.pub | tee -a ~/projects/sp-vm/provider-configs/authorized_keys
-```
-
-`authorized_keys` is consumed automatically when the VM starts.
-
-## 5. Build the Swarm VM image
+## 4. Build the Swarm VM image
 
 ### Create a buildx builder with `security.insecure`
 
@@ -284,7 +267,7 @@ Expected files:
 - `vm.json` — VM metadata
 - `rootfs_hash.txt` — rootfs integrity hash
 
-## 6. Start the Swarm VM
+## 5. Start the Swarm VM
 
 ### Create a cache directory
 
@@ -293,23 +276,24 @@ sudo mkdir -p /data/fixcik/sp-vm/cache
 sudo chown -R "$USER:$USER" /data/fixcik/sp-vm
 ```
 
-### Launch
+### Launch (production)
 
-Run from `~/projects/sp-vm`:
+Run from `~/projects/sp-vm`. This is the normal, production launch — no debug
+flags, SSH into the VM disabled:
 
 ```bash
 sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
   --cores 10 \
   --mem 20 \
-  --provider_config ./provider-configs \
+  --provider_config ./provider-configs/swarm \
   --state_disk_size 50 \
   --build_dir ./out \
   --cache /data/fixcik/sp-vm/cache \
   --ip_address <public-ip> \
-  --ssh_port 2222 \
   --swarm_db_gossip_port 7946 \
   --guest-cid 122 \
   --wg_port 51821 \
+  --pki_port 9443 \
   --swarm-init true        # only on the bootstrap node; omit on joining nodes
 ```
 
@@ -322,40 +306,48 @@ sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
 > but unsafe on multi-NIC machines. Whichever IP you pick must match `swarm_db.advertise_addr`
 > in `config.yaml` and be the address the other nodes' `join_addresses` point to.
 
+> The script auto-detects the confidential-computing mode from the host CPU
+> (`tdx`, `sev-snp`, or `untrusted`). Override it with `--mode <tdx|sev-snp|untrusted>`
+> only if auto-detection picks the wrong one.
+
 ### Key flags
 
-| Flag | Value | Description |
-|---|---|---|
-| `--cores` | `10` | vCPUs assigned to the VM. |
-| `--mem` | `20` | RAM in GiB. |
-| `--state_disk_size` | `50` | State disk size in GiB. |
-| `--provider_config` | `./provider-configs/swarm` | Path to the Swarm provider config inside `sp-vm`. |
-| `--build_dir` | `./out` | Directory with the built VM image and artifacts. |
-| `--cache` | `/data/fixcik/sp-vm/cache` | Host-side cache directory (replace `fixcik`). |
-| `--debug` | `true` | Verbose logging / debug mode. |
-| `--log_file` | `log.log` | Host-side log file with VM startup output. |
-| `--ssh_port` | `2222` | Host port forwarded to VM SSH. |
-| `--guest-cid` | `122` | Guest CID for vsock. |
-| `--wg_port` | `51821` | Host WireGuard port forwarded to the VM. |
-| `--swarm_db_gossip_port` | `7946` | Swarm DB gossip port for inter-node clustering (requires the Swarm branch of `sp-vm-tools`). |
-| `--ip_address` | `<public-ip>` | Host interface to bind forwarded ports to. Default `0.0.0.0` binds every interface; set to the public IPv4 reachable by other Swarm nodes (must match `swarm_db.advertise_addr`). |
-| `--swarm-init` | `true` | Bootstrap a new Swarm cluster. Pass `true` **only on the first (bootstrap) node**; omit (or set `false`) on joining nodes. |
+| Flag | Example | Default | Description |
+|---|---|---|---|
+| `--cores` | `10` | `nproc − 2` | vCPUs assigned to the VM. |
+| `--mem` | `20` | total RAM − 8 (GiB) | RAM in GiB. |
+| `--state_disk_size` | `50` | auto (≥512) | State disk size in GiB. Auto-detected from the mount if omitted. |
+| `--provider_config` | `./provider-configs/swarm` | _(required)_ | Path to the Swarm provider config directory inside `sp-vm`. |
+| `--build_dir` | `./out` | _(none — downloads release)_ | Directory with the locally built VM image and artifacts. |
+| `--cache` | `/data/fixcik/sp-vm/cache` | `~/.cache/superprotocol` | Host-side cache directory (replace `fixcik`). |
+| `--ip_address` | `<public-ip>` | `0.0.0.0` | Host interface to bind forwarded ports to. Set to the public IPv4 reachable by other Swarm nodes (must match `swarm_db.advertise_addr`). |
+| `--wg_port` | `51821` | `51820` | Host WireGuard port forwarded to the VM (`:51820` inside). |
+| `--swarm_db_gossip_port` | `7946` | `7946` | Swarm DB gossip port for inter-node clustering (requires the Swarm branch of `sp-vm-tools`). |
+| `--pki_port` | `9443` | _(not forwarded)_ | Host port forwarded to the VM's PKI authority (`:9443` inside). Needed so joining nodes can fetch the `caBundle`. |
+| `--dns_port` | `53` | `53` | DNS port forwarded to the VM. |
+| `--http_port` | `80` | _(not forwarded)_ | Host port forwarded to the VM's HTTP (`:80`). |
+| `--https_port` | `443` | _(not forwarded)_ | Host port forwarded to the VM's HTTPS (`:443`). |
+| `--guest-cid` | `122` | `3` | Guest CID for vsock. |
+| `--gpu` | `<id>` / `none` | all available | GPU(s) to pass through. Repeat per GPU; `none` disables passthrough. |
+| `--mode` | `tdx` | auto-detected | Confidential mode: `tdx`, `sev-snp`, or `untrusted`. |
+| `--swarm-init` | `true` | `false` | Bootstrap a new Swarm cluster. Pass `true` **only on the first (bootstrap) node**; omit on joining nodes. |
+| `--allow-untrusted` | `true` | `false` | Allow untrusted mode. Can only be combined with `--swarm-init true`. |
 
-## 7. Verify the VM is up
+## 6. Verify the VM is up
 
-### SSH into the VM
+### Check the VM boot output
 
-```bash
-ssh -p 2222 root@localhost
-```
+In production mode the VM logs to the serial console attached to your terminal
+(the script runs QEMU with `-serial stdio`). Watch that output for the services
+coming up.
 
-### Check system services
+### Verify provider configuration is mounted (from inside the VM)
 
-```bash
-systemctl status
-```
+> Direct shell access to the VM is only available in debug mode (see the debug
+> section below). In production you observe the VM through the serial console
+> and the Swarm Cloud UI / API endpoints rather than an interactive shell.
 
-### Verify provider configuration is mounted
+When you do have a shell (debug mode), the provider configuration is mounted under `/sp/`:
 
 ```bash
 ls -la /sp/
@@ -369,7 +361,7 @@ Expected files in `/sp/`:
 - `sp-swarm-services.yaml`
 - `authorized_keys`
 
-## 8. Stop the VM
+## 7. Stop the VM
 
 Find the QEMU process and shut it down:
 
@@ -381,6 +373,82 @@ sudo kill <PID>
 
 # Force kill if graceful shutdown fails
 sudo kill -9 <PID>
+```
+
+## Debug mode (optional)
+
+Debug mode is **not** needed for a normal production launch. Enable it only when
+you need an interactive shell inside the VM or verbose boot logging — for
+example while developing or troubleshooting.
+
+Debug mode changes behaviour in a few ways:
+
+- **SSH into the VM** is only available in debug mode. The `authorized_keys` /
+  `ssh_public_keys` fields are honored only here; in a non-debug (production)
+  image the SSH server is disabled and the keys are ignored.
+- `--log_file` is **required** when `--debug true` is set, and is **only**
+  allowed in debug mode (passing it without `--debug true` is an error).
+- The boot output is more verbose (`systemd.log_level=trace`, `sp-debug=true`).
+
+### Add an SSH key for the VM
+
+Generate a key on the build host and add the public part to the provider configuration:
+
+```bash
+# On gp-ws-01
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N '' -C "$USER@gp-ws-01"
+
+sudo touch ~/projects/sp-vm/provider-configs/authorized_keys
+sudo chown "$USER:$USER" ~/projects/sp-vm/provider-configs/authorized_keys
+cat ~/.ssh/id_ed25519.pub | tee -a ~/projects/sp-vm/provider-configs/authorized_keys
+```
+
+`authorized_keys` is consumed automatically when the VM starts.
+
+### Launch in debug mode
+
+Same as the production launch, plus `--debug true`, a `--log_file`, and an
+`--ssh_port` to forward into the VM:
+
+```bash
+sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
+  --cores 10 \
+  --mem 20 \
+  --provider_config ./provider-configs/swarm \
+  --state_disk_size 50 \
+  --build_dir ./out \
+  --cache /data/fixcik/sp-vm/cache \
+  --ip_address <public-ip> \
+  --swarm_db_gossip_port 7946 \
+  --guest-cid 122 \
+  --wg_port 51821 \
+  --pki_port 9443 \
+  --debug true \
+  --log_file log.log \
+  --ssh_port 2222 \
+  --swarm-init true        # only on the bootstrap node; omit on joining nodes
+```
+
+Additional debug flags:
+
+| Flag | Example | Default | Description |
+|---|---|---|---|
+| `--debug` | `true` | `false` | Enable verbose logging / debug image. |
+| `--log_file` | `log.log` | _(none)_ | Host-side log file with VM startup output. Required in debug mode. |
+| `--ssh_port` | `2222` | `2222` | Host port forwarded to VM SSH (`:22` inside, bound to `127.0.0.1` in debug mode). |
+| `--argo_branch` | `main` | `main` | Argo branch used to init SP components. |
+| `--argo_sp_env` | `main` | `main` | Argo environment used to init SP components. |
+
+### SSH into the VM (debug only)
+
+```bash
+ssh -p 2222 root@localhost
+```
+
+### Check system services
+
+```bash
+systemctl status
 ```
 
 ## Running on GCP via Terraform
@@ -404,7 +472,7 @@ zone             = "europe-west4-c"                         # confidential machi
 auth_service_oauth_secrets_file = "./auth-service.yaml"     # optional
 openresty_secrets_file          = "./openresty.yaml"        # optional
 name_prefix                     = "my-swarm-test"
-serial_port_enable              = false                     # enable for SSH debugging via serial
+serial_port_enable              = false                     # enable for SSH debugging via serial (debug only)
 vm_provision_model              = "spot"
 
 # Confidential TDX machines
@@ -444,13 +512,13 @@ pki_authority_tag   = "v5.0.0"
 gatekeeper_s3_image     = "ghcr.io/super-protocol/swarm-cloud/swarm-gatekeeper:develop"
 gatekeeper_harbor_image = "ghcr.io/super-protocol/swarm-cloud/swarm-gatekeeper:develop"
 
+# ssh_public_keys are honored only in debug images (serial_port_enable = true
+# with a debug image). For a production (non-debug) deployment the SSH server
+# inside the VM is disabled and these keys are ignored.
 ssh_public_keys = [
   "ssh-ed25519 AAAA... user@host",
   # add additional keys here
 ]
-# NOTE: ssh_public_keys are honored only in debug images. For a production
-# (non-debug) deployment the SSH server inside the VM is disabled and these
-# keys are ignored.
 ```
 
 Apply:
