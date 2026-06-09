@@ -404,8 +404,6 @@ Additional debug flags:
 | `--debug` | `true` | `false` | Enable verbose logging / debug image. |
 | `--log_file` | `log.log` | _(none)_ | Host-side log file with VM startup output. Required in debug mode. |
 | `--ssh_port` | `2222` | `2222` | Host port forwarded to VM SSH (`:22` inside, bound to `127.0.0.1` in debug mode). |
-| `--argo_branch` | `main` | `main` | Argo branch used to init SP components. |
-| `--argo_sp_env` | `main` | `main` | Argo environment used to init SP components. |
 
 ### SSH into the VM (debug only)
 
