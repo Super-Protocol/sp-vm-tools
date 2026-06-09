@@ -565,3 +565,81 @@ Apply:
 ```bash
 terraform apply -auto-approve -var-file ./terraform.tfvars
 ```
+
+## Running on GCP via `run_custom_conf_vm.sh`
+
+As an alternative to Terraform, `sp-vm-tools/scripts/run_custom_conf_vm.sh` packs
+a raw VM disk into a GCE image, creates a confidential VM from it, and (optionally)
+uploads the provider config to a GCS bucket that the VM mounts over s3fs.
+
+> This path requires a **locally built** image: it uploads the raw disk
+> (`sp-vm-build-N.img`) produced by [Building the VM image locally](#building-the-vm-image-locally-optional)
+> and passes it via `--raw`. A downloaded release is the packaged QEMU image, not
+> a raw disk, so it can't be used here — build locally first, then run this script.
+
+### Prerequisites
+
+- `gcloud` and `gsutil` authenticated against the target project (`gcloud auth login`, `gcloud config set project <id>`).
+- `tar` and `jq` available; `pigz` optional but recommended (parallel compression of the image tarball).
+- The raw `sp-vm-build-N.img` from a local build, passed to `--raw`.
+- The provider config directory from section 3, passed to `--provider-config`.
+
+### Launch
+
+```bash
+cd ~/projects/sp-vm-tools/scripts
+
+./run_custom_conf_vm.sh \
+  --raw ~/projects/sp-vm/out/sp-vm-build-357.img \
+  --image sp-cloud-image \
+  --vm sev-snp-swarm-test \
+  --zone us-central1-a \
+  --machine-type n2d-standard-4 \
+  --confidential-compute-type SEV_SNP \
+  --run-type spot \
+  --data-disk-size 50GB \
+  --data-disk-type pd-standard \
+  --provider-config ~/swarm/provider-configs/swarm
+```
+
+> `PROJECT_ID` defaults to `supa-swarm`; override it with the `PROJECT_ID`
+> environment variable (`PROJECT_ID=my-proj ./run_custom_conf_vm.sh ...`) or by
+> editing the script. The image tarball goes to the bucket from `--bucket`
+> (default `gs://supa-swarm-bucket-conf-vms`).
+
+### Key flags
+
+| Flag | Example | Description |
+|---|---|---|
+| `--raw` | `~/projects/sp-vm/out/sp-vm-build-357.img` | Locally built raw disk to pack into a GCE image. Required when creating or overwriting the image. |
+| `--image` | `sp-cloud-image` | GCE image name. Reused if it already exists (skips rebuild/upload) unless `--force-overwrite-image`. |
+| `--vm` | `sev-snp-swarm-test` | Instance name. |
+| `--zone` | `us-central1-a` | Zone — confidential machines aren't available in every zone. |
+| `--machine-type` | `n2d-standard-4` | For `SEV_SNP` use an `n2d-*` type; for `TDX` a `c3-*` type. |
+| `--confidential-compute-type` | `SEV_SNP` | `SEV_SNP`, `TDX`, `SEV`, or `NONE`. |
+| `--run-type` | `spot` | `spot` or `flex-start`. Flex-start only on supported machine types (a2/a3/a4/g2/g4/h4d, or n1 with a GPU). |
+| `--accelerator-type` | `nvidia-tesla-t4` | Optional GPU type. `--accelerator-count` defaults to 1 when set. |
+| `--data-disk-size` | `50GB` | Creates and attaches a state disk of this size. Omit for no extra disk. |
+| `--provider-config` | `~/swarm/provider-configs/swarm` | Local provider config folder; uploaded to GCS and mounted in the VM via s3fs. Use `--skip-provider-config` to skip. |
+| `--force-overwrite` | _(flag)_ | Recreate image, VM, and data disk. Also `--force-overwrite-{image,vm,disk}` individually. |
+| `--dry-run` | _(flag)_ | Print the gcloud/gsutil commands without executing them. |
+
+### After launch
+
+The script enables the serial port and prints connection commands:
+
+```bash
+# Interactive serial console
+gcloud compute connect-to-serial-port <vm> --project <project> --port 1 --zone <zone>
+
+# SSH (debug images only)
+gcloud compute ssh root@<vm> --project <project> --zone <zone>
+```
+
+When a provider config is uploaded, the VM receives S3-style HMAC credentials via
+instance metadata and mounts the bucket at `/sp/` using s3fs. The exact metadata
+keys and the s3fs mount command are printed at the end of the run.
+
+> **Tip:** start with `--dry-run` to review every `gcloud`/`gsutil` call (and
+> confirm the resolved project, bucket, and image names) before creating
+> anything in GCP.
