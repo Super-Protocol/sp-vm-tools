@@ -411,21 +411,11 @@ ensure_tools() {
     # --- snphost (host readiness checker, not in apt) --------------------
     if command -v snphost >/dev/null 2>&1; then
         echo -e "${SUCCESS} snphost present${NC}"
-    elif command -v cargo >/dev/null 2>&1; then
-        echo "snphost missing; cargo found - installing via cargo..."
-        if cargo install snphost; then
-            # cargo installs to ~/.cargo/bin; make sure it's reachable this run
-            export PATH="$PATH:$HOME/.cargo/bin:/root/.cargo/bin"
-            command -v snphost >/dev/null 2>&1 \
-                && echo -e "${SUCCESS} snphost installed${NC}" \
-                || echo -e "${WARNING} snphost installed but not on PATH; add ~/.cargo/bin${NC}"
-        else
-            echo -e "${WARNING} cargo install snphost failed (network/offline?). Continuing without it.${NC}"
-        fi
     else
-        echo -e "${WARNING} snphost missing and cargo not available; skipping auto-install${NC}"
-        echo "  To enable AMD's comprehensive check, install Rust then: cargo install snphost"
-        echo "  (or build from github.com/virtee/snphost). Manual checks below still run."
+        echo -e "${WARNING} snphost not installed; skipping AMD comprehensive check${NC}"
+        echo "  Install the prebuilt release for a full CPU/BIOS/FW check:"
+        echo "    https://github.com/virtee/snphost/releases"
+        echo "  Manual checks below still run."
     fi
 }
 
