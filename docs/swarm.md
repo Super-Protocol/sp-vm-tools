@@ -10,7 +10,7 @@ It also includes a short section on launching the same image in Google Cloud via
 - SSH access to the build host (e.g. `gp-ws-01`).
 - Docker with `buildx` enabled and your user in the `docker` group.
 - The host bootstrapped for confidential computing — see the main [README](../README.md) (`scripts/bootstrap_tdx.sh` or `scripts/bootstrap_snp.sh`).
-- A populated provider config directory, e.g. `~/swarm/provider-configs/swarm` (see below).
+- A populated provider config directory, e.g. `~/swarm/provider-configs` (see below).
 
 ## 1. Connect to the host
 
@@ -34,7 +34,7 @@ git clone https://github.com/Super-Protocol/sp-vm-tools
 ## 3. Provider configuration
 
 The provider configuration is a directory you create anywhere on the host (this
-guide uses `~/swarm/provider-configs/swarm/`). You pass its path to the launch
+guide uses `~/swarm/provider-configs/`). You pass its path to the launch
 script via `--provider_config`. It contains:
 
 - `config.yaml` — main Swarm configuration (required).
@@ -250,7 +250,7 @@ downloaded automatically, no debug flags, SSH into the VM disabled:
 sudo ~/projects/sp-vm-tools/scripts/start_super_protocol.sh \
   --cores 10 \
   --mem 20 \
-  --provider_config ~/swarm/provider-configs/swarm \
+  --provider_config ~/swarm/provider-configs \
   --state_disk_size 50 \
   --cache /data/sp-vm/cache \
   --ip_address <public-ip> \
@@ -286,7 +286,7 @@ sudo ~/projects/sp-vm-tools/scripts/start_super_protocol.sh \
 | `--cores` | `10` | `nproc − 2` | vCPUs assigned to the VM. |
 | `--mem` | `20` | total RAM − 8 (GiB) | RAM in GiB. |
 | `--state_disk_size` | `50` | auto (≥512) | State disk size in GiB. Auto-detected from the mount if omitted. |
-| `--provider_config` | `~/swarm/provider-configs/swarm` | _(required)_ | Path to the Swarm provider config directory. |
+| `--provider_config` | `~/swarm/provider-configs` | _(required)_ | Path to the Swarm provider config directory. |
 | `--release` | `build-344` | latest | Release name to download. Omit to fetch the latest released image. |
 | `--build_dir` | `./out` | _(none — downloads release)_ | Use a locally built VM image instead of downloading a release (see build section). |
 | `--cache` | `/data/sp-vm/cache` | `~/.cache/superprotocol` | Host-side cache directory. |
@@ -383,7 +383,7 @@ Same as the production launch, plus `--debug true`, a `--log_file`, and an
 sudo ~/projects/sp-vm-tools/scripts/start_super_protocol.sh \
   --cores 10 \
   --mem 20 \
-  --provider_config ~/swarm/provider-configs/swarm \
+  --provider_config ~/swarm/provider-configs \
   --state_disk_size 50 \
   --cache /data/sp-vm/cache \
   --ip_address <public-ip> \
