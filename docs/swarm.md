@@ -11,7 +11,7 @@ It also includes a short section on launching the same image in Google Cloud via
 - SSH access to the build host (e.g. `gp-ws-01`).
 - Docker with `buildx` enabled and your user in the `docker` group.
 - The host bootstrapped for confidential computing — see the main [README](../README.md) (`scripts/bootstrap_tdx.sh` or `scripts/bootstrap_snp.sh`).
-- A populated `provider-configs/swarm` directory (see below).
+- A populated provider config directory, e.g. `~/swarm/provider-configs/swarm` (see below).
 
 ## 1. Connect to the host
 
@@ -19,31 +19,30 @@ It also includes a short section on launching the same image in Google Cloud via
 ssh gp-ws-01
 ```
 
-## 2. Clone the repositories
+## 2. Get the launch tooling
 
-`sp-vm` depends on `swarm-cloud` via git submodules, so a recursive clone (or `git submodule update --init --recursive`) is mandatory.
+For a normal launch (downloading the released image) you only need
+`sp-vm-tools` — it contains `start_super_protocol.sh`. The `sp-vm` repository is
+the image source and is only needed if you build the image yourself (see
+[Building the VM image locally](#building-the-vm-image-locally-optional)).
 
 ```bash
 mkdir -p ~/projects && cd ~/projects
-git clone https://github.com/Super-Protocol/sp-vm
 git clone https://github.com/Super-Protocol/sp-vm-tools
-
-cd sp-vm
-git checkout swarm                          # check the current Swarm branch
-git submodule update --init --recursive
-
-cd ../sp-vm-tools
 # `main` already contains the Swarm bits
 ```
 
 ## 3. Provider configuration
 
-The Swarm provider configuration lives in `sp-vm/provider-configs/swarm/` and contains:
+The provider configuration is a directory you create anywhere on the host (this
+guide uses `~/swarm/provider-configs/swarm/`). You pass its path to the launch
+script via `--provider_config`. It contains:
 
 - `config.yaml` — main Swarm configuration (required).
 - `openresty.yaml` — credentials for a custom ACME provider, if you don't use Let's Encrypt (optional).
 - `auth-service.yaml` — OAuth2 provider credentials for the Auth Service (optional).
 - `authorized_keys` — SSH public keys to authorize for the VM (debug mode only; see the debug section near the end).
+
 
 ### Bootstrap node vs joining nodes
 
@@ -203,13 +202,13 @@ If you maintain the configuration locally:
 
 ```bash
 # On your local machine
-scp -r ./provider-configs gp-ws-01:~/projects/sp-vm/
+scp -r ./provider-configs gp-ws-01:~/swarm/
 ```
 
 Expected layout on the host:
 
 ```
-~/projects/sp-vm/provider-configs/swarm/
+~/swarm/provider-configs/swarm/
 ├── config.yaml
 ├── openresty.yaml
 └── auth-service.yaml
@@ -224,7 +223,7 @@ directory before the VM starts.
 
 > If you need a locally built image instead of the released one, see
 > [Building the VM image locally](#building-the-vm-image-locally-optional) at the
-> end of this guide and pass `--build_dir ./out`.
+> end of this guide and pass `--build_dir ~/projects/sp-vm/out`.
 
 ### Create a cache directory
 
@@ -245,15 +244,14 @@ sudo chown -R "$USER:$USER" /data/fixcik/sp-vm
 
 ### Launch (production)
 
-Run from `~/projects/sp-vm`. This is the normal, production launch — the latest
-released VM image is downloaded automatically, no debug flags, SSH into the VM
-disabled:
+This is the normal, production launch — the latest released VM image is
+downloaded automatically, no debug flags, SSH into the VM disabled:
 
 ```bash
-sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
+sudo ~/projects/sp-vm-tools/scripts/start_super_protocol.sh \
   --cores 10 \
   --mem 20 \
-  --provider_config ./provider-configs/swarm \
+  --provider_config ~/swarm/provider-configs/swarm \
   --state_disk_size 50 \
   --cache /data/fixcik/sp-vm/cache \
   --ip_address <public-ip> \
@@ -265,7 +263,7 @@ sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
 ```
 
 > By default the latest release is fetched. Pin a specific build with
-> `--release <name>`. Use a locally built image with `--build_dir ./out`
+> `--release <name>`. Use a locally built image with `--build_dir ~/projects/sp-vm/out`
 > (see the build section at the end).
 
 
@@ -289,7 +287,7 @@ sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
 | `--cores` | `10` | `nproc − 2` | vCPUs assigned to the VM. |
 | `--mem` | `20` | total RAM − 8 (GiB) | RAM in GiB. |
 | `--state_disk_size` | `50` | auto (≥512) | State disk size in GiB. Auto-detected from the mount if omitted. |
-| `--provider_config` | `./provider-configs/swarm` | _(required)_ | Path to the Swarm provider config directory inside `sp-vm`. |
+| `--provider_config` | `~/swarm/provider-configs/swarm` | _(required)_ | Path to the Swarm provider config directory. |
 | `--release` | `build-344` | latest | Release name to download. Omit to fetch the latest released image. |
 | `--build_dir` | `./out` | _(none — downloads release)_ | Use a locally built VM image instead of downloading a release (see build section). |
 | `--cache` | `/data/fixcik/sp-vm/cache` | `~/.cache/superprotocol` | Host-side cache directory (replace `fixcik`). |
@@ -371,9 +369,8 @@ Generate a key on the build host and add the public part to the provider configu
 # On gp-ws-01
 ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N '' -C "$USER@gp-ws-01"
 
-sudo touch ~/projects/sp-vm/provider-configs/authorized_keys
-sudo chown "$USER:$USER" ~/projects/sp-vm/provider-configs/authorized_keys
-cat ~/.ssh/id_ed25519.pub | tee -a ~/projects/sp-vm/provider-configs/authorized_keys
+touch ~/swarm/provider-configs/swarm/authorized_keys
+cat ~/.ssh/id_ed25519.pub | tee -a ~/swarm/provider-configs/swarm/authorized_keys
 ```
 
 `authorized_keys` is consumed automatically when the VM starts.
@@ -384,10 +381,10 @@ Same as the production launch, plus `--debug true`, a `--log_file`, and an
 `--ssh_port` to forward into the VM:
 
 ```bash
-sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
+sudo ~/projects/sp-vm-tools/scripts/start_super_protocol.sh \
   --cores 10 \
   --mem 20 \
-  --provider_config ./provider-configs/swarm \
+  --provider_config ~/swarm/provider-configs/swarm \
   --state_disk_size 50 \
   --cache /data/fixcik/sp-vm/cache \
   --ip_address <public-ip> \
@@ -428,6 +425,20 @@ systemctl status
 By default the launch script downloads the latest released VM image, so most
 users never need this section. Build locally only when you need a custom or
 unreleased image; then pass `--build_dir ./out` to the launch command.
+
+### Clone `sp-vm`
+
+The image is built from the `sp-vm` repository. It depends on `swarm-cloud` via
+git submodules, so a recursive clone (or `git submodule update --init
+--recursive`) is mandatory.
+
+```bash
+cd ~/projects
+git clone https://github.com/Super-Protocol/sp-vm
+cd sp-vm
+git checkout swarm                          # check the current Swarm branch
+git submodule update --init --recursive
+```
 
 ### Create a buildx builder with `security.insecure`
 
@@ -473,12 +484,13 @@ Expected files:
 
 ### Use the built image
 
-Pass the build directory to the launch command from section 4:
+Pass the build directory to the launch command from section 4 (it lives at
+`~/projects/sp-vm/out`):
 
 ```bash
-sudo ../sp-vm-tools/scripts/start_super_protocol.sh \
+sudo ~/projects/sp-vm-tools/scripts/start_super_protocol.sh \
   ... \
-  --build_dir ./out
+  --build_dir ~/projects/sp-vm/out
 ```
 
 ## Running on GCP via Terraform
