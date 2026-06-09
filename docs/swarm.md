@@ -4,7 +4,6 @@ This guide walks through the full Swarm VM lifecycle on a confidential host: pre
 
 It also includes a short section on launching the same image in Google Cloud via Terraform.
 
-> Throughout the guide, replace `fixcik` with your own username on the build host.
 
 ## Prerequisites
 
@@ -228,8 +227,8 @@ directory before the VM starts.
 ### Create a cache directory
 
 ```bash
-sudo mkdir -p /data/fixcik/sp-vm/cache
-sudo chown -R "$USER:$USER" /data/fixcik/sp-vm
+sudo mkdir -p /data/sp-vm/cache
+sudo chown -R "$USER:$USER" /data/sp-vm
 ```
 
 ### Start a persistent terminal session
@@ -253,7 +252,7 @@ sudo ~/projects/sp-vm-tools/scripts/start_super_protocol.sh \
   --mem 20 \
   --provider_config ~/swarm/provider-configs/swarm \
   --state_disk_size 50 \
-  --cache /data/fixcik/sp-vm/cache \
+  --cache /data/sp-vm/cache \
   --ip_address <public-ip> \
   --swarm_db_gossip_port 7946 \
   --guest-cid 122 \
@@ -290,7 +289,7 @@ sudo ~/projects/sp-vm-tools/scripts/start_super_protocol.sh \
 | `--provider_config` | `~/swarm/provider-configs/swarm` | _(required)_ | Path to the Swarm provider config directory. |
 | `--release` | `build-344` | latest | Release name to download. Omit to fetch the latest released image. |
 | `--build_dir` | `./out` | _(none — downloads release)_ | Use a locally built VM image instead of downloading a release (see build section). |
-| `--cache` | `/data/fixcik/sp-vm/cache` | `~/.cache/superprotocol` | Host-side cache directory (replace `fixcik`). |
+| `--cache` | `/data/sp-vm/cache` | `~/.cache/superprotocol` | Host-side cache directory. |
 | `--ip_address` | `<public-ip>` | `0.0.0.0` | Host interface to bind forwarded ports to. Set to the public IPv4 reachable by other Swarm nodes (must match `swarm_db.advertise_addr`). |
 | `--wg_port` | `51821` | `51820` | Host WireGuard port forwarded to the VM (`:51820` inside). |
 | `--swarm_db_gossip_port` | `7946` | `7946` | Swarm DB gossip port for inter-node clustering (requires the Swarm branch of `sp-vm-tools`). |
@@ -386,7 +385,7 @@ sudo ~/projects/sp-vm-tools/scripts/start_super_protocol.sh \
   --mem 20 \
   --provider_config ~/swarm/provider-configs/swarm \
   --state_disk_size 50 \
-  --cache /data/fixcik/sp-vm/cache \
+  --cache /data/sp-vm/cache \
   --ip_address <public-ip> \
   --swarm_db_gossip_port 7946 \
   --guest-cid 122 \
@@ -455,7 +454,7 @@ sudo docker buildx create --use --name insecure-builder \
 
 ```bash
 cd ~/projects/sp-vm
-docker buildx build -t sp-vm-swarm-test-fixcik \
+docker buildx build -t sp-vm-swarm-test \
   --allow security.insecure \
   --output type=local,dest=./out \
   --build-arg SP_VM_IMAGE_VERSION=build-1 \
