@@ -14,6 +14,16 @@ SUCCESS="[${GREEN}\xe2\x9c\x93${NC}]"
 FAILURE="[${RED}\xe2\x9c\x97${NC}]"
 WARNING="[${YELLOW}!${NC}]"
 
+# ---------------------------------------------------------------------------
+# BIOS menu paths (observed on this platform: Aptio Setup - AMI).
+# These locations vary by vendor and BIOS version; treat as a starting point.
+# ---------------------------------------------------------------------------
+BIOS_NOTE="(menu location may differ on other vendors / BIOS versions)"
+PATH_SMEE="CPU -> CPU Configuration -> SMEE -> Enabled"
+PATH_SNP_SUPPORT="Chipset -> AMD CBS -> NBIO Common Options -> SEV-SNP Support -> Enabled"
+PATH_RMP="Chipset -> AMD CBS -> CPU Common Options -> SNP Memory (RMP Table) Coverage -> Enabled"
+PATH_ASID="Chipset -> AMD CBS -> CPU Common Options -> SEV-ES ASID Space Limit"
+
 print_section_header() {
     echo -e "\n${BLUE}=== $1 ===${NC}"
     echo -e "${BLUE}$(printf '=%.0s' {1..40})${NC}"
@@ -184,7 +194,7 @@ check_all_bios_settings() {
         results+=("${SUCCESS} SMEE enabled (MSR 0xC0010010 bit23 set; raw=0x${SMEE_MSR_RAW})${NC}")
     elif [ "$smee_rc" -eq 1 ]; then
         results+=("${FAILURE} SMEE disabled (MSR 0xC0010010 bit23 clear; raw=0x${SMEE_MSR_RAW})${NC}")
-        results+=("  Location: Advanced -> AMD CBS -> CPU Common Options -> SMEE -> Enable")
+        results+=("  Location: ${PATH_SMEE}  ${BIOS_NOTE}")
         results+=("  Symptom if left off: SEV_INIT fails with error 0x13 (HWERROR_PLATFORM)")
         all_passed=false
     else
@@ -193,7 +203,7 @@ check_all_bios_settings() {
             results+=("${WARNING} Could not read MSR; 'sme' flag present in cpuinfo${NC}")
         else
             results+=("${FAILURE} Could not read MSR and 'sme' flag absent${NC}")
-            results+=("  Location: Advanced -> AMD CBS -> CPU Common Options -> SMEE -> Enable")
+            results+=("  Location: ${PATH_SMEE}  ${BIOS_NOTE}")
             all_passed=false
         fi
     fi
@@ -259,9 +269,11 @@ check_all_bios_settings() {
             results+=("  -> 'error 0x13' (HWERROR_PLATFORM) = SMEE disabled in BIOS")
         elif ! grep -qw "sev_snp" /proc/cpuinfo; then
             results+=("  Cause: BIOS - CPU does not expose 'sev_snp'")
-            results+=("  Location: Advanced -> NBIO Common Options -> IOMMU/Security -> SEV-SNP Support -> Enable")
+            results+=("  Location: ${PATH_SNP_SUPPORT}  ${BIOS_NOTE}")
         else
             results+=("  CPU exposes sev_snp; check kvm_amd.sev_snp param and RMP/firmware lines above")
+            results+=("  Also verify SEV-ES ASID Space Limit is non-trivial (a value of 1 leaves no SNP ASIDs)")
+            results+=("  Location: ${PATH_ASID}  ${BIOS_NOTE}")
         fi
         all_passed=false
     fi
@@ -275,7 +287,7 @@ check_all_bios_settings() {
         results+=("  $(echo "$rmp_line" | sed -E 's/.*SEV-SNP: //')")
     else
         results+=("${FAILURE} RMP table not reported in dmesg${NC}")
-        results+=("  Location: Advanced -> AMD CBS -> CPU Common Options -> SNP Memory (RMP Table) Coverage -> Enabled")
+        results+=("  Location: ${PATH_RMP}  ${BIOS_NOTE}")
         all_passed=false
     fi
 
@@ -310,15 +322,18 @@ check_all_bios_settings() {
             ;;
     esac
 
-    # --- Required BIOS configuration summary (verbatim from AMD doc) -------
-    results+=("${YELLOW}Required BIOS Configuration (per AMD doc):${NC}")
-    results+=("Advanced -> AMD CBS -> CPU Common Options")
-    results+=("    SMEE                              -> Enable")
-    results+=("    SEV Control                       -> Enable")
-    results+=("    SEV-ES ASID Space Limit           -> 99")
+    # --- Required BIOS configuration summary (observed AMI layout) --------
+    results+=("${YELLOW}Required BIOS Configuration ${BIOS_NOTE}:${NC}")
+    results+=("CPU -> CPU Configuration")
+    results+=("    SMEE                              -> Enabled")
+    results+=("Chipset -> AMD CBS -> CPU Common Options")
+    results+=("    SEV-ES ASID Space Limit Control   -> Manual")
+    results+=("    SEV-ES ASID Space Limit           -> 99   (AMD doc recommends 99)")
     results+=("    SNP Memory (RMP Table) Coverage   -> Enabled")
-    results+=("Advanced -> NBIO Common Options -> IOMMU/Security")
-    results+=("    SEV-SNP Support                   -> Enable")
+    results+=("Chipset -> AMD CBS -> NBIO Common Options")
+    results+=("    SEV-SNP Support                   -> Enabled")
+    results+=("${YELLOW}Note: enabling SEV-SNP Support also gates SEV / SEV-ES on this platform${NC}")
+    results+=("${YELLOW}      (no separate 'SEV Control' item present).${NC}")
 
     print_section_header "Status"
     for result in "${results[@]}"; do
