@@ -137,10 +137,7 @@ run_snphost_ok() {
             return 1
         fi
     else
-        echo -e "${WARNING} snphost not installed${NC}"
-        echo "  Install for a comprehensive AMD readiness check (CPU/BIOS/FW):"
-        echo "    cargo install snphost      # or build from github.com/virtee/snphost"
-        echo "  Continuing with manual checks below."
+        echo -e "${WARNING} snphost not available (see install note above); using manual checks${NC}"
         return 2
     fi
 }
@@ -245,8 +242,10 @@ check_all_bios_settings() {
         results+=("  Required: modprobe kvm_amd")
         all_passed=false
     else
+        # Map module parameter name -> the CPU flag that gates it.
         for param in sev sev_es sev_snp; do
             local pfile="/sys/module/kvm_amd/parameters/${param}"
+            local cpuflag="$param"   # cpuinfo flags are sev / sev_es / sev_snp
             if [ -f "$pfile" ]; then
                 local val
                 val=$(cat "$pfile")
@@ -254,6 +253,20 @@ check_all_bios_settings() {
                     results+=("${SUCCESS} kvm_amd.${param}=${val}${NC}")
                 else
                     results+=("${FAILURE} kvm_amd.${param}=${val} (expected Y)${NC}")
+                    # Distinguish the layer: missing CPU flag => BIOS; flag present => kernel/module
+                    if ! grep -qw "$cpuflag" /proc/cpuinfo; then
+                        results+=("  Cause: BIOS - CPU does not expose '${cpuflag}'")
+                        if [ "$param" = "sev_snp" ]; then
+                            results+=("  Location: Advanced -> NBIO Common Options -> IOMMU/Security -> SEV-SNP Support -> Enable")
+                        else
+                            results+=("  Location: Advanced -> AMD CBS -> CPU Common Options -> SEV Control -> Enable")
+                        fi
+                    else
+                        results+=("  Cause: kernel - '${cpuflag}' present in CPU, but module param off")
+                        results+=("  Fix: add 'kvm_amd.${param}=1' to kernel cmdline")
+                        results+=("       echo 'options kvm_amd ${param}=1' >> /etc/modprobe.d/kvm.conf")
+                        results+=("       then: update-grub && reboot   (or reload kvm_amd)")
+                    fi
                     all_passed=false
                 fi
             else
@@ -275,7 +288,22 @@ check_all_bios_settings() {
         [ -n "$EXPECTED_ASIDS" ] && results+=("  Platform documented total: ${EXPECTED_ASIDS}")
     else
         results+=("${FAILURE} 'SEV-SNP enabled' not found in dmesg${NC}")
-        results+=("  Location: Advanced -> NBIO Common Options -> IOMMU/Security -> SEV-SNP Support -> Enable")
+        # Try to surface the actual reason rather than guessing BIOS.
+        local snp_err
+        snp_err=$(dmesg | grep -iE "SEV(-SNP)?:.*(fail|error|disabled)|ccp.*error" | head -3 || echo "")
+        if [ -n "$snp_err" ]; then
+            results+=("  Reported by kernel:")
+            while IFS= read -r line; do
+                [ -n "$line" ] && results+=("    $(echo "$line" | sed -E 's/^\[[^]]*\] //')")
+            done <<< "$snp_err"
+            results+=("  -> 'INIT error 0x1, rc -5' = PSP BootLoader too old; update system BIOS")
+            results+=("  -> 'error 0x13' (HWERROR_PLATFORM) = SMEE disabled in BIOS")
+        elif ! grep -qw "sev_snp" /proc/cpuinfo; then
+            results+=("  Cause: BIOS - CPU does not expose 'sev_snp'")
+            results+=("  Location: Advanced -> NBIO Common Options -> IOMMU/Security -> SEV-SNP Support -> Enable")
+        else
+            results+=("  CPU exposes sev_snp; check kvm_amd.sev_snp param and RMP/firmware lines above")
+        fi
         all_passed=false
     fi
 
@@ -374,15 +402,52 @@ check_all_bios_settings() {
     fi
 }
 
-check_bios_settings() {
-    echo "Performing comprehensive SEV-SNP BIOS configuration check..."
-    echo "Installing components..."
-    apt-get update && apt-get install -y cpuid msr-tools
+ensure_tools() {
+    print_section_header "Ensuring diagnostic tools are present"
 
+    # --- apt-provided tools needed for diagnosis -------------------------
+    # (apt-get update is performed earlier in the pipeline; not repeated here)
+    local apt_pkgs=()
+    command -v cpuid  >/dev/null 2>&1 || apt_pkgs+=("cpuid")
+    command -v rdmsr  >/dev/null 2>&1 || apt_pkgs+=("msr-tools")
+
+    if [ "${#apt_pkgs[@]}" -gt 0 ]; then
+        echo "Installing missing apt packages: ${apt_pkgs[*]}"
+        apt-get install -y "${apt_pkgs[@]}"
+    else
+        echo -e "${SUCCESS} apt diagnostic tools already present (cpuid, msr-tools)${NC}"
+    fi
+
+    # Load msr module so rdmsr works
     if ! lsmod | grep -q "^msr"; then
-        echo "Loading MSR module..."
         modprobe msr || true
     fi
+
+    # --- snphost (host readiness checker, not in apt) --------------------
+    if command -v snphost >/dev/null 2>&1; then
+        echo -e "${SUCCESS} snphost present${NC}"
+    elif command -v cargo >/dev/null 2>&1; then
+        echo "snphost missing; cargo found - installing via cargo..."
+        if cargo install snphost; then
+            # cargo installs to ~/.cargo/bin; make sure it's reachable this run
+            export PATH="$PATH:$HOME/.cargo/bin:/root/.cargo/bin"
+            command -v snphost >/dev/null 2>&1 \
+                && echo -e "${SUCCESS} snphost installed${NC}" \
+                || echo -e "${WARNING} snphost installed but not on PATH; add ~/.cargo/bin${NC}"
+        else
+            echo -e "${WARNING} cargo install snphost failed (network/offline?). Continuing without it.${NC}"
+        fi
+    else
+        echo -e "${WARNING} snphost missing and cargo not available; skipping auto-install${NC}"
+        echo "  To enable AMD's comprehensive check, install Rust then: cargo install snphost"
+        echo "  (or build from github.com/virtee/snphost). Manual checks below still run."
+    fi
+}
+
+check_bios_settings() {
+    echo "Performing comprehensive SEV-SNP BIOS configuration check..."
+
+    ensure_tools
 
     detect_platform
     check_os_prereqs || true          # informative; don't abort
