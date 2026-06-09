@@ -369,8 +369,8 @@ Generate a key on the build host and add the public part to the provider configu
 # On gp-ws-01
 ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N '' -C "$USER@gp-ws-01"
 
-touch ~/swarm/provider-configs/swarm/authorized_keys
-cat ~/.ssh/id_ed25519.pub | tee -a ~/swarm/provider-configs/swarm/authorized_keys
+touch ~/swarm/provider-configs/authorized_keys
+cat ~/.ssh/id_ed25519.pub | tee -a ~/swarm/provider-configs/authorized_keys
 ```
 
 `authorized_keys` is consumed automatically when the VM starts.
