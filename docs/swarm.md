@@ -263,7 +263,10 @@ sudo ~/projects/sp-vm-tools/scripts/start_super_protocol.sh \
   --ip_address <public-ip> \
   --swarm_db_gossip_port 7946 \
   --guest-cid 122 \
-  --wg_port 51821 \
+  --wg_port 51820 \
+  --http_port 80 \
+  --https_port 443 \
+  --dns_port 53 \
   --pki_port 9443 \
   --swarm-init true        # only on the bootstrap node; omit on joining nodes
 ```
@@ -396,7 +399,10 @@ sudo ~/projects/sp-vm-tools/scripts/start_super_protocol.sh \
   --ip_address <public-ip> \
   --swarm_db_gossip_port 7946 \
   --guest-cid 122 \
-  --wg_port 51821 \
+  --wg_port 51820 \
+  --http_port 80 \
+  --https_port 443 \
+  --dns_port 53 \
   --pki_port 9443 \
   --debug true \
   --log_file log.log \
