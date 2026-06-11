@@ -18,6 +18,14 @@ print_section_header() {
     echo -e "${BLUE}$(printf '=%.0s' {1..40})${NC}"
 }
 
+# Function for error handling
+check_error() {
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Error: $1${NC}"
+        exit 1
+    fi
+}
+
 # Configuration variables
 PCCS_API_KEY="aecd5ebb682346028d60c36131eb2d92"
 PCCS_PORT="8081"
@@ -316,14 +324,6 @@ if ! check_bios_settings; then
     echo "Please configure BIOS settings according to the instructions above and try again"
     exit 1
 fi
-
-# Function for error handling
-check_error() {
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}Error: $1${NC}"
-        exit 1
-    fi
-}
 
 # Function to wait for service
 wait_for_service() {
