@@ -396,13 +396,23 @@ for svc in pccs qgsd mpa_registration_tool; do
     fi
 done
 
-# Remove existing packages (ignore if not installed)
 print_section_header "Removing existing packages..."
-if dpkg -s sgx-dcap-pccs &>/dev/null; then
-    sudo dpkg --purge --force-all sgx-dcap-pccs
-    sudo rm -f /var/lib/dpkg/info/sgx-dcap-pccs.*
+
+# Collect all SGX/TDX-related packages in ANY dpkg state (ii, iU, iF, rc...)
+OLD_PKGS=$(dpkg -l 2>/dev/null | awk '$1 ~ /^[a-z][a-zA-Z]?$/ && ($2 ~ /^libsgx-/ || $2 ~ /^sgx-/ || $2 ~ /^libmpa-/ || $2 == "tdx-qgs") {print $2}')
+
+if [ -n "$OLD_PKGS" ]; then
+    echo "Purging: $OLD_PKGS"
+    if ! dpkg --purge --force-all $OLD_PKGS; then
+        # Fallback: nuke leftover maintainer scripts and retry
+        for pkg in $OLD_PKGS; do
+            rm -f /var/lib/dpkg/info/${pkg}.*
+        done
+        dpkg --purge --force-all $OLD_PKGS 2>/dev/null || true
+    fi
+    apt-get -f install -y 2>/dev/null || true
 else
-    echo "Package sgx-dcap-pccs not installed, skipping"
+    echo "No SGX/TDX packages installed, skipping"
 fi
 
 # Clean up old configurations
