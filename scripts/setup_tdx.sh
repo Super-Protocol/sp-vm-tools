@@ -337,24 +337,34 @@ register_platform() {
 print_section_header "Starting clean PCCS installation and setup..."
 
 # Check if running as root
-if [ "$EUID" -ne 0 ]; then 
+if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}Please run as root${NC}"
     exit 1
 fi
 
-# Stop and disable all services first
+# Stop and disable all services first (ignore missing units)
 print_section_header "Stopping all services..."
-systemctl stop pccs qgsd mpa_registration_tool
-systemctl disable pccs qgsd mpa_registration_tool
+for svc in pccs qgsd mpa_registration_tool; do
+    if systemctl list-unit-files "${svc}.service" --no-legend 2>/dev/null | grep -q .; then
+        systemctl stop "$svc" 2>/dev/null || true
+        systemctl disable "$svc" 2>/dev/null || true
+    else
+        echo "Service ${svc} not found, skipping"
+    fi
+done
 
-# Remove existing packages
+# Remove existing packages (ignore if not installed)
 print_section_header "Removing existing packages..."
-apt-get remove -y sgx-dcap-pccs 
+if dpkg -s sgx-dcap-pccs &>/dev/null; then
+    apt-get remove -y sgx-dcap-pccs
+else
+    echo "Package sgx-dcap-pccs not installed, skipping"
+fi
 
 # Clean up old configurations
 print_section_header "Cleaning up old configurations..."
 rm -f /etc/sgx_default_qcnl.conf
-rm -rf /opt/intel/sgx-dcap-pccs/config/*
+rm -rf /opt/intel/sgx-dcap-pccs/config/* 2>/dev/null || true
 
 # Install packages
 print_section_header "Installing packages..."
