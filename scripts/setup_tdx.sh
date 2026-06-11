@@ -264,6 +264,19 @@ check_bios_settings() {
 TMP_DIR=$1
 TDX_COMMIT="9e0d733b969c4088b751a1be073dab7603866a57"
 
+# Determine package source based on Ubuntu version
+UBUNTU_VERSION=$(. /etc/os-release && echo "$VERSION_ID")
+UBUNTU_NUM=$(echo "$UBUNTU_VERSION" | awk -F. '{printf "%d%02d", $1, $2}')
+CODENAME=$(lsb_release -cs)
+
+if [ "$UBUNTU_NUM" -ge 2510 ]; then
+    USE_INTEL_REPO=1
+    echo "Ubuntu ${UBUNTU_VERSION}: using Intel SGX repository"
+else
+    USE_INTEL_REPO=0
+    echo "Ubuntu ${UBUNTU_VERSION}: using Canonical kobuk-team PPA"
+fi
+
 if [ -d "${TMP_DIR}/tdx-cannonical" ]; then
     echo -e "${YELLOW}Directory ${TMP_DIR}/tdx-cannonical already exists${NC}"
     echo -e "Removing existing directory..."
@@ -290,30 +303,32 @@ echo "Running setup-tdx-host.sh..."
 chmod +x "${SCRIPT_PATH}"
 "${SCRIPT_PATH}"
 
-# Remove kobuk-team TDX PPA on Ubuntu 26+ (no release published for it)
-UBUNTU_VERSION=$(lsb_release -rs | cut -d. -f1)
-if [ "$UBUNTU_VERSION" -ge 26 ] 2>/dev/null; then
+print_section_header "Configuring package repositories..."
+
+if [ "$USE_INTEL_REPO" -eq 1 ]; then
+    # Remove kobuk-team PPA if present (conflicts with Intel packages)
     PPA_FILES=$(grep -rl "kobuk-team" /etc/apt/sources.list.d/ 2>/dev/null || true)
     if [ -n "$PPA_FILES" ]; then
-        echo "Ubuntu ${UBUNTU_VERSION} detected, removing kobuk-team TDX PPA (not supported)"
+        echo "Removing kobuk-team PPA: $PPA_FILES"
         rm -f $PPA_FILES
-        rm -f /etc/apt/keyrings/kobuk-team-*.gpg \
-              /etc/apt/trusted.gpg.d/kobuk-team-*.gpg 2>/dev/null || true
     fi
-fi
 
-# Add Intel SGX repository
-print_section_header "Adding Intel SGX repository..."
-CODENAME=$(lsb_release -cs)
+    # Add Intel SGX repository
+    mkdir -p /etc/apt/keyrings
+    curl -fsSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key \
+        -o /etc/apt/keyrings/intel-sgx-keyring.asc
+    check_error "Failed to download Intel SGX repository key"
 
-mkdir -p /etc/apt/keyrings
-curl -fsSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key \
-    -o /etc/apt/keyrings/intel-sgx-keyring.asc
-check_error "Failed to download Intel SGX repository key"
-
-tee /etc/apt/sources.list.d/intel-sgx.list > /dev/null <<EOF
+    tee /etc/apt/sources.list.d/intel-sgx.list > /dev/null <<EOF
 deb [signed-by=/etc/apt/keyrings/intel-sgx-keyring.asc arch=amd64] https://download.01.org/intel-sgx/sgx_repo/ubuntu ${CODENAME} main
 EOF
+else
+    # Ensure kobuk-team PPA is present
+    if ! grep -rq "kobuk-team" /etc/apt/sources.list.d/ 2>/dev/null; then
+        add-apt-repository -y ppa:kobuk-team/tdx-release
+        check_error "Failed to add kobuk-team PPA"
+    fi
+fi
 
 apt-get update
 check_error "Failed to update package lists"
@@ -396,21 +411,39 @@ rm -rf /opt/intel/sgx-dcap-pccs/config/* 2>/dev/null || true
 
 # Install packages
 print_section_header "Installing packages..."
-apt-get update
-apt-get install -y \
-    libsgx-ae-id-enclave \
-    libsgx-ae-pce \
-    libsgx-ae-tdqe \
-    libsgx-dcap-default-qpl \
-    libsgx-enclave-common1 \
-    libsgx-pce-logic1 \
-    libsgx-tdx-logic1 \
-    libsgx-urts2 \
-    sgx-dcap-pccs \
-    sgx-pck-id-retrieval-tool \
-    sgx-ra-service \
-    sgx-setup \
-    tdx-qgs
+
+if [ "$USE_INTEL_REPO" -eq 1 ]; then
+    # Intel repo: package names without version suffixes, no sgx-setup
+    apt-get install -y \
+        libsgx-ae-id-enclave \
+        libsgx-ae-pce \
+        libsgx-ae-tdqe \
+        libsgx-dcap-default-qpl \
+        libsgx-enclave-common \
+        libsgx-pce-logic \
+        libsgx-tdx-logic \
+        libsgx-urts \
+        sgx-dcap-pccs \
+        sgx-pck-id-retrieval-tool \
+        sgx-ra-service \
+        tdx-qgs
+else
+    # Canonical PPA: versioned package names + sgx-setup
+    apt-get install -y \
+        libsgx-ae-id-enclave \
+        libsgx-ae-pce \
+        libsgx-ae-tdqe \
+        libsgx-dcap-default-qpl \
+        libsgx-enclave-common1 \
+        libsgx-pce-logic1 \
+        libsgx-tdx-logic1 \
+        libsgx-urts2 \
+        sgx-dcap-pccs \
+        sgx-pck-id-retrieval-tool \
+        sgx-ra-service \
+        sgx-setup \
+        tdx-qgs
+fi
 check_error "Failed to install packages"
 
 # Create PCCS config directory
