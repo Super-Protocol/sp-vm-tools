@@ -399,7 +399,8 @@ done
 # Remove existing packages (ignore if not installed)
 print_section_header "Removing existing packages..."
 if dpkg -s sgx-dcap-pccs &>/dev/null; then
-    apt-get remove -y sgx-dcap-pccs
+    sudo dpkg --purge --force-all sgx-dcap-pccs
+    sudo rm -f /var/lib/dpkg/info/sgx-dcap-pccs.*
 else
     echo "Package sgx-dcap-pccs not installed, skipping"
 fi
@@ -407,7 +408,7 @@ fi
 # Clean up old configurations
 print_section_header "Cleaning up old configurations..."
 rm -f /etc/sgx_default_qcnl.conf
-rm -rf /opt/intel/sgx-dcap-pccs/config/* 2>/dev/null || true
+rm -rf /opt/intel/sgx-dcap-pccs
 
 # Install packages
 print_section_header "Installing packages..."
