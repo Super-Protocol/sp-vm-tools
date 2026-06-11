@@ -294,6 +294,22 @@ if [ "$UBUNTU_VERSION" -ge 26 ] 2>/dev/null; then
     fi
 fi
 
+# Add Intel SGX repository
+print_section_header "Adding Intel SGX repository..."
+CODENAME=$(lsb_release -cs)
+
+mkdir -p /etc/apt/keyrings
+curl -fsSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key \
+    -o /etc/apt/keyrings/intel-sgx-keyring.asc
+check_error "Failed to download Intel SGX repository key"
+
+tee /etc/apt/sources.list.d/intel-sgx.list > /dev/null <<EOF
+deb [signed-by=/etc/apt/keyrings/intel-sgx-keyring.asc arch=amd64] https://download.01.org/intel-sgx/sgx_repo/ubuntu ${CODENAME} main
+EOF
+
+apt-get update
+check_error "Failed to update package lists"
+
 print_section_header "BIOS Configuration Verification"
 if ! check_bios_settings; then
     echo -e "${RED}ERROR: Required BIOS settings are not properly configured${NC}"
