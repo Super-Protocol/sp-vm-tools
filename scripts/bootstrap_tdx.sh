@@ -10,7 +10,7 @@ update_tdx_module() {
   TMP_DIR=$1
   echo "Updating TDX-module..."
   pushd "${TMP_DIR}"
-  wget https://github.com/intel/tdx-module/releases/download/TDX_1.5.06/intel_tdx_module.tar.gz
+  wget https://github.com/intel/confidential-computing.tdx.tdx-module/releases/download/TDX_MODULE_2.0.14/intel_tdx_module.tar.gz
   tar -xvzf intel_tdx_module.tar.gz
   mkdir -p /boot/efi/EFI/TDX/
   cp -vf TDX-Module/intel_tdx_module.so /boot/efi/EFI/TDX/TDX-SEAM.so
@@ -48,16 +48,6 @@ bootstrap() {
         exit 1
     fi
     
-    echo "Downloading official Canonical TDX 3.3..."
-    cd "${TMP_DIR}"
-    wget https://github.com/canonical/tdx/archive/refs/tags/3.3.zip
-    unzip 3.3.zip
-    mv tdx-3.3 tdx
-    cd tdx
-    
-    echo "Running official TDX host setup..."
-    ./setup-tdx-host.sh
-
     print_section_header "TDX Module Update"
     echo "Updating TDX module..."
     update_tdx_module "${TMP_DIR}"

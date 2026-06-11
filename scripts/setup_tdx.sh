@@ -220,6 +220,7 @@ check_bios_settings() {
 }
 
 TMP_DIR=$1
+TDX_COMMIT="9e0d733b969c4088b751a1be073dab7603866a57"
 
 if [ -d "${TMP_DIR}/tdx-cannonical" ]; then
     echo -e "${YELLOW}Directory ${TMP_DIR}/tdx-cannonical already exists${NC}"
@@ -228,13 +229,20 @@ if [ -d "${TMP_DIR}/tdx-cannonical" ]; then
 fi
 
 # Download the setup-attestation-host.sh script
-git clone -b 3.3 --single-branch --depth 1 --no-tags https://github.com/canonical/tdx.git "${TMP_DIR}/tdx-cannonical"
+git clone --no-tags https://github.com/canonical/tdx.git "${TMP_DIR}/tdx-cannonical"
 SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/setup-tdx-host.sh
 # Check for download errors
 if [ $? -ne 0 ]; then
-echo "Failed to download the setup-tdx-host.sh script."
-exit 1
+    echo "Failed to download the setup-tdx-host.sh script."
+    exit 1
 fi
+
+git -C "${TMP_DIR}/tdx-cannonical" checkout --detach "${TDX_COMMIT}"
+if [ $? -ne 0 ]; then
+    echo "Failed to checkout tdx commit ${TDX_COMMIT}."
+    exit 1
+fi
+
 # Make the script executable
 echo "Running setup-tdx-host.sh..."
 chmod +x "${SCRIPT_PATH}"
