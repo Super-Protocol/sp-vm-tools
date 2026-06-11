@@ -282,6 +282,18 @@ echo "Running setup-tdx-host.sh..."
 chmod +x "${SCRIPT_PATH}"
 "${SCRIPT_PATH}"
 
+# Remove kobuk-team TDX PPA on Ubuntu 26+ (no release published for it)
+UBUNTU_VERSION=$(lsb_release -rs | cut -d. -f1)
+if [ "$UBUNTU_VERSION" -ge 26 ] 2>/dev/null; then
+    PPA_FILES=$(grep -rl "kobuk-team" /etc/apt/sources.list.d/ 2>/dev/null || true)
+    if [ -n "$PPA_FILES" ]; then
+        echo "Ubuntu ${UBUNTU_VERSION} detected, removing kobuk-team TDX PPA (not supported)"
+        rm -f $PPA_FILES
+        rm -f /etc/apt/keyrings/kobuk-team-*.gpg \
+              /etc/apt/trusted.gpg.d/kobuk-team-*.gpg 2>/dev/null || true
+    fi
+fi
+
 print_section_header "BIOS Configuration Verification"
 if ! check_bios_settings; then
     echo -e "${RED}ERROR: Required BIOS settings are not properly configured${NC}"
