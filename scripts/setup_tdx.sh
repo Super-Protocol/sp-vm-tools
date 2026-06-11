@@ -130,15 +130,49 @@ check_all_bios_settings() {
     fi
 
     results+=("TXT Settings:")
-    local sinit_base=$(txt-stat | grep "SINIT.BASE:" | awk '{print $2}')
-    if [ "$sinit_base" != "0x0" ] && [ "$sinit_base" != "" ]; then
-        results+=("${SUCCESS} TXT enabled (SINIT ACM present)${NC}")
-    else
-        results+=("${FAILURE} TXT not enabled in BIOS${NC}")
-        results+=("  Required: Enable TXT in BIOS")
+    
+    local sinit_base=""
+    
+    # 0) Does the CPU support SMX/TXT at all?
+    if ! grep -qw smx /proc/cpuinfo; then
+        results+=("${FAILURE} CPU does not support SMX/TXT${NC}")
         all_passed=false
+    else
+        # 1) Read SINIT.BASE directly from TXT public config space:
+        #    0xFED30000 + 0x270 (this is what txt-stat used to do)
+        sinit_base=$(od -An -tx4 -j $((0xFED30270)) -N4 /dev/mem 2>/dev/null | tr -d ' ')
+        [ -n "$sinit_base" ] && sinit_base="0x${sinit_base}"
+    
+        # 2) Fallback: IA32_FEATURE_CONTROL MSR (0x3A), bit 15 = SENTER global enable.
+        #    Set by BIOS when TXT is enabled. Used when /dev/mem is unavailable
+        #    (e.g. kernel lockdown).
+        if [ -z "$sinit_base" ] && command -v rdmsr >/dev/null 2>&1; then
+            modprobe msr 2>/dev/null
+            local senter_en
+            senter_en=$(rdmsr -f 15:15 0x3a 2>/dev/null)
+            if [ "$senter_en" = "1" ]; then
+                results+=("${SUCCESS} TXT enabled (SENTER enabled in IA32_FEATURE_CONTROL)${NC}")
+            else
+                results+=("${FAILURE} TXT not enabled in BIOS${NC}")
+                results+=("  Required: Enable TXT in BIOS")
+                all_passed=false
+            fi
+            sinit_base="__msr_checked__"
+        fi
+    
+        if [ "$sinit_base" != "__msr_checked__" ]; then
+            # 0xffffffff means the chipset does not decode the TXT region => TXT disabled.
+            # Empty value means we could not read /dev/mem at all.
+            if [ -n "$sinit_base" ] && [ "$sinit_base" != "0x0" ] && \
+               [ "$sinit_base" != "0x00000000" ] && [ "$sinit_base" != "0xffffffff" ]; then
+                results+=("${SUCCESS} TXT enabled (SINIT.BASE = $sinit_base)${NC}")
+            else
+                results+=("${FAILURE} TXT not enabled in BIOS${NC}")
+                results+=("  Required: Enable TXT in BIOS")
+                all_passed=false
+            fi
+        fi
     fi
-
     results+=("SEAM Settings:")
     if dmesg | grep -q "virt/tdx: module initialized" && \
        dmesg | grep -q "virt/tdx: BIOS enabled"; then
@@ -206,7 +240,7 @@ check_all_bios_settings() {
 check_bios_settings() {
     echo "Performing comprehensive BIOS configuration check..."
     echo "Installing components..."
-    apt-get update && apt-get install -y msr-tools cpuid tboot
+    apt-get update && apt-get install -y msr-tools cpuid
     
     # Load the msr module if not loaded
     if ! lsmod | grep -q "^msr"; then
