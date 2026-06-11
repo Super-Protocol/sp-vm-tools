@@ -289,11 +289,6 @@ if ! check_bios_settings; then
     exit 1
 fi
 
-echo "Running setup-attestation-host.sh..."
-SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/attestation/setup-attestation-host.sh
-chmod +x "${SCRIPT_PATH}"
-"${SCRIPT_PATH}"
-
 # Function for error handling
 check_error() {
     if [ $? -ne 0 ]; then
