@@ -377,6 +377,49 @@ register_platform() {
     return $?
 }
 
+remove_pccs() {
+    print_section_header "Removing existing PCCS installation..."
+
+    # Check package state in dpkg database (any state: ii, iF, iU, rc...)
+    local state
+    state=$(dpkg-query -W -f='${db:Status-Abbrev}' sgx-dcap-pccs 2>/dev/null || true)
+
+    if [ -n "$state" ] && [ "$state" != "un " ]; then
+        echo "Found sgx-dcap-pccs in state '${state}', purging..."
+
+        # Try normal purge first
+        if ! dpkg --purge --force-all sgx-dcap-pccs 2>/dev/null; then
+            # Maintainer scripts are failing — neutralize them and retry
+            echo "Purge failed, neutralizing maintainer scripts..."
+            local f
+            for f in /var/lib/dpkg/info/sgx-dcap-pccs.{prerm,postrm,postinst,preinst}; do
+                if [ -f "$f" ]; then
+                    printf '#!/bin/sh\nexit 0\n' > "$f"
+                    chmod +x "$f"
+                fi
+            done
+            dpkg --purge --force-all sgx-dcap-pccs
+        fi
+
+        # Verify it's actually gone
+        state=$(dpkg-query -W -f='${db:Status-Abbrev}' sgx-dcap-pccs 2>/dev/null || true)
+        if [ -n "$state" ] && [ "$state" != "un " ]; then
+            echo -e "${RED}ERROR: Failed to purge sgx-dcap-pccs (state: ${state})${NC}"
+            exit 1
+        fi
+        echo "Package purged successfully"
+    else
+        echo "Package sgx-dcap-pccs not installed, skipping purge"
+    fi
+
+    # Always remove the directory: PCCS generates files dpkg doesn't track
+    # (pckcache.db, logs, node_modules, retrieval CSVs)
+    if [ -d /opt/intel/sgx-dcap-pccs ]; then
+        echo "Removing /opt/intel/sgx-dcap-pccs..."
+        rm -rf /opt/intel/sgx-dcap-pccs
+    fi
+}
+
 print_section_header "Starting clean PCCS installation and setup..."
 
 # Check if running as root
@@ -397,28 +440,11 @@ for svc in pccs qgsd mpa_registration_tool; do
 done
 
 print_section_header "Removing existing packages..."
-
-# Collect all SGX/TDX-related packages in ANY dpkg state (ii, iU, iF, rc...)
-OLD_PKGS=$(dpkg -l 2>/dev/null | awk '$1 ~ /^[a-z][a-zA-Z]?$/ && ($2 ~ /^libsgx-/ || $2 ~ /^sgx-/ || $2 ~ /^libmpa-/ || $2 == "tdx-qgs") {print $2}')
-
-if [ -n "$OLD_PKGS" ]; then
-    echo "Purging: $OLD_PKGS"
-    if ! dpkg --purge --force-all $OLD_PKGS; then
-        # Fallback: nuke leftover maintainer scripts and retry
-        for pkg in $OLD_PKGS; do
-            rm -f /var/lib/dpkg/info/${pkg}.*
-        done
-        dpkg --purge --force-all $OLD_PKGS 2>/dev/null || true
-    fi
-    apt-get -f install -y 2>/dev/null || true
-else
-    echo "No SGX/TDX packages installed, skipping"
-fi
+remove_pccs
 
 # Clean up old configurations
 print_section_header "Cleaning up old configurations..."
 rm -f /etc/sgx_default_qcnl.conf
-rm -rf /opt/intel/sgx-dcap-pccs
 
 # Install packages
 print_section_header "Installing packages..."
