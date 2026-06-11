@@ -62,7 +62,7 @@ EOF
 
   # Clone gpu-admin-tools
   sudo rm -rf "${TMP_DIR}/gpu-admin-tools" 2>/dev/null || true
-  git clone -b v2025.04.07 --single-branch --depth 1 --no-tags https://github.com/NVIDIA/gpu-admin-tools.git "${TMP_DIR}/gpu-admin-tools"
+  git clone -b v2026.06.05 --single-branch --depth 1 --no-tags https://github.com/NVIDIA/gpu-admin-tools.git "${TMP_DIR}/gpu-admin-tools"
   pushd "${TMP_DIR}/gpu-admin-tools"
 
   # Step 1: Disable PPCIe mode on GPUs only (using BDF addresses)
