@@ -848,11 +848,13 @@ print_section_header "Registering platform with PCCS..."
 register_platform
 check_error "Failed to register platform"
 
-# Start remaining services
+# Start remaining services. Use restart (not start) so they reload the freshly
+# written config: qgsd re-reads /etc/sgx_default_qcnl.conf, and the one-shot
+# mpa_registration_tool re-runs the registration flow.
 print_section_header "Starting remaining services..."
-systemctl start qgsd
+systemctl restart qgsd
 wait_for_service qgsd
-systemctl start mpa_registration_tool
+systemctl restart mpa_registration_tool
 
 # Check services status
 print_section_header "Checking services status..."
