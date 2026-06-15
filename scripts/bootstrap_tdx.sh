@@ -87,6 +87,18 @@ update_tdx_module() {
 
 install_qemu_from_release() {
   local tmp_dir="$1"
+
+  # The bundled sp-qemu-tdx deb is built for Ubuntu 24.04 (Noble), whose PPA
+  # QEMU (8.2.2) lacks iommufd. Newer Ubuntu releases (24.10 / 25.04+) already
+  # ship QEMU >= 9 with iommufd from the archive/PPA, so the bundled deb is
+  # neither needed nor binary-compatible there.
+  local ubuntu_version=""
+  [ -f /etc/os-release ] && ubuntu_version=$(. /etc/os-release && echo "$VERSION_ID")
+  if [ "$ubuntu_version" != "24.04" ]; then
+    echo "Ubuntu ${ubuntu_version:-unknown}: skipping bundled QEMU (distro QEMU >= 9 with iommufd is used)"
+    return 0
+  fi
+
   local work="${tmp_dir}/qemu-pkg"
   # URL-encode the '+' in the tag for the direct download URL.
   local tag_enc="${QEMU_RELEASE_TAG//+/%2B}"
@@ -94,7 +106,9 @@ install_qemu_from_release() {
 
   echo "Installing QEMU from ${QEMU_RELEASE_REPO}@${QEMU_RELEASE_TAG}..."
   mkdir -p "${work}"
+  echo "Downloading ${QEMU_RELEASE_ASSET} (~160 MB), this may take a while..."
   wget -O "${work}/${QEMU_RELEASE_ASSET}" "${url}"
+  echo "Download complete: ${work}/${QEMU_RELEASE_ASSET}"
   tar -xzf "${work}/${QEMU_RELEASE_ASSET}" -C "${work}"
 
   # The archive contains several debs (kernel, qemu, OVMF). Install ONLY QEMU.
@@ -106,8 +120,13 @@ install_qemu_from_release() {
   fi
   echo "Installing QEMU package: $(basename "${qemu_deb}")"
   # apt resolves the deb's deps (e.g. libslirp0); installs into /usr/local/bin.
-  apt-get install -y "${qemu_deb}"
-  check_error "Failed to install QEMU package"
+  # APT::Sandbox::User=root: the deb lives in a root-only mktemp dir that the
+  # unprivileged '_apt' user cannot read, which otherwise triggers a sandbox
+  # permission warning.
+  if ! apt-get install -y -o APT::Sandbox::User=root "${qemu_deb}"; then
+    echo -e "${RED}ERROR: Failed to install QEMU package${NC}"
+    exit 1
+  fi
 }
 
 bootstrap() {
