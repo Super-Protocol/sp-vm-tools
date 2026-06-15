@@ -270,6 +270,25 @@ find_qemu_path() {
     exit 1
 }
 
+check_qemu_version() {
+    local min_major=9
+    local ver major
+    ver=$("${QEMU_PATH}" --version 2>/dev/null | head -1)
+    major=$(echo "${ver}" | sed -nE 's/.*version ([0-9]+).*/\1/p')
+    if [[ -z "${major}" ]]; then
+        echo "Error: could not parse QEMU version from: '${ver}'"
+        exit 1
+    fi
+    if (( major < min_major )); then
+        echo "Error: QEMU major version ${major} is too old (need >= ${min_major})."
+        echo "Found: ${ver} at ${QEMU_PATH}"
+        echo "iommufd-based passthrough requires QEMU >= 9.0."
+        echo "Re-run scripts/bootstrap_tdx.sh to install the bundled QEMU."
+        exit 1
+    fi
+    echo "QEMU version OK: ${ver} (${QEMU_PATH})"
+}
+
 download_release() {
     RELEASE_NAME=$1
     ASSET_NAME=$2
@@ -825,6 +844,9 @@ main() {
 
     # Find QEMU path before using it
     find_qemu_path
+    if [[ "${VM_MODE}" == "tdx" || "${VM_MODE}" == "sev-snp" ]]; then
+        check_qemu_version
+    fi
 
     mkdir -p "${CACHE}"
     download_release "${RELEASE}" "${RELEASE_ASSET}" "${CACHE}" "${RELEASE_REPO}"

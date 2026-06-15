@@ -6,9 +6,12 @@ source_common() {
     source "${script_dir}/common.sh"
 }
 
-# Newest known TDX module branch. Used as the fallback for unrecognized CPUs
-# that appear to be newer than anything in the map below.
-TDX_MODULE_LATEST="2.0.14"
+# QEMU is installed from the sp-vm-tools release archive (package-tdx.tar.gz),
+# which bundles sp-qemu-tdx (QEMU 9.x + Intel TDX device-passthrough patches,
+# with iommufd support). The PPA QEMU on Ubuntu 24.04 (8.2.2) lacks iommufd.
+QEMU_RELEASE_REPO="Super-Protocol/sp-vm-tools"
+QEMU_RELEASE_TAG="39-tdx+snp"          # newest tag carrying package-tdx.tar.gz
+QEMU_RELEASE_ASSET="package-tdx.tar.gz"
 
 # Resolve the TDX SEAM module version to install for the host CPU.
 # Prints the version string (e.g. "2.0.14") to stdout; all human-readable
@@ -16,6 +19,9 @@ TDX_MODULE_LATEST="2.0.14"
 # Returns non-zero on an unsupported (older / non-Intel) CPU.
 detect_tdx_module_version() {
   local vendor family model codename version
+  # Newest known TDX module branch. Used as the fallback for unrecognized CPUs
+  # that appear to be newer than anything in the map below.
+  local TDX_MODULE_LATEST="2.0.14"
 
   vendor=$(awk -F: '/^vendor_id/{gsub(/ /,"",$2);print $2;exit}' /proc/cpuinfo)
   family=$(awk -F: '/^cpu family/{gsub(/ /,"",$2);print $2;exit}' /proc/cpuinfo)
@@ -79,6 +85,31 @@ update_tdx_module() {
   popd
 }
 
+install_qemu_from_release() {
+  local tmp_dir="$1"
+  local work="${tmp_dir}/qemu-pkg"
+  # URL-encode the '+' in the tag for the direct download URL.
+  local tag_enc="${QEMU_RELEASE_TAG//+/%2B}"
+  local url="https://github.com/${QEMU_RELEASE_REPO}/releases/download/${tag_enc}/${QEMU_RELEASE_ASSET}"
+
+  echo "Installing QEMU from ${QEMU_RELEASE_REPO}@${QEMU_RELEASE_TAG}..."
+  mkdir -p "${work}"
+  wget -O "${work}/${QEMU_RELEASE_ASSET}" "${url}"
+  tar -xzf "${work}/${QEMU_RELEASE_ASSET}" -C "${work}"
+
+  # The archive contains several debs (kernel, qemu, OVMF). Install ONLY QEMU.
+  local qemu_deb
+  qemu_deb=$(find "${work}" -maxdepth 2 -name 'sp-qemu-tdx*.deb' | head -n1)
+  if [ -z "${qemu_deb}" ]; then
+    echo -e "${RED}ERROR: sp-qemu-tdx*.deb not found in ${QEMU_RELEASE_ASSET}${NC}"
+    exit 1
+  fi
+  echo "Installing QEMU package: $(basename "${qemu_deb}")"
+  # apt resolves the deb's deps (e.g. libslirp0); installs into /usr/local/bin.
+  apt-get install -y "${qemu_deb}"
+  check_error "Failed to install QEMU package"
+}
+
 bootstrap() {
     check_os_version "24.04"
 
@@ -109,6 +140,9 @@ bootstrap() {
         exit 1
     fi
     
+    print_section_header "QEMU Installation"
+    install_qemu_from_release "${TMP_DIR}"
+
     print_section_header "TDX Module Update"
     echo "Updating TDX module..."
     update_tdx_module "${TMP_DIR}"
