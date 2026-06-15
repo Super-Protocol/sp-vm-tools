@@ -34,6 +34,7 @@ check_error() {
 # Configuration variables
 PCCS_API_KEY="aecd5ebb682346028d60c36131eb2d92"
 PCCS_PORT="8081"
+PCCS_URL="https://localhost:${PCCS_PORT}"
 PCCS_PASSWORD="pccspassword123"
 # Generate SHA512 hash of the password
 USER_TOKEN=$(echo -n "${PCCS_PASSWORD}" | sha512sum | awk '{print $1}')
@@ -569,8 +570,49 @@ register_platform() {
         -url "https://localhost:${PCCS_PORT}" \
         -use_secure_cert false \
         -user_token "${PCCS_PASSWORD}"
-    
+
     return $?
+}
+
+# HTTP 200 from the PCCS pckcert endpoint = the platform's PCK certificate is
+# available in PCCS, i.e. quote generation will work. In LAZY caching mode PCCS
+# fetches it from Intel PCS on demand; 404 means the platform is not registered.
+pck_cert_available() {
+    local csv=/tmp/pckid_retrieval.csv code
+    local EPPID PCEID CPUSVN PCESVN QEID _
+    rm -f "$csv"
+    PCKIDRetrievalTool -f "$csv" >/tmp/pckid_tool.out 2>&1 || true
+    if [ ! -s "$csv" ]; then
+        echo "PCK ID retrieval produced no data" >&2
+        return 1
+    fi
+    IFS=, read -r EPPID PCEID CPUSVN PCESVN QEID _ < "$csv" || true
+    code=$(curl -ks -o /dev/null -w '%{http_code}' \
+        "${PCCS_URL}/sgx/certification/v4/pckcert?qeid=${QEID}&encrypted_ppid=${EPPID}&cpusvn=${CPUSVN}&pcesvn=${PCESVN}&pceid=${PCEID}")
+    [ "$code" = "200" ]
+}
+
+# Confirm the platform is registered (PCK cert retrievable via PCCS). If not,
+# try to register once more, then fall back to a BIOS recommendation.
+ensure_platform_registered() {
+    print_section_header "Verifying platform registration..."
+
+    pck_cert_available && { echo -e "${SUCCESS} Platform PCK cert available in PCCS${NC}"; return 0; }
+
+    # Not in PCCS yet — try to register (with the platform manifest if it is
+    # still in UEFI). With a manifest PCCS performs indirect registration via
+    # Intel PCS.
+    echo "PCK cert not found, attempting platform registration..."
+    PCKIDRetrievalTool -url "$PCCS_URL" -use_secure_cert false -user_token "$PCCS_PASSWORD" || true
+
+    pck_cert_available && { echo -e "${SUCCESS} Platform registered in PCCS${NC}"; return 0; }
+
+    echo -e "${FAILURE} Platform is not registered (PCK cert not available in PCCS)${NC}"
+    echo -e "${YELLOW}Reboot into BIOS and set:${NC}"
+    echo "  - SGX Factory Reset        -> Enable"
+    echo "  - SGX Auto MP Registration -> Enable"
+    echo "Then reboot and re-run the bootstrap."
+    return 1
 }
 
 remove_pccs() {
@@ -783,6 +825,11 @@ if systemctl is-enabled --quiet mpa_registration_tool; then
     systemctl status mpa_registration_tool --no-pager || true
 else
     echo -e "${RED}Error: mpa_registration_tool is not properly configured${NC}"
+    exit 1
+fi
+
+# All components installed and started — confirm the platform is registered.
+if ! ensure_platform_registered; then
     exit 1
 fi
 
