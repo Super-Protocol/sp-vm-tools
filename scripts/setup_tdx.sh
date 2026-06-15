@@ -35,6 +35,9 @@ check_error() {
 PCCS_API_KEY="aecd5ebb682346028d60c36131eb2d92"
 PCCS_PORT="8081"
 PCCS_URL="https://localhost:${PCCS_PORT}"
+# Intel PCS (upstream), used to tell a PCCS-side problem from a real
+# registration error when the local PCCS cannot serve a PCK certificate.
+INTEL_PCS_URL="https://api.trustedservices.intel.com/sgx/certification/v4"
 PCCS_PASSWORD="pccspassword123"
 # Generate SHA512 hash of the password
 USER_TOKEN=$(echo -n "${PCCS_PASSWORD}" | sha512sum | awk '{print $1}')
@@ -574,12 +577,12 @@ register_platform() {
     return $?
 }
 
-# HTTP 200 from the PCCS pckcert endpoint = the platform's PCK certificate is
-# available in PCCS, i.e. quote generation will work. In LAZY caching mode PCCS
-# fetches it from Intel PCS on demand; 404 means the platform is not registered.
-pck_cert_available() {
-    local csv=/tmp/pckid_retrieval.csv code
-    local EPPID PCEID CPUSVN PCESVN QEID _
+# Read this platform's PCK identity (encrypted PPID + SVNs) into globals
+# EPPID/PCEID/CPUSVN/PCESVN/QEID. The encrypted PPID is PCS-encrypted (no -url),
+# which is what both the local PCCS and Intel PCS expect. Returns non-zero if
+# the tool produced no data (SGX not available / not configured).
+get_pck_identity() {
+    local csv=/tmp/pckid_retrieval.csv
     rm -f "$csv"
     PCKIDRetrievalTool -f "$csv" >/tmp/pckid_tool.out 2>&1 || true
     if [ ! -s "$csv" ]; then
@@ -587,31 +590,76 @@ pck_cert_available() {
         return 1
     fi
     IFS=, read -r EPPID PCEID CPUSVN PCESVN QEID _ < "$csv" || true
-    code=$(curl -ks -o /dev/null -w '%{http_code}' \
-        "${PCCS_URL}/sgx/certification/v4/pckcert?qeid=${QEID}&encrypted_ppid=${EPPID}&cpusvn=${CPUSVN}&pcesvn=${PCESVN}&pceid=${PCEID}")
-    [ "$code" = "200" ]
 }
 
-# Confirm the platform is registered (PCK cert retrievable via PCCS). If not,
-# try to register once more, then fall back to a BIOS recommendation.
+# HTTP code for this platform's PCK cert from the LOCAL PCCS (200 = available).
+pccs_pckcert_code() {
+    curl -ks -o /dev/null -w '%{http_code}' \
+        "${PCCS_URL}/sgx/certification/v4/pckcert?qeid=${QEID}&encrypted_ppid=${EPPID}&cpusvn=${CPUSVN}&pcesvn=${PCESVN}&pceid=${PCEID}"
+}
+
+# HTTP code from Intel PCS directly, using the configured ApiKey. This bypasses
+# PCCS, so it tells us whether the platform is actually registered (200), the
+# ApiKey is invalid (401), or the platform is not registered (404).
+intel_pcs_pckcert_code() {
+    curl -s -o /dev/null -w '%{http_code}' \
+        -H "Ocp-Apim-Subscription-Key: ${PCCS_API_KEY}" \
+        "${INTEL_PCS_URL}/pckcert?qeid=${QEID}&encrypted_ppid=${EPPID}&cpusvn=${CPUSVN}&pcesvn=${PCESVN}&pceid=${PCEID}"
+}
+
+# Confirm the platform is usable (PCK cert retrievable via PCCS). If not, try to
+# register once, then distinguish a PCCS-side problem from a real registration
+# error by querying Intel PCS directly.
 ensure_platform_registered() {
     print_section_header "Verifying platform registration..."
 
-    pck_cert_available && { echo -e "${SUCCESS} Platform PCK cert available in PCCS${NC}"; return 0; }
+    if ! get_pck_identity; then
+        echo -e "${FAILURE} Could not read platform PCK identity (SGX not available?)${NC}"
+        return 1
+    fi
 
-    # Not in PCCS yet — try to register (with the platform manifest if it is
-    # still in UEFI). With a manifest PCCS performs indirect registration via
-    # Intel PCS.
-    echo "PCK cert not found, attempting platform registration..."
+    # Already served by the local PCCS?
+    if [ "$(pccs_pckcert_code)" = "200" ]; then
+        echo -e "${SUCCESS} Platform PCK cert available in PCCS${NC}"
+        return 0
+    fi
+
+    # Try one (re)registration via PCCS, then recheck.
+    echo "PCK cert not in PCCS yet, attempting registration..."
     PCKIDRetrievalTool -url "$PCCS_URL" -use_secure_cert false -user_token "$PCCS_PASSWORD" || true
+    if [ "$(pccs_pckcert_code)" = "200" ]; then
+        echo -e "${SUCCESS} Platform registered (PCK cert now in PCCS)${NC}"
+        return 0
+    fi
 
-    pck_cert_available && { echo -e "${SUCCESS} Platform registered in PCCS${NC}"; return 0; }
-
-    echo -e "${FAILURE} Platform is not registered (PCK cert not available in PCCS)${NC}"
-    echo -e "${YELLOW}Reboot into BIOS and set:${NC}"
-    echo "  - SGX Factory Reset        -> Enable"
-    echo "  - SGX Auto MP Registration -> Enable"
-    echo "Then reboot and re-run the bootstrap."
+    # Still failing through PCCS. Ask Intel PCS directly to tell a PCCS problem
+    # apart from a genuine registration error.
+    local pcs_code
+    pcs_code=$(intel_pcs_pckcert_code)
+    echo "PCCS cannot serve the PCK cert; Intel PCS direct check = HTTP ${pcs_code}"
+    case "$pcs_code" in
+        200)
+            echo -e "${FAILURE} PCCS problem: the platform IS registered (Intel PCS has the cert), but PCCS will not serve it.${NC}"
+            echo "This is not a registration error. Likely a stale/invalid PCCS ApiKey or cache. Check:"
+            echo "  - sudo systemctl restart pccs        (reload config)"
+            echo "  - journalctl -u pccs -n 50           (look for 'invalid subscription key')"
+            echo "  - ApiKey in /opt/intel/sgx-dcap-pccs/config/default.json"
+            ;;
+        401)
+            echo -e "${FAILURE} PCCS problem: Intel PCS rejects the ApiKey (401 — invalid/expired subscription key).${NC}"
+            echo "Set a valid key (PCCS_API_KEY / default.json ApiKey), then: sudo systemctl restart pccs"
+            ;;
+        404)
+            echo -e "${FAILURE} Registration error: the platform is NOT registered (Intel PCS returned 404).${NC}"
+            echo -e "${YELLOW}Reboot into BIOS and set:${NC}"
+            echo "  - SGX Factory Reset        -> Enable"
+            echo "  - SGX Auto MP Registration -> Enable"
+            echo "Then reboot and re-run the bootstrap."
+            ;;
+        *)
+            echo -e "${FAILURE} Could not determine status (Intel PCS HTTP ${pcs_code}). Check network/proxy and PCCS logs.${NC}"
+            ;;
+    esac
     return 1
 }
 
@@ -779,9 +827,12 @@ print_section_header "Enabling and starting services..."
 systemctl enable pccs qgsd mpa_registration_tool
 systemctl daemon-reload
 
-# Start PCCS first
+# Start PCCS first. Use restart (not start): if pccs is already running from a
+# previous run / boot it would keep its stale in-memory config and ignore the
+# freshly written default.json (e.g. an updated ApiKey), causing 401s from Intel
+# PCS. restart forces it to reload the current config.
 print_section_header "Starting PCCS..."
-systemctl start pccs
+systemctl restart pccs
 wait_for_service pccs
 check_error "Failed to start PCCS"
 sleep 5
