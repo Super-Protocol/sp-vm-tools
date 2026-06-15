@@ -6,11 +6,13 @@ source_common() {
     source "${script_dir}/common.sh"
 }
 
-# QEMU is installed from the sp-vm-tools release archive (package-tdx.tar.gz),
-# which bundles sp-qemu-tdx (QEMU 9.x + Intel TDX device-passthrough patches,
-# with iommufd support). The PPA QEMU on Ubuntu 24.04 (8.2.2) lacks iommufd.
+# On Ubuntu 24.04 the matched TDX kernel + QEMU are installed from the
+# sp-vm-tools release archive (package-tdx.tar.gz): a custom kernel plus
+# sp-qemu-tdx (QEMU 9.x + Intel TDX device-passthrough patches, with iommufd).
+# They share the same TDX KVM ABI; the stock 24.04 kernel + PPA QEMU (8.2.2) do
+# not provide iommufd / a compatible interface.
 QEMU_RELEASE_REPO="Super-Protocol/sp-vm-tools"
-QEMU_RELEASE_TAG="38-tdx+snp"          # newest tag carrying package-tdx.tar.gz
+QEMU_RELEASE_TAG="38-tdx+snp"          # tag carrying package-tdx.tar.gz
 QEMU_RELEASE_ASSET="package-tdx.tar.gz"
 
 # Resolve the TDX SEAM module version to install for the host CPU.
@@ -85,48 +87,45 @@ update_tdx_module() {
   popd
 }
 
-install_qemu_from_release() {
+install_tdx_release_packages() {
   local tmp_dir="$1"
 
-  # The bundled sp-qemu-tdx deb is built for Ubuntu 24.04 (Noble), whose PPA
-  # QEMU (8.2.2) lacks iommufd. Newer Ubuntu releases (24.10 / 25.04+) already
-  # ship QEMU >= 9 with iommufd from the archive/PPA, so the bundled deb is
-  # neither needed nor binary-compatible there.
+  # The bundled debs (custom TDX kernel + sp-qemu-tdx, with iommufd / device
+  # passthrough) are built for Ubuntu 24.04 (Noble), whose stock kernel + PPA
+  # QEMU (8.2.2) lack what we need. The kernel and QEMU are a matched pair (same
+  # TDX KVM ABI). Newer Ubuntu (24.10 / 25.04+) already ship a suitable kernel
+  # and QEMU >= 9 with iommufd, so the bundle is neither needed nor
+  # binary-compatible there -- install it only on 24.04.
   local ubuntu_version=""
   [ -f /etc/os-release ] && ubuntu_version=$(. /etc/os-release && echo "$VERSION_ID")
   if [ "$ubuntu_version" != "24.04" ]; then
-    echo "Ubuntu ${ubuntu_version:-unknown}: skipping bundled QEMU (distro QEMU >= 9 with iommufd is used)"
+    echo "Ubuntu ${ubuntu_version:-unknown}: skipping bundled TDX kernel/QEMU (distro stack is used)"
     return 0
   fi
 
-  local work="${tmp_dir}/qemu-pkg"
+  local work="${tmp_dir}/tdx-pkg"
   # URL-encode the '+' in the tag for the direct download URL.
   local tag_enc="${QEMU_RELEASE_TAG//+/%2B}"
   local url="https://github.com/${QEMU_RELEASE_REPO}/releases/download/${tag_enc}/${QEMU_RELEASE_ASSET}"
 
-  echo "Installing QEMU from ${QEMU_RELEASE_REPO}@${QEMU_RELEASE_TAG}..."
+  echo "Installing TDX kernel + QEMU from ${QEMU_RELEASE_REPO}@${QEMU_RELEASE_TAG}..."
   mkdir -p "${work}"
   echo "Downloading ${QEMU_RELEASE_ASSET} (~160 MB), this may take a while..."
   wget -O "${work}/${QEMU_RELEASE_ASSET}" "${url}"
   echo "Download complete: ${work}/${QEMU_RELEASE_ASSET}"
   tar -xzf "${work}/${QEMU_RELEASE_ASSET}" -C "${work}"
 
-  # The archive contains several debs (kernel, qemu, OVMF). Install ONLY QEMU.
-  local qemu_deb
-  qemu_deb=$(find "${work}" -maxdepth 2 -name 'sp-qemu-tdx*.deb' | head -n1)
-  if [ -z "${qemu_deb}" ]; then
-    echo -e "${RED}ERROR: sp-qemu-tdx*.deb not found in ${QEMU_RELEASE_ASSET}${NC}"
-    exit 1
-  fi
-  echo "Installing QEMU package: $(basename "${qemu_deb}")"
-  # apt resolves the deb's deps (e.g. libslirp0); installs into /usr/local/bin.
-  # APT::Sandbox::User=root: the deb lives in a root-only mktemp dir that the
-  # unprivileged '_apt' user cannot read, which otherwise triggers a sandbox
-  # permission warning.
-  if ! apt-get install -y -o APT::Sandbox::User=root "${qemu_deb}"; then
-    echo -e "${RED}ERROR: Failed to install QEMU package${NC}"
-    exit 1
-  fi
+  # Install ALL packages from the archive: custom kernel, headers, sp-qemu-tdx.
+  # install_debs (common.sh) installs libslirp0, the kernel and the remaining
+  # debs, and sets NEW_KERNEL_VERSION.
+  install_debs "${work}"
+
+  # Boot the freshly installed custom kernel and enable TDX in KVM. setup_grub
+  # (common.sh) sets it as default and adds "kvm_intel.tdx=on" to the kernel
+  # command line -- without which kvm_intel loads without TDX and QEMU fails
+  # with "vm-type TDX not supported by KVM" (Canonical's 3.x setup no longer
+  # sets this flag).
+  setup_grub "${NEW_KERNEL_VERSION}" tdx
 }
 
 bootstrap() {
@@ -159,12 +158,12 @@ bootstrap() {
         exit 1
     fi
     
-    print_section_header "QEMU Installation"
-    install_qemu_from_release "${TMP_DIR}"
-
     print_section_header "TDX Module Update"
     echo "Updating TDX module..."
     update_tdx_module "${TMP_DIR}"
+
+    print_section_header "TDX Kernel & QEMU Installation"
+    install_tdx_release_packages "${TMP_DIR}"
 
     print_section_header "Hardware Configuration"
     if command -v lspci >/dev/null; then
