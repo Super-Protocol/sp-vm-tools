@@ -10,7 +10,7 @@ source_common() {
 # which bundles sp-qemu-tdx (QEMU 9.x + Intel TDX device-passthrough patches,
 # with iommufd support). The PPA QEMU on Ubuntu 24.04 (8.2.2) lacks iommufd.
 QEMU_RELEASE_REPO="Super-Protocol/sp-vm-tools"
-QEMU_RELEASE_TAG="39-tdx+snp"          # newest tag carrying package-tdx.tar.gz
+QEMU_RELEASE_TAG="38-tdx+snp"          # newest tag carrying package-tdx.tar.gz
 QEMU_RELEASE_ASSET="package-tdx.tar.gz"
 
 # Resolve the TDX SEAM module version to install for the host CPU.
