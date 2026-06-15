@@ -262,7 +262,41 @@ check_bios_settings() {
 }
 
 TMP_DIR=$1
-TDX_COMMIT="9e0d733b969c4088b751a1be073dab7603866a57"
+TDX_REF="3.3"
+
+check_tdx_os_version() {
+    local min_version="24.04"
+    local min_num
+    min_num=$(echo "$min_version" | awk -F. '{printf "%d%02d", $1, $2}')
+
+    if [ ! -f /etc/os-release ]; then
+        echo -e "${RED}ERROR: Could not determine OS version${NC}"
+        echo "This script requires Ubuntu ${min_version} or higher."
+        exit 1
+    fi
+
+    . /etc/os-release
+
+    if [ "$ID" != "ubuntu" ]; then
+        echo -e "${RED}ERROR: Unsupported operating system${NC}"
+        echo "This script requires Ubuntu ${min_version} or higher."
+        echo "Current OS: $PRETTY_NAME"
+        exit 1
+    fi
+
+    local version_num
+    version_num=$(echo "$VERSION_ID" | awk -F. '{printf "%d%02d", $1, $2}')
+
+    if [ "$version_num" -lt "$min_num" ]; then
+        echo -e "${RED}ERROR: Unsupported Ubuntu version${NC}"
+        echo "This script requires Ubuntu ${min_version} or higher."
+        echo "Current version: $PRETTY_NAME"
+        echo "Please upgrade your system to continue."
+        exit 1
+    fi
+}
+
+check_tdx_os_version
 
 # Determine package source based on Ubuntu version
 UBUNTU_VERSION=$(. /etc/os-release && echo "$VERSION_ID")
@@ -284,7 +318,7 @@ if [ -d "${TMP_DIR}/tdx-cannonical" ]; then
 fi
 
 # Download the setup-attestation-host.sh script
-git clone --no-tags https://github.com/canonical/tdx.git "${TMP_DIR}/tdx-cannonical"
+git clone https://github.com/canonical/tdx.git "${TMP_DIR}/tdx-cannonical"
 SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/setup-tdx-host.sh
 # Check for download errors
 if [ $? -ne 0 ]; then
@@ -292,9 +326,9 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-git -C "${TMP_DIR}/tdx-cannonical" checkout --detach "${TDX_COMMIT}"
+git -C "${TMP_DIR}/tdx-cannonical" checkout --detach "${TDX_REF}"
 if [ $? -ne 0 ]; then
-    echo "Failed to checkout tdx commit ${TDX_COMMIT}."
+    echo "Failed to checkout tdx ref ${TDX_REF}."
     exit 1
 fi
 
@@ -498,7 +532,7 @@ cat > /opt/intel/sgx-dcap-pccs/config/default.json << EOL
     "RefreshSchedule": "0 0 1 * *",
     "UserTokenHash" : "${USER_TOKEN}",
     "AdminTokenHash" : "${USER_TOKEN}",
-    "CachingFillMode" : "REQ",
+    "CachingFillMode" : "LAZY",
     "LogLevel" : "debug",
     "DB_CONFIG" : "sqlite",
     "sqlite" : {

@@ -396,9 +396,13 @@ get_kernel_version() {
 }
 
 check_os_version() {
+    local min_version="${1:-25.04}"
+    local min_num
+    min_num=$(echo "$min_version" | awk -F. '{printf "%d%02d", $1, $2}')
+
     if [ ! -f /etc/os-release ]; then
         echo -e "${RED}ERROR: Could not determine OS version${NC}"
-        echo "This script is designed for Ubuntu 25.04 or higher."
+        echo "This script is designed for Ubuntu ${min_version} or higher."
         exit 1
     fi
 
@@ -406,17 +410,17 @@ check_os_version() {
     
     if [ "$ID" != "ubuntu" ]; then
         echo -e "${RED}ERROR: Unsupported operating system${NC}"
-        echo "This script requires Ubuntu 25.04 or higher."
+        echo "This script requires Ubuntu ${min_version} or higher."
         echo "Current OS: $PRETTY_NAME"
         exit 1
     fi
 
-    # Extract major version number
-    major_version=$(echo "$VERSION_ID" | cut -d. -f1)
+    local version_num
+    version_num=$(echo "$VERSION_ID" | awk -F. '{printf "%d%02d", $1, $2}')
     
-    if [ "$major_version" -lt 25 ]; then
+    if [ "$version_num" -lt "$min_num" ]; then
         echo -e "${RED}ERROR: Unsupported Ubuntu version${NC}"
-        echo "This script requires Ubuntu 25.04 or higher."
+        echo "This script requires Ubuntu ${min_version} or higher."
         echo "Current version: $PRETTY_NAME"
         echo "Please upgrade your system to continue."
         exit 1
