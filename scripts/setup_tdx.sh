@@ -484,38 +484,32 @@ rm -f /etc/sgx_default_qcnl.conf
 print_section_header "Installing packages..."
 
 if [ "$USE_INTEL_REPO" -eq 1 ]; then
-    # Intel repo: package names without version suffixes, no sgx-setup
+    # Intel SGX repo: install attestation packages directly.
+    # Top-level packages only; lib* deps (urts, enclave-common, pce/tdx-logic,
+    # ae-*) are pulled in automatically.
+    #   - sgx-dcap-pccs, tdx-qgs       : PCCS caching service + Quote Generation
+    #   - libsgx-dcap-default-qpl      : Intel Quote Provider library (QPL)
+    #   - sgx-ra-service               : direct (RA) registration method
+    #   - sgx-pck-id-retrieval-tool    : indirect registration method
     apt-get install -y \
-        libsgx-ae-id-enclave \
-        libsgx-ae-pce \
-        libsgx-ae-tdqe \
-        libsgx-dcap-default-qpl \
-        libsgx-enclave-common \
-        libsgx-pce-logic \
-        libsgx-tdx-logic \
-        libsgx-urts \
         sgx-dcap-pccs \
-        sgx-pck-id-retrieval-tool \
+        tdx-qgs \
+        libsgx-dcap-default-qpl \
         sgx-ra-service \
-        tdx-qgs
+        sgx-pck-id-retrieval-tool
+    check_error "Failed to install packages"
 else
-    # Canonical PPA: versioned package names + sgx-setup
-    apt-get install -y \
-        libsgx-ae-id-enclave \
-        libsgx-ae-pce \
-        libsgx-ae-tdqe \
-        libsgx-dcap-default-qpl \
-        libsgx-enclave-common1 \
-        libsgx-pce-logic1 \
-        libsgx-tdx-logic1 \
-        libsgx-urts2 \
-        sgx-dcap-pccs \
-        sgx-pck-id-retrieval-tool \
-        sgx-ra-service \
-        sgx-setup \
-        tdx-qgs
+    # Canonical PPA: install attestation packages via the official script
+    # from canonical/tdx.
+    ATTEST_SCRIPT="${TMP_DIR}/tdx-cannonical/attestation/setup-attestation-host.sh"
+    if [ ! -f "$ATTEST_SCRIPT" ]; then
+        echo -e "${RED}ERROR: attestation setup script not found at ${ATTEST_SCRIPT}${NC}"
+        exit 1
+    fi
+    chmod +x "$ATTEST_SCRIPT"
+    "$ATTEST_SCRIPT"
+    check_error "Failed to install attestation packages"
 fi
-check_error "Failed to install packages"
 
 # Create PCCS config directory
 mkdir -p /opt/intel/sgx-dcap-pccs/config/
