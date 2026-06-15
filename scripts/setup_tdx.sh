@@ -2,6 +2,11 @@
 
 set -e
 
+# Pull in shared helpers (install_debs, setup_grub, install_tdx_release_packages,
+# update_tdx_module, ...). bootstrap_tdx.sh copies common.sh next to this script.
+SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+source "${SCRIPT_DIR}/common.sh"
+
 # Color definitions
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -282,6 +287,128 @@ check_bios_settings() {
     return $?
 }
 
+# On Ubuntu 24.04 the matched TDX kernel + QEMU are installed from the
+# sp-vm-tools release archive (package-tdx.tar.gz): a custom kernel plus
+# sp-qemu-tdx (QEMU 9.x + Intel TDX device-passthrough patches, with iommufd).
+# They share the same TDX KVM ABI; the stock 24.04 kernel + PPA QEMU (8.2.2) do
+# not provide iommufd / a compatible interface.
+QEMU_RELEASE_REPO="Super-Protocol/sp-vm-tools"
+QEMU_RELEASE_TAG="38-tdx+snp"          # tag carrying package-tdx.tar.gz
+QEMU_RELEASE_ASSET="package-tdx.tar.gz"
+
+# Resolve the TDX SEAM module version to install for the host CPU.
+# Prints the version string (e.g. "2.0.14") to stdout; all human-readable
+# progress goes to stderr so callers can capture the version cleanly.
+# Returns non-zero on an unsupported (older / non-Intel) CPU.
+detect_tdx_module_version() {
+  local vendor family model codename version
+  # Newest known TDX module branch. Used as the fallback for unrecognized CPUs
+  # that appear to be newer than anything in the map below.
+  local TDX_MODULE_LATEST="2.0.14"
+
+  vendor=$(awk -F: '/^vendor_id/{gsub(/ /,"",$2);print $2;exit}' /proc/cpuinfo)
+  family=$(awk -F: '/^cpu family/{gsub(/ /,"",$2);print $2;exit}' /proc/cpuinfo)
+  # Match the bare "model\t\t: N" line, not "model name".
+  model=$(awk -F: '/^model[[:space:]]*:/{gsub(/ /,"",$2);print $2;exit}' /proc/cpuinfo)
+
+  if [ "$vendor" != "GenuineIntel" ]; then
+    echo "ERROR: Unsupported CPU vendor '${vendor}' (Intel TDX requires GenuineIntel)" >&2
+    return 1
+  fi
+
+  if [ -z "$family" ] || [ -z "$model" ]; then
+    echo "ERROR: Could not determine CPU family/model from /proc/cpuinfo" >&2
+    return 1
+  fi
+
+  # Anything beyond family 6 is necessarily newer than the current map.
+  if [ "$family" -gt 6 ]; then
+    echo "WARNING: Unrecognized newer CPU (family ${family} model ${model}); using latest TDX module ${TDX_MODULE_LATEST}" >&2
+    echo "${TDX_MODULE_LATEST}"
+    return 0
+  fi
+
+  if [ "$family" -ne 6 ]; then
+    echo "ERROR: Unsupported CPU (family ${family} model ${model}); Intel TDX requires Sapphire Rapids or newer" >&2
+    return 1
+  fi
+
+  case "$model" in
+    143) codename="Sapphire Rapids"; version="1.5.24" ;;  # 0x8F
+    207) codename="Emerald Rapids";  version="1.5.24" ;;  # 0xCF
+    175) codename="Sierra Forest";   version="1.5.25" ;;  # 0xAF
+    173) codename="Granite Rapids";  version="2.0.14" ;;  # 0xAD
+    *)
+      if [ "$model" -gt 175 ]; then
+        echo "WARNING: Unrecognized newer CPU (family 6 model ${model}); using latest TDX module ${TDX_MODULE_LATEST}" >&2
+        echo "${TDX_MODULE_LATEST}"
+        return 0
+      fi
+      echo "ERROR: Unsupported CPU (family 6 model ${model})." >&2
+      echo "Supported: Sapphire Rapids (143), Emerald Rapids (207), Sierra Forest (175), Granite Rapids (173)." >&2
+      return 1
+      ;;
+  esac
+
+  echo "Detected CPU: ${codename} (family ${family} model ${model}) -> TDX module ${version}" >&2
+  echo "${version}"
+}
+
+update_tdx_module() {
+  local TMP_DIR=$1
+  local version
+  version=$(detect_tdx_module_version) || exit 1
+  echo "Updating TDX-module to ${version}..."
+  pushd "${TMP_DIR}"
+  wget "https://github.com/intel/confidential-computing.tdx.tdx-module/releases/download/TDX_MODULE_${version}/intel_tdx_module.tar.gz"
+  tar -xvzf intel_tdx_module.tar.gz
+  mkdir -p /boot/efi/EFI/TDX/
+  cp -vf TDX-Module/intel_tdx_module.so /boot/efi/EFI/TDX/TDX-SEAM.so
+  cp -vf TDX-Module/intel_tdx_module.so.sigstruct /boot/efi/EFI/TDX/TDX-SEAM.so.sigstruct
+  popd
+}
+
+install_tdx_release_packages() {
+  local tmp_dir="$1"
+
+  # The bundled debs (custom TDX kernel + sp-qemu-tdx, with iommufd / device
+  # passthrough) are built for Ubuntu 24.04 (Noble), whose stock kernel + PPA
+  # QEMU (8.2.2) lack what we need. The kernel and QEMU are a matched pair (same
+  # TDX KVM ABI). Newer Ubuntu (24.10 / 25.04+) already ship a suitable kernel
+  # and QEMU >= 9 with iommufd, so the bundle is neither needed nor
+  # binary-compatible there -- install it only on 24.04.
+  local ubuntu_version=""
+  [ -f /etc/os-release ] && ubuntu_version=$(. /etc/os-release && echo "$VERSION_ID")
+  if [ "$ubuntu_version" != "24.04" ]; then
+    echo "Ubuntu ${ubuntu_version:-unknown}: skipping bundled TDX kernel/QEMU (distro stack is used)"
+    return 0
+  fi
+
+  local work="${tmp_dir}/tdx-pkg"
+  # URL-encode the '+' in the tag for the direct download URL.
+  local tag_enc="${QEMU_RELEASE_TAG//+/%2B}"
+  local url="https://github.com/${QEMU_RELEASE_REPO}/releases/download/${tag_enc}/${QEMU_RELEASE_ASSET}"
+
+  echo "Installing TDX kernel + QEMU from ${QEMU_RELEASE_REPO}@${QEMU_RELEASE_TAG}..."
+  mkdir -p "${work}"
+  echo "Downloading ${QEMU_RELEASE_ASSET} (~160 MB), this may take a while..."
+  wget -O "${work}/${QEMU_RELEASE_ASSET}" "${url}"
+  echo "Download complete: ${work}/${QEMU_RELEASE_ASSET}"
+  tar -xzf "${work}/${QEMU_RELEASE_ASSET}" -C "${work}"
+
+  # Install ALL packages from the archive: custom kernel, headers, sp-qemu-tdx.
+  # install_debs (common.sh) installs libslirp0, the kernel and the remaining
+  # debs, and sets NEW_KERNEL_VERSION.
+  install_debs "${work}"
+
+  # Boot the freshly installed custom kernel and enable TDX in KVM. setup_grub
+  # (common.sh) sets it as default and adds "kvm_intel.tdx=on" to the kernel
+  # command line -- without which kvm_intel loads without TDX and QEMU fails
+  # with "vm-type TDX not supported by KVM" (Canonical's 3.x setup no longer
+  # sets this flag).
+  setup_grub "${NEW_KERNEL_VERSION}" tdx
+}
+
 TMP_DIR=$1
 TDX_REF="3.3"
 
@@ -358,6 +485,13 @@ echo "Running setup-tdx-host.sh..."
 chmod +x "${SCRIPT_PATH}"
 "${SCRIPT_PATH}"
 
+# Install our hypervisor + kernel (custom kernel + sp-qemu-tdx) and TDX module
+# right after the canonical host setup, so our kernel becomes the default boot
+# entry and the BIOS verification below can run against it (after a reboot).
+print_section_header "Installing hypervisor and kernel..."
+install_tdx_release_packages "${TMP_DIR}"
+update_tdx_module "${TMP_DIR}"
+
 print_section_header "Configuring package repositories..."
 
 if [ "$USE_INTEL_REPO" -eq 1 ]; then
@@ -390,11 +524,13 @@ check_error "Failed to update package lists"
 
 print_section_header "BIOS Configuration Verification"
 if ! running_kernel_supports_tdx; then
-    echo -e "${YELLOW}Running kernel $(uname -r) has no active TDX support.${NC}"
-    echo "The TDX kernel has just been installed but is not booted yet."
-    echo "Skipping BIOS/TDX verification — it must run on a host booted into the TDX kernel."
-    echo "Reboot into the TDX kernel and re-run this script to verify BIOS settings."
-elif ! check_bios_settings; then
+    echo -e "${RED}Running kernel $(uname -r) has no active TDX support.${NC}"
+    echo "The TDX kernel is installed but not booted yet."
+    echo "Reboot into the TDX kernel and re-run the bootstrap to continue"
+    echo "(BIOS verification, attestation and PCCS registration)."
+    exit 2   # distinct code: "reboot required", not a failure
+fi
+if ! check_bios_settings; then
     echo -e "${RED}ERROR: Required BIOS settings are not properly configured${NC}"
     echo "Please configure BIOS settings according to the instructions above and try again"
     exit 1
