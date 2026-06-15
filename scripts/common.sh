@@ -533,6 +533,24 @@ install_debs() {
     return 0
 }
 
+# Append a single token to GRUB_CMDLINE_LINUX_DEFAULT only if it is not already
+# present (whole-word match), so re-runs / overlapping setups don't create
+# duplicates like "nohibernate nohibernate".
+ensure_cmdline_param() {
+    local param="$1"
+    if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub; then
+        local current
+        current=$(grep '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub | head -1 \
+            | sed -E 's/^GRUB_CMDLINE_LINUX_DEFAULT="?([^"]*)"?.*/\1/')
+        case " ${current} " in
+            *" ${param} "*) return 0 ;;  # already present
+        esac
+        sed -i "s|\(GRUB_CMDLINE_LINUX_DEFAULT=\"[^\"]*\)|\1 ${param}|" /etc/default/grub
+    else
+        echo "GRUB_CMDLINE_LINUX_DEFAULT=\"${param}\"" >> /etc/default/grub
+    fi
+}
+
 setup_grub() {
     local new_kernel="$1"
     local type=$2
@@ -559,14 +577,9 @@ setup_grub() {
     mv /etc/default/grub.new /etc/default/grub
     
     if [[ "$type" == "tdx" ]]; then
-        # Add required kernel parameters if not present
-        if ! grep -q 'kvm_intel.tdx=on' /etc/default/grub; then
-            if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub; then
-                sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)/\1 nohibernate kvm_intel.tdx=on/' /etc/default/grub
-            else
-                echo 'GRUB_CMDLINE_LINUX_DEFAULT="nohibernate kvm_intel.tdx=on"' >> /etc/default/grub
-            fi
-        fi
+        # Add each required kernel parameter independently (idempotent).
+        ensure_cmdline_param "nohibernate"
+        ensure_cmdline_param "kvm_intel.tdx=on"
     fi
 
     if [[ "$type" == "snp" ]]; then
