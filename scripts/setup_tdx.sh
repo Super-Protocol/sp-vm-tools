@@ -245,6 +245,27 @@ check_all_bios_settings() {
     fi
 }
 
+# Whether the CURRENTLY RUNNING kernel has Intel TDX host support. The BIOS/TDX
+# flag verification relies on a TDX-capable running kernel (dmesg "virt/tdx",
+# kvm_intel.tdx, ...). On a freshly bootstrapped host the TDX kernel is only
+# installed (not yet booted), so this returns false until the reboot.
+running_kernel_supports_tdx() {
+    # 1) running kernel built with TDX host support
+    if [ -f "/boot/config-$(uname -r)" ] && \
+       grep -q '^CONFIG_INTEL_TDX_HOST=y' "/boot/config-$(uname -r)"; then
+        return 0
+    fi
+    # 2) kvm_intel exposes the tdx parameter (only on TDX-capable kernels)
+    if [ -e /sys/module/kvm_intel/parameters/tdx ]; then
+        return 0
+    fi
+    # 3) TDX subsystem came up at boot
+    if dmesg 2>/dev/null | grep -q "virt/tdx"; then
+        return 0
+    fi
+    return 1
+}
+
 check_bios_settings() {
     echo "Performing comprehensive BIOS configuration check..."
     echo "Installing components..."
@@ -368,7 +389,12 @@ apt-get update
 check_error "Failed to update package lists"
 
 print_section_header "BIOS Configuration Verification"
-if ! check_bios_settings; then
+if ! running_kernel_supports_tdx; then
+    echo -e "${YELLOW}Running kernel $(uname -r) has no active TDX support.${NC}"
+    echo "The TDX kernel has just been installed but is not booted yet."
+    echo "Skipping BIOS/TDX verification — it must run on a host booted into the TDX kernel."
+    echo "Reboot into the TDX kernel and re-run this script to verify BIOS settings."
+elif ! check_bios_settings; then
     echo -e "${RED}ERROR: Required BIOS settings are not properly configured${NC}"
     echo "Please configure BIOS settings according to the instructions above and try again"
     exit 1
