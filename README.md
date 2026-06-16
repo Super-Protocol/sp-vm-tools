@@ -70,6 +70,11 @@ What it does:
 5. Updates the Intel TDX-Module to a known-good version.
 6. Configures NVIDIA GPUs for Confidential Computing (CC mode + `vfio-pci` binding) and, on B200 systems, sets up ConnectX-7 bridges for VFIO passthrough.
 
+> **Note:** Some steps require manual action to take effect. The script may stop
+> and ask you to take an action and re-run `bootstrap_tdx.sh` — this is expected;
+> follow the on-screen instructions and run the same command again to finish the
+> setup.
+
 ### 2b. Bootstrap an AMD SEV-SNP host
 
 ```bash
