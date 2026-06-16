@@ -2,6 +2,11 @@
 
 set -e
 
+# Pull in shared helpers (install_debs, setup_grub, install_tdx_release_packages,
+# update_tdx_module, ...). bootstrap_tdx.sh copies common.sh next to this script.
+SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+source "${SCRIPT_DIR}/common.sh"
+
 # Color definitions
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -29,6 +34,10 @@ check_error() {
 # Configuration variables
 PCCS_API_KEY="aecd5ebb682346028d60c36131eb2d92"
 PCCS_PORT="8081"
+PCCS_URL="https://localhost:${PCCS_PORT}"
+# Intel PCS (upstream), used to tell a PCCS-side problem from a real
+# registration error when the local PCCS cannot serve a PCK certificate.
+INTEL_PCS_URL="https://api.trustedservices.intel.com/sgx/certification/v4"
 PCCS_PASSWORD="pccspassword123"
 # Generate SHA512 hash of the password
 USER_TOKEN=$(echo -n "${PCCS_PASSWORD}" | sha512sum | awk '{print $1}')
@@ -245,6 +254,27 @@ check_all_bios_settings() {
     fi
 }
 
+# Whether the CURRENTLY RUNNING kernel has Intel TDX host support. The BIOS/TDX
+# flag verification relies on a TDX-capable running kernel (dmesg "virt/tdx",
+# kvm_intel.tdx, ...). On a freshly bootstrapped host the TDX kernel is only
+# installed (not yet booted), so this returns false until the reboot.
+running_kernel_supports_tdx() {
+    # 1) running kernel built with TDX host support
+    if [ -f "/boot/config-$(uname -r)" ] && \
+       grep -q '^CONFIG_INTEL_TDX_HOST=y' "/boot/config-$(uname -r)"; then
+        return 0
+    fi
+    # 2) kvm_intel exposes the tdx parameter (only on TDX-capable kernels)
+    if [ -e /sys/module/kvm_intel/parameters/tdx ]; then
+        return 0
+    fi
+    # 3) TDX subsystem came up at boot
+    if dmesg 2>/dev/null | grep -q "virt/tdx"; then
+        return 0
+    fi
+    return 1
+}
+
 check_bios_settings() {
     echo "Performing comprehensive BIOS configuration check..."
     echo "Installing components..."
@@ -261,8 +291,164 @@ check_bios_settings() {
     return $?
 }
 
+# On Ubuntu 24.04 the matched TDX kernel + QEMU are installed from the
+# sp-vm-tools release archive (package-tdx.tar.gz): a custom kernel plus
+# sp-qemu-tdx (QEMU 9.x + Intel TDX device-passthrough patches, with iommufd).
+# They share the same TDX KVM ABI; the stock 24.04 kernel + PPA QEMU (8.2.2) do
+# not provide iommufd / a compatible interface.
+QEMU_RELEASE_REPO="Super-Protocol/sp-vm-tools"
+QEMU_RELEASE_TAG="38-tdx+snp"          # tag carrying package-tdx.tar.gz
+QEMU_RELEASE_ASSET="package-tdx.tar.gz"
+
+# Resolve the TDX SEAM module version to install for the host CPU.
+# Prints the version string (e.g. "2.0.14") to stdout; all human-readable
+# progress goes to stderr so callers can capture the version cleanly.
+# Returns non-zero on an unsupported (older / non-Intel) CPU.
+detect_tdx_module_version() {
+  local vendor family model codename version
+  # Newest known TDX module branch. Used as the fallback for unrecognized CPUs
+  # that appear to be newer than anything in the map below.
+  local TDX_MODULE_LATEST="2.0.14"
+
+  vendor=$(awk -F: '/^vendor_id/{gsub(/ /,"",$2);print $2;exit}' /proc/cpuinfo)
+  family=$(awk -F: '/^cpu family/{gsub(/ /,"",$2);print $2;exit}' /proc/cpuinfo)
+  # Match the bare "model\t\t: N" line, not "model name".
+  model=$(awk -F: '/^model[[:space:]]*:/{gsub(/ /,"",$2);print $2;exit}' /proc/cpuinfo)
+
+  if [ "$vendor" != "GenuineIntel" ]; then
+    echo "ERROR: Unsupported CPU vendor '${vendor}' (Intel TDX requires GenuineIntel)" >&2
+    return 1
+  fi
+
+  if [ -z "$family" ] || [ -z "$model" ]; then
+    echo "ERROR: Could not determine CPU family/model from /proc/cpuinfo" >&2
+    return 1
+  fi
+
+  # Anything beyond family 6 is necessarily newer than the current map.
+  if [ "$family" -gt 6 ]; then
+    echo "WARNING: Unrecognized newer CPU (family ${family} model ${model}); using latest TDX module ${TDX_MODULE_LATEST}" >&2
+    echo "${TDX_MODULE_LATEST}"
+    return 0
+  fi
+
+  if [ "$family" -ne 6 ]; then
+    echo "ERROR: Unsupported CPU (family ${family} model ${model}); Intel TDX requires Sapphire Rapids or newer" >&2
+    return 1
+  fi
+
+  case "$model" in
+    143) codename="Sapphire Rapids"; version="1.5.24" ;;  # 0x8F
+    207) codename="Emerald Rapids";  version="1.5.24" ;;  # 0xCF
+    175) codename="Sierra Forest";   version="1.5.25" ;;  # 0xAF
+    173) codename="Granite Rapids";  version="2.0.14" ;;  # 0xAD
+    *)
+      if [ "$model" -gt 175 ]; then
+        echo "WARNING: Unrecognized newer CPU (family 6 model ${model}); using latest TDX module ${TDX_MODULE_LATEST}" >&2
+        echo "${TDX_MODULE_LATEST}"
+        return 0
+      fi
+      echo "ERROR: Unsupported CPU (family 6 model ${model})." >&2
+      echo "Supported: Sapphire Rapids (143), Emerald Rapids (207), Sierra Forest (175), Granite Rapids (173)." >&2
+      return 1
+      ;;
+  esac
+
+  echo "Detected CPU: ${codename} (family ${family} model ${model}) -> TDX module ${version}" >&2
+  echo "${version}"
+}
+
+update_tdx_module() {
+  local TMP_DIR=$1
+  local version
+  version=$(detect_tdx_module_version) || exit 1
+  echo "Updating TDX-module to ${version}..."
+  pushd "${TMP_DIR}"
+  wget "https://github.com/intel/confidential-computing.tdx.tdx-module/releases/download/TDX_MODULE_${version}/intel_tdx_module.tar.gz"
+  tar -xvzf intel_tdx_module.tar.gz
+  mkdir -p /boot/efi/EFI/TDX/
+  cp -vf TDX-Module/intel_tdx_module.so /boot/efi/EFI/TDX/TDX-SEAM.so
+  cp -vf TDX-Module/intel_tdx_module.so.sigstruct /boot/efi/EFI/TDX/TDX-SEAM.so.sigstruct
+  popd
+}
+
+install_tdx_release_packages() {
+  local tmp_dir="$1"
+
+  # The bundled debs (custom TDX kernel + sp-qemu-tdx, with iommufd / device
+  # passthrough) are built for Ubuntu 24.04 (Noble), whose stock kernel + PPA
+  # QEMU (8.2.2) lack what we need. The kernel and QEMU are a matched pair (same
+  # TDX KVM ABI). Newer Ubuntu (24.10 / 25.04+) already ship a suitable kernel
+  # and QEMU >= 9 with iommufd, so the bundle is neither needed nor
+  # binary-compatible there -- install it only on 24.04.
+  local ubuntu_version=""
+  [ -f /etc/os-release ] && ubuntu_version=$(. /etc/os-release && echo "$VERSION_ID")
+  if [ "$ubuntu_version" != "24.04" ]; then
+    echo "Ubuntu ${ubuntu_version:-unknown}: skipping bundled TDX kernel/QEMU (distro stack is used)"
+    return 0
+  fi
+
+  local work="${tmp_dir}/tdx-pkg"
+  # URL-encode the '+' in the tag for the direct download URL.
+  local tag_enc="${QEMU_RELEASE_TAG//+/%2B}"
+  local url="https://github.com/${QEMU_RELEASE_REPO}/releases/download/${tag_enc}/${QEMU_RELEASE_ASSET}"
+
+  echo "Installing TDX kernel + QEMU from ${QEMU_RELEASE_REPO}@${QEMU_RELEASE_TAG}..."
+  mkdir -p "${work}"
+  echo "Downloading ${QEMU_RELEASE_ASSET} (~160 MB), this may take a while..."
+  wget -O "${work}/${QEMU_RELEASE_ASSET}" "${url}"
+  echo "Download complete: ${work}/${QEMU_RELEASE_ASSET}"
+  tar -xzf "${work}/${QEMU_RELEASE_ASSET}" -C "${work}"
+
+  # Install ALL packages from the archive: custom kernel, headers, sp-qemu-tdx.
+  # install_debs (common.sh) installs libslirp0, the kernel and the remaining
+  # debs, and sets NEW_KERNEL_VERSION.
+  install_debs "${work}"
+
+  # Boot the freshly installed custom kernel and enable TDX in KVM. setup_grub
+  # (common.sh) sets it as default and adds "kvm_intel.tdx=on" to the kernel
+  # command line -- without which kvm_intel loads without TDX and QEMU fails
+  # with "vm-type TDX not supported by KVM" (Canonical's 3.x setup no longer
+  # sets this flag).
+  setup_grub "${NEW_KERNEL_VERSION}" tdx
+}
+
 TMP_DIR=$1
-TDX_COMMIT="9e0d733b969c4088b751a1be073dab7603866a57"
+TDX_REF="3.3"
+
+check_tdx_os_version() {
+    local min_version="24.04"
+    local min_num
+    min_num=$(echo "$min_version" | awk -F. '{printf "%d%02d", $1, $2}')
+
+    if [ ! -f /etc/os-release ]; then
+        echo -e "${RED}ERROR: Could not determine OS version${NC}"
+        echo "This script requires Ubuntu ${min_version} or higher."
+        exit 1
+    fi
+
+    . /etc/os-release
+
+    if [ "$ID" != "ubuntu" ]; then
+        echo -e "${RED}ERROR: Unsupported operating system${NC}"
+        echo "This script requires Ubuntu ${min_version} or higher."
+        echo "Current OS: $PRETTY_NAME"
+        exit 1
+    fi
+
+    local version_num
+    version_num=$(echo "$VERSION_ID" | awk -F. '{printf "%d%02d", $1, $2}')
+
+    if [ "$version_num" -lt "$min_num" ]; then
+        echo -e "${RED}ERROR: Unsupported Ubuntu version${NC}"
+        echo "This script requires Ubuntu ${min_version} or higher."
+        echo "Current version: $PRETTY_NAME"
+        echo "Please upgrade your system to continue."
+        exit 1
+    fi
+}
+
+check_tdx_os_version
 
 # Determine package source based on Ubuntu version
 UBUNTU_VERSION=$(. /etc/os-release && echo "$VERSION_ID")
@@ -284,7 +470,7 @@ if [ -d "${TMP_DIR}/tdx-cannonical" ]; then
 fi
 
 # Download the setup-attestation-host.sh script
-git clone --no-tags https://github.com/canonical/tdx.git "${TMP_DIR}/tdx-cannonical"
+git clone https://github.com/canonical/tdx.git "${TMP_DIR}/tdx-cannonical"
 SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/setup-tdx-host.sh
 # Check for download errors
 if [ $? -ne 0 ]; then
@@ -292,9 +478,9 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-git -C "${TMP_DIR}/tdx-cannonical" checkout --detach "${TDX_COMMIT}"
+git -C "${TMP_DIR}/tdx-cannonical" checkout --detach "${TDX_REF}"
 if [ $? -ne 0 ]; then
-    echo "Failed to checkout tdx commit ${TDX_COMMIT}."
+    echo "Failed to checkout tdx ref ${TDX_REF}."
     exit 1
 fi
 
@@ -302,6 +488,13 @@ fi
 echo "Running setup-tdx-host.sh..."
 chmod +x "${SCRIPT_PATH}"
 "${SCRIPT_PATH}"
+
+# Install our hypervisor + kernel (custom kernel + sp-qemu-tdx) and TDX module
+# right after the canonical host setup, so our kernel becomes the default boot
+# entry and the BIOS verification below can run against it (after a reboot).
+print_section_header "Installing hypervisor and kernel..."
+install_tdx_release_packages "${TMP_DIR}"
+update_tdx_module "${TMP_DIR}"
 
 print_section_header "Configuring package repositories..."
 
@@ -334,6 +527,13 @@ apt-get update
 check_error "Failed to update package lists"
 
 print_section_header "BIOS Configuration Verification"
+if ! running_kernel_supports_tdx; then
+    echo -e "${RED}Running kernel $(uname -r) has no active TDX support.${NC}"
+    echo "The TDX kernel is installed but not booted yet."
+    echo "Reboot into the TDX kernel and re-run the bootstrap to continue"
+    echo "(BIOS verification, attestation and PCCS registration)."
+    exit 2   # distinct code: "reboot required", not a failure
+fi
 if ! check_bios_settings; then
     echo -e "${RED}ERROR: Required BIOS settings are not properly configured${NC}"
     echo "Please configure BIOS settings according to the instructions above and try again"
@@ -373,8 +573,94 @@ register_platform() {
         -url "https://localhost:${PCCS_PORT}" \
         -use_secure_cert false \
         -user_token "${PCCS_PASSWORD}"
-    
+
     return $?
+}
+
+# Read this platform's PCK identity (encrypted PPID + SVNs) into globals
+# EPPID/PCEID/CPUSVN/PCESVN/QEID. The encrypted PPID is PCS-encrypted (no -url),
+# which is what both the local PCCS and Intel PCS expect. Returns non-zero if
+# the tool produced no data (SGX not available / not configured).
+get_pck_identity() {
+    local csv=/tmp/pckid_retrieval.csv
+    rm -f "$csv"
+    PCKIDRetrievalTool -f "$csv" >/tmp/pckid_tool.out 2>&1 || true
+    if [ ! -s "$csv" ]; then
+        echo "PCK ID retrieval produced no data" >&2
+        return 1
+    fi
+    IFS=, read -r EPPID PCEID CPUSVN PCESVN QEID _ < "$csv" || true
+}
+
+# HTTP code for this platform's PCK cert from the LOCAL PCCS (200 = available).
+pccs_pckcert_code() {
+    curl -ks -o /dev/null -w '%{http_code}' \
+        "${PCCS_URL}/sgx/certification/v4/pckcert?qeid=${QEID}&encrypted_ppid=${EPPID}&cpusvn=${CPUSVN}&pcesvn=${PCESVN}&pceid=${PCEID}"
+}
+
+# HTTP code from Intel PCS directly, using the configured ApiKey. This bypasses
+# PCCS, so it tells us whether the platform is actually registered (200), the
+# ApiKey is invalid (401), or the platform is not registered (404).
+intel_pcs_pckcert_code() {
+    curl -s -o /dev/null -w '%{http_code}' \
+        -H "Ocp-Apim-Subscription-Key: ${PCCS_API_KEY}" \
+        "${INTEL_PCS_URL}/pckcert?qeid=${QEID}&encrypted_ppid=${EPPID}&cpusvn=${CPUSVN}&pcesvn=${PCESVN}&pceid=${PCEID}"
+}
+
+# Confirm the platform is usable (PCK cert retrievable via PCCS). If not, try to
+# register once, then distinguish a PCCS-side problem from a real registration
+# error by querying Intel PCS directly.
+ensure_platform_registered() {
+    print_section_header "Verifying platform registration..."
+
+    if ! get_pck_identity; then
+        echo -e "${FAILURE} Could not read platform PCK identity (SGX not available?)${NC}"
+        return 1
+    fi
+
+    # Already served by the local PCCS?
+    if [ "$(pccs_pckcert_code)" = "200" ]; then
+        echo -e "${SUCCESS} Platform PCK cert available in PCCS${NC}"
+        return 0
+    fi
+
+    # Try one (re)registration via PCCS, then recheck.
+    echo "PCK cert not in PCCS yet, attempting registration..."
+    PCKIDRetrievalTool -url "$PCCS_URL" -use_secure_cert false -user_token "$PCCS_PASSWORD" || true
+    if [ "$(pccs_pckcert_code)" = "200" ]; then
+        echo -e "${SUCCESS} Platform registered (PCK cert now in PCCS)${NC}"
+        return 0
+    fi
+
+    # Still failing through PCCS. Ask Intel PCS directly to tell a PCCS problem
+    # apart from a genuine registration error.
+    local pcs_code
+    pcs_code=$(intel_pcs_pckcert_code)
+    echo "PCCS cannot serve the PCK cert; Intel PCS direct check = HTTP ${pcs_code}"
+    case "$pcs_code" in
+        200)
+            echo -e "${FAILURE} PCCS problem: the platform IS registered (Intel PCS has the cert), but PCCS will not serve it.${NC}"
+            echo "This is not a registration error. Likely a stale/invalid PCCS ApiKey or cache. Check:"
+            echo "  - sudo systemctl restart pccs        (reload config)"
+            echo "  - journalctl -u pccs -n 50           (look for 'invalid subscription key')"
+            echo "  - ApiKey in /opt/intel/sgx-dcap-pccs/config/default.json"
+            ;;
+        401)
+            echo -e "${FAILURE} PCCS problem: Intel PCS rejects the ApiKey (401 — invalid/expired subscription key).${NC}"
+            echo "Set a valid key (PCCS_API_KEY / default.json ApiKey), then: sudo systemctl restart pccs"
+            ;;
+        404)
+            echo -e "${FAILURE} Registration error: the platform is NOT registered (Intel PCS returned 404).${NC}"
+            echo -e "${YELLOW}Reboot into BIOS and set:${NC}"
+            echo "  - SGX Factory Reset        -> Enable"
+            echo "  - SGX Auto MP Registration -> Enable"
+            echo "Then reboot and re-run the bootstrap."
+            ;;
+        *)
+            echo -e "${FAILURE} Could not determine status (Intel PCS HTTP ${pcs_code}). Check network/proxy and PCCS logs.${NC}"
+            ;;
+    esac
+    return 1
 }
 
 remove_pccs() {
@@ -450,38 +736,32 @@ rm -f /etc/sgx_default_qcnl.conf
 print_section_header "Installing packages..."
 
 if [ "$USE_INTEL_REPO" -eq 1 ]; then
-    # Intel repo: package names without version suffixes, no sgx-setup
+    # Intel SGX repo: install attestation packages directly.
+    # Top-level packages only; lib* deps (urts, enclave-common, pce/tdx-logic,
+    # ae-*) are pulled in automatically.
+    #   - sgx-dcap-pccs, tdx-qgs       : PCCS caching service + Quote Generation
+    #   - libsgx-dcap-default-qpl      : Intel Quote Provider library (QPL)
+    #   - sgx-ra-service               : direct (RA) registration method
+    #   - sgx-pck-id-retrieval-tool    : indirect registration method
     apt-get install -y \
-        libsgx-ae-id-enclave \
-        libsgx-ae-pce \
-        libsgx-ae-tdqe \
-        libsgx-dcap-default-qpl \
-        libsgx-enclave-common \
-        libsgx-pce-logic \
-        libsgx-tdx-logic \
-        libsgx-urts \
         sgx-dcap-pccs \
-        sgx-pck-id-retrieval-tool \
+        tdx-qgs \
+        libsgx-dcap-default-qpl \
         sgx-ra-service \
-        tdx-qgs
+        sgx-pck-id-retrieval-tool
+    check_error "Failed to install packages"
 else
-    # Canonical PPA: versioned package names + sgx-setup
-    apt-get install -y \
-        libsgx-ae-id-enclave \
-        libsgx-ae-pce \
-        libsgx-ae-tdqe \
-        libsgx-dcap-default-qpl \
-        libsgx-enclave-common1 \
-        libsgx-pce-logic1 \
-        libsgx-tdx-logic1 \
-        libsgx-urts2 \
-        sgx-dcap-pccs \
-        sgx-pck-id-retrieval-tool \
-        sgx-ra-service \
-        sgx-setup \
-        tdx-qgs
+    # Canonical PPA: install attestation packages via the official script
+    # from canonical/tdx.
+    ATTEST_SCRIPT="${TMP_DIR}/tdx-cannonical/attestation/setup-attestation-host.sh"
+    if [ ! -f "$ATTEST_SCRIPT" ]; then
+        echo -e "${RED}ERROR: attestation setup script not found at ${ATTEST_SCRIPT}${NC}"
+        exit 1
+    fi
+    chmod +x "$ATTEST_SCRIPT"
+    "$ATTEST_SCRIPT"
+    check_error "Failed to install attestation packages"
 fi
-check_error "Failed to install packages"
 
 # Create PCCS config directory
 mkdir -p /opt/intel/sgx-dcap-pccs/config/
@@ -498,7 +778,7 @@ cat > /opt/intel/sgx-dcap-pccs/config/default.json << EOL
     "RefreshSchedule": "0 0 1 * *",
     "UserTokenHash" : "${USER_TOKEN}",
     "AdminTokenHash" : "${USER_TOKEN}",
-    "CachingFillMode" : "REQ",
+    "CachingFillMode" : "LAZY",
     "LogLevel" : "debug",
     "DB_CONFIG" : "sqlite",
     "sqlite" : {
@@ -547,9 +827,12 @@ print_section_header "Enabling and starting services..."
 systemctl enable pccs qgsd mpa_registration_tool
 systemctl daemon-reload
 
-# Start PCCS first
+# Start PCCS first. Use restart (not start): if pccs is already running from a
+# previous run / boot it would keep its stale in-memory config and ignore the
+# freshly written default.json (e.g. an updated ApiKey), causing 401s from Intel
+# PCS. restart forces it to reload the current config.
 print_section_header "Starting PCCS..."
-systemctl start pccs
+systemctl restart pccs
 wait_for_service pccs
 check_error "Failed to start PCCS"
 sleep 5
@@ -565,11 +848,13 @@ print_section_header "Registering platform with PCCS..."
 register_platform
 check_error "Failed to register platform"
 
-# Start remaining services
+# Start remaining services. Use restart (not start) so they reload the freshly
+# written config: qgsd re-reads /etc/sgx_default_qcnl.conf, and the one-shot
+# mpa_registration_tool re-runs the registration flow.
 print_section_header "Starting remaining services..."
-systemctl start qgsd
+systemctl restart qgsd
 wait_for_service qgsd
-systemctl start mpa_registration_tool
+systemctl restart mpa_registration_tool
 
 # Check services status
 print_section_header "Checking services status..."
@@ -593,6 +878,11 @@ if systemctl is-enabled --quiet mpa_registration_tool; then
     systemctl status mpa_registration_tool --no-pager || true
 else
     echo -e "${RED}Error: mpa_registration_tool is not properly configured${NC}"
+    exit 1
+fi
+
+# All components installed and started — confirm the platform is registered.
+if ! ensure_platform_registered; then
     exit 1
 fi
 

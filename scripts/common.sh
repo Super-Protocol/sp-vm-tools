@@ -396,9 +396,13 @@ get_kernel_version() {
 }
 
 check_os_version() {
+    local min_version="${1:-25.04}"
+    local min_num
+    min_num=$(echo "$min_version" | awk -F. '{printf "%d%02d", $1, $2}')
+
     if [ ! -f /etc/os-release ]; then
         echo -e "${RED}ERROR: Could not determine OS version${NC}"
-        echo "This script is designed for Ubuntu 25.04 or higher."
+        echo "This script is designed for Ubuntu ${min_version} or higher."
         exit 1
     fi
 
@@ -406,17 +410,17 @@ check_os_version() {
     
     if [ "$ID" != "ubuntu" ]; then
         echo -e "${RED}ERROR: Unsupported operating system${NC}"
-        echo "This script requires Ubuntu 25.04 or higher."
+        echo "This script requires Ubuntu ${min_version} or higher."
         echo "Current OS: $PRETTY_NAME"
         exit 1
     fi
 
-    # Extract major version number
-    major_version=$(echo "$VERSION_ID" | cut -d. -f1)
+    local version_num
+    version_num=$(echo "$VERSION_ID" | awk -F. '{printf "%d%02d", $1, $2}')
     
-    if [ "$major_version" -lt 25 ]; then
+    if [ "$version_num" -lt "$min_num" ]; then
         echo -e "${RED}ERROR: Unsupported Ubuntu version${NC}"
-        echo "This script requires Ubuntu 25.04 or higher."
+        echo "This script requires Ubuntu ${min_version} or higher."
         echo "Current version: $PRETTY_NAME"
         echo "Please upgrade your system to continue."
         exit 1
@@ -529,6 +533,24 @@ install_debs() {
     return 0
 }
 
+# Append a single token to GRUB_CMDLINE_LINUX_DEFAULT only if it is not already
+# present (whole-word match), so re-runs / overlapping setups don't create
+# duplicates like "nohibernate nohibernate".
+ensure_cmdline_param() {
+    local param="$1"
+    if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub; then
+        local current
+        current=$(grep '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub | head -1 \
+            | sed -E 's/^GRUB_CMDLINE_LINUX_DEFAULT="?([^"]*)"?.*/\1/')
+        case " ${current} " in
+            *" ${param} "*) return 0 ;;  # already present
+        esac
+        sed -i "s|\(GRUB_CMDLINE_LINUX_DEFAULT=\"[^\"]*\)|\1 ${param}|" /etc/default/grub
+    else
+        echo "GRUB_CMDLINE_LINUX_DEFAULT=\"${param}\"" >> /etc/default/grub
+    fi
+}
+
 setup_grub() {
     local new_kernel="$1"
     local type=$2
@@ -555,14 +577,9 @@ setup_grub() {
     mv /etc/default/grub.new /etc/default/grub
     
     if [[ "$type" == "tdx" ]]; then
-        # Add required kernel parameters if not present
-        if ! grep -q 'kvm_intel.tdx=on' /etc/default/grub; then
-            if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub; then
-                sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)/\1 nohibernate kvm_intel.tdx=on/' /etc/default/grub
-            else
-                echo 'GRUB_CMDLINE_LINUX_DEFAULT="nohibernate kvm_intel.tdx=on"' >> /etc/default/grub
-            fi
-        fi
+        # Add each required kernel parameter independently (idempotent).
+        ensure_cmdline_param "nohibernate"
+        ensure_cmdline_param "kvm_intel.tdx=on"
     fi
 
     if [[ "$type" == "snp" ]]; then
