@@ -406,6 +406,18 @@ EOL
     chmod -R 750 /opt/intel/sgx-dcap-pccs/
 }
 
+# Configure QGS transport. Our stack talks to the Quote Generation Service over
+# vsock, but newer tdx-qgs packages (Ubuntu 26.04+) ship /etc/qgs.conf with the
+# port commented out (defaulting to a Unix domain socket). Just write the config
+# we need: vsock on port 4050.
+configure_qgs() {
+    print_section_header "Configuring QGS (vsock port 4050)..."
+    cat > /etc/qgs.conf << EOL
+port = 4050
+number_threads = 4
+EOL
+}
+
 # On Ubuntu 24.04 the matched TDX kernel + QEMU are installed from the
 # sp-vm-tools release archive (package-tdx.tar.gz): a custom kernel plus
 # sp-qemu-tdx (QEMU 9.x + Intel TDX device-passthrough patches, with iommufd).
@@ -920,6 +932,7 @@ check_error "Failed to register platform"
 # written config: qgsd re-reads /etc/sgx_default_qcnl.conf, and the one-shot
 # mpa_registration_tool re-runs the registration flow.
 print_section_header "Starting remaining services..."
+configure_qgs   # patch /etc/qgs.conf for vsock before (re)starting qgsd
 systemctl restart qgsd
 wait_for_service qgsd
 systemctl restart mpa_registration_tool
