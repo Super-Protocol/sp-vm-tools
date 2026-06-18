@@ -108,7 +108,7 @@ The token is a GitHub Personal Access Token (PAT). To create one:
 - Go to GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) (or open https://github.com/settings/tokens directly).
 - Click Generate new token → Generate new token (classic).
 - Give it a descriptive name (e.g. swarm-cloud-ghcr-pull) and set an expiration.
-- Under scopes, select read:packages (sufficient for pulling images from GHCR).
+- Under scopes, select read:packages (sufficient for pulling images from GHCR) and the whole repo.
 - Click Generate token and copy the value immediately — GitHub shows it only once. Classic PATs start with ghp_.
 - Make sure your account has access to the super-protocol organization's packages; otherwise the pull will fail with a 403/denied error even with the correct scope.
 
