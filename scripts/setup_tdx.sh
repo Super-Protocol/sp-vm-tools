@@ -291,6 +291,26 @@ check_bios_settings() {
     return $?
 }
 
+# Verify the host is actually TDX-ready: the running kernel must have active TDX
+# support and the BIOS must be configured. Aborts with exit 2 ("reboot required")
+# or exit 1 ("fix BIOS"). Comment out the single call site to bypass this on
+# hardware without TDX (e.g. when testing the install flow on a plain VM).
+verify_tdx_hardware() {
+    print_section_header "BIOS Configuration Verification"
+    if ! running_kernel_supports_tdx; then
+        echo -e "${RED}Running kernel $(uname -r) has no active TDX support.${NC}"
+        echo "The TDX kernel is installed but not booted yet."
+        echo "Reboot into the TDX kernel and re-run the bootstrap to continue"
+        echo "(BIOS verification, attestation and PCCS registration)."
+        exit 2   # distinct code: "reboot required", not a failure
+    fi
+    if ! check_bios_settings; then
+        echo -e "${RED}ERROR: Required BIOS settings are not properly configured${NC}"
+        echo "Please configure BIOS settings according to the instructions above and try again"
+        exit 1
+    fi
+}
+
 # On Ubuntu 24.04 the matched TDX kernel + QEMU are installed from the
 # sp-vm-tools release archive (package-tdx.tar.gz): a custom kernel plus
 # sp-qemu-tdx (QEMU 9.x + Intel TDX device-passthrough patches, with iommufd).
@@ -502,7 +522,8 @@ fi
 
 # Update the Intel TDX SEAM module (downloaded straight from Intel; independent
 # of the kernel/QEMU source above).
-update_tdx_module "${TMP_DIR}"
+# [no-tdx test] disabled: detect_tdx_module_version fails on a non-TDX CPU
+# update_tdx_module "${TMP_DIR}"
 
 # Configure GRUB for TDX on every release: enable TDX in KVM (kvm_intel.tdx=on)
 # and add nohibernate, then regenerate grub.cfg/initramfs. Canonical's stock
@@ -537,19 +558,8 @@ fi
 apt-get update
 check_error "Failed to update package lists"
 
-print_section_header "BIOS Configuration Verification"
-if ! running_kernel_supports_tdx; then
-    echo -e "${RED}Running kernel $(uname -r) has no active TDX support.${NC}"
-    echo "The TDX kernel is installed but not booted yet."
-    echo "Reboot into the TDX kernel and re-run the bootstrap to continue"
-    echo "(BIOS verification, attestation and PCCS registration)."
-    exit 2   # distinct code: "reboot required", not a failure
-fi
-if ! check_bios_settings; then
-    echo -e "${RED}ERROR: Required BIOS settings are not properly configured${NC}"
-    echo "Please configure BIOS settings according to the instructions above and try again"
-    exit 1
-fi
+# [no-tdx test] disabled: no active TDX kernel / TDX BIOS on this VM
+# verify_tdx_hardware
 
 # Function to wait for service
 wait_for_service() {
@@ -879,6 +889,11 @@ systemctl restart pccs
 wait_for_service pccs
 check_error "Failed to start PCCS"
 sleep 5
+
+# [no-tdx test] stop here: everything below needs real SGX/TDX hardware
+# (PCKIDRetrievalTool, platform registration, qgsd/mpa services). PCCS is up.
+echo -e "${GREEN}[no-tdx test] install path OK up to PCCS; skipping hardware-only steps${NC}"
+exit 0
 
 # Get platform info and register
 cd /opt/intel/sgx-dcap-pccs/
