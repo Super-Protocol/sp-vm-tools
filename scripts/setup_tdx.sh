@@ -404,13 +404,6 @@ install_tdx_release_packages() {
   # install_debs (common.sh) installs libslirp0, the kernel and the remaining
   # debs, and sets NEW_KERNEL_VERSION.
   install_debs "${work}"
-
-  # Boot the freshly installed custom kernel and enable TDX in KVM. setup_grub
-  # (common.sh) sets it as default and adds "kvm_intel.tdx=on" to the kernel
-  # command line -- without which kvm_intel loads without TDX and QEMU fails
-  # with "vm-type TDX not supported by KVM" (Canonical's 3.x setup no longer
-  # sets this flag).
-  setup_grub "${NEW_KERNEL_VERSION}" tdx
 }
 
 TMP_DIR=$1
@@ -463,49 +456,67 @@ else
     echo "Ubuntu ${UBUNTU_VERSION}: using Canonical kobuk-team PPA"
 fi
 
-if [ -d "${TMP_DIR}/tdx-cannonical" ]; then
-    echo -e "${YELLOW}Directory ${TMP_DIR}/tdx-cannonical already exists${NC}"
-    echo -e "Removing existing directory..."
-    rm -rf "${TMP_DIR}/tdx-cannonical"
+if [ "$USE_INTEL_REPO" -eq 1 ]; then
+    # Ubuntu 25.10+: TDX host support is already in the running stock generic
+    # kernel, and the Ubuntu archive ships a modern QEMU (>= 10) with TDX +
+    # iommufd. So we skip the canonical/tdx repo, setup-tdx-host.sh and the kobuk
+    # PPA entirely (kobuk has no build for these releases anyway) and just install
+    # QEMU from the archive -- same approach as bootstrap_snp.sh. No kernel (the
+    # host already runs a TDX-capable generic kernel) and no ovmf (the guest
+    # firmware ships in the sp-vm release; qemu-system-x86 pulls ovmf anyway).
+    print_section_header "Installing QEMU from Ubuntu archive..."
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y qemu-system-x86 qemu-utils
+    check_error "Failed to install QEMU"
+else
+    # Ubuntu < 25.10: TDX host support is not in the stock kernel, so use the
+    # canonical/tdx host setup (kobuk PPA + -intel kernel). The clone is also
+    # reused below for attestation (setup-attestation-host.sh).
+    if [ -d "${TMP_DIR}/tdx-cannonical" ]; then
+        echo -e "${YELLOW}Directory ${TMP_DIR}/tdx-cannonical already exists${NC}"
+        echo -e "Removing existing directory..."
+        rm -rf "${TMP_DIR}/tdx-cannonical"
+    fi
+
+    git clone https://github.com/canonical/tdx.git "${TMP_DIR}/tdx-cannonical"
+    if [ $? -ne 0 ]; then
+        echo "Failed to download the canonical/tdx repository."
+        exit 1
+    fi
+    SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/setup-tdx-host.sh
+
+    git -C "${TMP_DIR}/tdx-cannonical" checkout --detach "${TDX_REF}"
+    if [ $? -ne 0 ]; then
+        echo "Failed to checkout tdx ref ${TDX_REF}."
+        exit 1
+    fi
+
+    print_section_header "Installing hypervisor and kernel..."
+    echo "Running setup-tdx-host.sh..."
+    chmod +x "${SCRIPT_PATH}"
+    "${SCRIPT_PATH}"
+
+    # On 24.04 install our matched custom kernel + sp-qemu-tdx bundle on top.
+    install_tdx_release_packages "${TMP_DIR}"
 fi
 
-# Download the setup-attestation-host.sh script
-git clone https://github.com/canonical/tdx.git "${TMP_DIR}/tdx-cannonical"
-SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/setup-tdx-host.sh
-# Check for download errors
-if [ $? -ne 0 ]; then
-    echo "Failed to download the setup-tdx-host.sh script."
-    exit 1
-fi
-
-git -C "${TMP_DIR}/tdx-cannonical" checkout --detach "${TDX_REF}"
-if [ $? -ne 0 ]; then
-    echo "Failed to checkout tdx ref ${TDX_REF}."
-    exit 1
-fi
-
-# Make the script executable
-echo "Running setup-tdx-host.sh..."
-chmod +x "${SCRIPT_PATH}"
-"${SCRIPT_PATH}"
-
-# Install our hypervisor + kernel (custom kernel + sp-qemu-tdx) and TDX module
-# right after the canonical host setup, so our kernel becomes the default boot
-# entry and the BIOS verification below can run against it (after a reboot).
-print_section_header "Installing hypervisor and kernel..."
-install_tdx_release_packages "${TMP_DIR}"
+# Update the Intel TDX SEAM module (downloaded straight from Intel; independent
+# of the kernel/QEMU source above).
 update_tdx_module "${TMP_DIR}"
+
+# Configure GRUB for TDX on every release: enable TDX in KVM (kvm_intel.tdx=on)
+# and add nohibernate, then regenerate grub.cfg/initramfs. Canonical's stock
+# generic kernel (25.10+) does not enable tdx in kvm_intel by default, and the
+# -intel kernel does -- but setting the flag is harmless either way. The kernel
+# whose initramfs we regenerate / make default is the bundled custom kernel on
+# 24.04 (NEW_KERNEL_VERSION, set by install_debs) and the running distro kernel
+# elsewhere.
+print_section_header "Configuring GRUB for TDX..."
+setup_grub "${NEW_KERNEL_VERSION:-$(uname -r)}" tdx
 
 print_section_header "Configuring package repositories..."
 
 if [ "$USE_INTEL_REPO" -eq 1 ]; then
-    # Remove kobuk-team PPA if present (conflicts with Intel packages)
-    PPA_FILES=$(grep -rl "kobuk-team" /etc/apt/sources.list.d/ 2>/dev/null || true)
-    if [ -n "$PPA_FILES" ]; then
-        echo "Removing kobuk-team PPA: $PPA_FILES"
-        rm -f $PPA_FILES
-    fi
-
     # Add Intel SGX repository
     mkdir -p /etc/apt/keyrings
     curl -fsSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key \
@@ -743,7 +754,10 @@ if [ "$USE_INTEL_REPO" -eq 1 ]; then
     #   - libsgx-dcap-default-qpl      : Intel Quote Provider library (QPL)
     #   - sgx-ra-service               : direct (RA) registration method
     #   - sgx-pck-id-retrieval-tool    : indirect registration method
-    apt-get install -y \
+    # DEBIAN_FRONTEND=noninteractive: sgx-dcap-pccs postinst otherwise launches
+    # an interactive install.sh; noninteractive makes it skip that (we write the
+    # PCCS config ourselves below) and the package configures cleanly.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
         sgx-dcap-pccs \
         tdx-qgs \
         libsgx-dcap-default-qpl \
@@ -816,6 +830,35 @@ LOCAL_PCK_RETRY_TIMES=6
 LOCAL_PCK_RETRY_DELAY=10
 EOL
 check_error "Failed to create QCNL configuration"
+
+# On the Intel SGX repo path (Ubuntu >= 25.10, incl. 26.04) the sgx-dcap-pccs
+# package was installed with DEBIAN_FRONTEND=noninteractive, so its interactive
+# install.sh was skipped. Reproduce here what install.sh would have done: install
+# the Node.js dependencies and generate the HTTPS SSL keys. The Canonical PPA
+# path (< 25.10) does this via setup-attestation-host.sh, so skip it there.
+if [ "$USE_INTEL_REPO" -eq 1 ]; then
+    # Install PCCS Node.js dependencies. Without node_modules pccs_server.js
+    # fails to start with "Cannot find package 'config'".
+    print_section_header "Installing PCCS npm dependencies..."
+    (
+        cd /opt/intel/sgx-dcap-pccs/
+        npm config set engine-strict true
+        npm install
+    )
+    check_error "Failed to install PCCS npm dependencies"
+
+    # Generate self-signed SSL keys for the PCCS HTTPS endpoint. Without
+    # ssl_key/private.pem + ssl_key/file.crt PCCS cannot start its HTTPS server.
+    print_section_header "Generating PCCS SSL keys..."
+    mkdir -p /opt/intel/sgx-dcap-pccs/ssl_key
+    (
+        cd /opt/intel/sgx-dcap-pccs/ssl_key
+        openssl genrsa -out private.pem 2048
+        openssl req -new -key private.pem -out csr.pem -subj '/CN=localhost'
+        openssl x509 -req -days 365 -in csr.pem -signkey private.pem -out file.crt
+    )
+    check_error "Failed to generate PCCS SSL keys"
+fi
 
 # Set correct permissions
 print_section_header "Setting permissions..."
