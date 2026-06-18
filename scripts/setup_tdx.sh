@@ -311,6 +311,101 @@ verify_tdx_hardware() {
     fi
 }
 
+# Configure PCCS: write its config + QCNL, install Node deps and SSL keys
+# (Intel-repo path only), and fix ownership. Grouped into one function to keep
+# the top-level flow readable.
+# NOTE: the `<< EOL` heredoc bodies (and their closing EOL) stay flush-left on
+# purpose -- indenting them would change the written config files.
+configure_pccs() {
+    # Create PCCS config directory
+    mkdir -p /opt/intel/sgx-dcap-pccs/config/
+
+    # Create PCCS configuration
+    print_section_header "Creating PCCS configuration..."
+    cat > /opt/intel/sgx-dcap-pccs/config/default.json << EOL
+{
+    "HTTPS_PORT" : ${PCCS_PORT},
+    "hosts" : "127.0.0.1",
+    "uri": "https://api.trustedservices.intel.com/sgx/certification/v4/",
+    "ApiKey" : "${PCCS_API_KEY}",
+    "proxy" : "",
+    "RefreshSchedule": "0 0 1 * *",
+    "UserTokenHash" : "${USER_TOKEN}",
+    "AdminTokenHash" : "${USER_TOKEN}",
+    "CachingFillMode" : "LAZY",
+    "LogLevel" : "debug",
+    "DB_CONFIG" : "sqlite",
+    "sqlite" : {
+        "database" : "database",
+        "username" : "username",
+        "password" : "password",
+        "options" : {
+            "host": "localhost",
+            "dialect": "sqlite",
+            "pool": {
+                "max": 5,
+                "min": 0,
+                "acquire": 30000,
+                "idle": 10000
+            },
+            "define": {
+                "freezeTableName": true
+            },
+            "logging" : false,
+            "storage": "pckcache.db"
+        }
+    }
+}
+EOL
+
+    # Configure QCNL
+    print_section_header "Configuring QCNL..."
+    cat > /etc/sgx_default_qcnl.conf << EOL
+PCCS_URL=https://localhost:${PCCS_PORT}/sgx/certification/v4/
+USE_SECURE_CERT=false
+RETRY_TIMES=6
+RETRY_DELAY=10
+LOCAL_PCK_URL=http://localhost:${PCCS_PORT}/sgx/certification/v4/
+LOCAL_PCK_RETRY_TIMES=6
+LOCAL_PCK_RETRY_DELAY=10
+EOL
+    check_error "Failed to create QCNL configuration"
+
+    # On the Intel SGX repo path (Ubuntu >= 25.10, incl. 26.04) the sgx-dcap-pccs
+    # package was installed with DEBIAN_FRONTEND=noninteractive, so its interactive
+    # install.sh was skipped. Reproduce here what install.sh would have done:
+    # install the Node.js dependencies and generate the HTTPS SSL keys. The
+    # Canonical PPA path (< 25.10) does this via setup-attestation-host.sh.
+    if [ "$USE_INTEL_REPO" -eq 1 ]; then
+        # Install PCCS Node.js dependencies. Without node_modules pccs_server.js
+        # fails to start with "Cannot find package 'config'".
+        print_section_header "Installing PCCS npm dependencies..."
+        (
+            cd /opt/intel/sgx-dcap-pccs/
+            npm config set engine-strict true
+            npm install
+        )
+        check_error "Failed to install PCCS npm dependencies"
+
+        # Generate self-signed SSL keys for the PCCS HTTPS endpoint. Without
+        # ssl_key/private.pem + ssl_key/file.crt PCCS cannot start its HTTPS server.
+        print_section_header "Generating PCCS SSL keys..."
+        mkdir -p /opt/intel/sgx-dcap-pccs/ssl_key
+        (
+            cd /opt/intel/sgx-dcap-pccs/ssl_key
+            openssl genrsa -out private.pem 2048
+            openssl req -new -key private.pem -out csr.pem -subj '/CN=localhost'
+            openssl x509 -req -days 365 -in csr.pem -signkey private.pem -out file.crt
+        )
+        check_error "Failed to generate PCCS SSL keys"
+    fi
+
+    # Set correct permissions
+    print_section_header "Setting permissions..."
+    chown -R pccs:pccs /opt/intel/sgx-dcap-pccs/
+    chmod -R 750 /opt/intel/sgx-dcap-pccs/
+}
+
 # On Ubuntu 24.04 the matched TDX kernel + QEMU are installed from the
 # sp-vm-tools release archive (package-tdx.tar.gz): a custom kernel plus
 # sp-qemu-tdx (QEMU 9.x + Intel TDX device-passthrough patches, with iommufd).
@@ -787,93 +882,8 @@ else
     check_error "Failed to install attestation packages"
 fi
 
-# Create PCCS config directory
-mkdir -p /opt/intel/sgx-dcap-pccs/config/
-
-# Create PCCS configuration
-print_section_header "Creating PCCS configuration..."
-cat > /opt/intel/sgx-dcap-pccs/config/default.json << EOL
-{
-    "HTTPS_PORT" : ${PCCS_PORT},
-    "hosts" : "127.0.0.1",
-    "uri": "https://api.trustedservices.intel.com/sgx/certification/v4/",
-    "ApiKey" : "${PCCS_API_KEY}",
-    "proxy" : "",
-    "RefreshSchedule": "0 0 1 * *",
-    "UserTokenHash" : "${USER_TOKEN}",
-    "AdminTokenHash" : "${USER_TOKEN}",
-    "CachingFillMode" : "LAZY",
-    "LogLevel" : "debug",
-    "DB_CONFIG" : "sqlite",
-    "sqlite" : {
-        "database" : "database",
-        "username" : "username",
-        "password" : "password",
-        "options" : {
-            "host": "localhost",
-            "dialect": "sqlite",
-            "pool": {
-                "max": 5,
-                "min": 0,
-                "acquire": 30000,
-                "idle": 10000
-            },
-            "define": {
-                "freezeTableName": true
-            },
-            "logging" : false, 
-            "storage": "pckcache.db"
-        }
-    }
-}
-EOL
-
-# Configure QCNL
-print_section_header "Configuring QCNL..."
-cat > /etc/sgx_default_qcnl.conf << EOL
-PCCS_URL=https://localhost:${PCCS_PORT}/sgx/certification/v4/
-USE_SECURE_CERT=false
-RETRY_TIMES=6
-RETRY_DELAY=10
-LOCAL_PCK_URL=http://localhost:${PCCS_PORT}/sgx/certification/v4/
-LOCAL_PCK_RETRY_TIMES=6
-LOCAL_PCK_RETRY_DELAY=10
-EOL
-check_error "Failed to create QCNL configuration"
-
-# On the Intel SGX repo path (Ubuntu >= 25.10, incl. 26.04) the sgx-dcap-pccs
-# package was installed with DEBIAN_FRONTEND=noninteractive, so its interactive
-# install.sh was skipped. Reproduce here what install.sh would have done: install
-# the Node.js dependencies and generate the HTTPS SSL keys. The Canonical PPA
-# path (< 25.10) does this via setup-attestation-host.sh, so skip it there.
-if [ "$USE_INTEL_REPO" -eq 1 ]; then
-    # Install PCCS Node.js dependencies. Without node_modules pccs_server.js
-    # fails to start with "Cannot find package 'config'".
-    print_section_header "Installing PCCS npm dependencies..."
-    (
-        cd /opt/intel/sgx-dcap-pccs/
-        npm config set engine-strict true
-        npm install
-    )
-    check_error "Failed to install PCCS npm dependencies"
-
-    # Generate self-signed SSL keys for the PCCS HTTPS endpoint. Without
-    # ssl_key/private.pem + ssl_key/file.crt PCCS cannot start its HTTPS server.
-    print_section_header "Generating PCCS SSL keys..."
-    mkdir -p /opt/intel/sgx-dcap-pccs/ssl_key
-    (
-        cd /opt/intel/sgx-dcap-pccs/ssl_key
-        openssl genrsa -out private.pem 2048
-        openssl req -new -key private.pem -out csr.pem -subj '/CN=localhost'
-        openssl x509 -req -days 365 -in csr.pem -signkey private.pem -out file.crt
-    )
-    check_error "Failed to generate PCCS SSL keys"
-fi
-
-# Set correct permissions
-print_section_header "Setting permissions..."
-chown -R pccs:pccs /opt/intel/sgx-dcap-pccs/
-chmod -R 750 /opt/intel/sgx-dcap-pccs/
+# Configure PCCS (config + QCNL + npm/SSL + permissions); defined above.
+configure_pccs
 
 # Enable and start services
 print_section_header "Enabling and starting services..."
