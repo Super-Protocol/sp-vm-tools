@@ -629,8 +629,7 @@ fi
 
 # Update the Intel TDX SEAM module (downloaded straight from Intel; independent
 # of the kernel/QEMU source above).
-# [no-tdx test] disabled: detect_tdx_module_version fails on a non-TDX CPU
-# update_tdx_module "${TMP_DIR}"
+update_tdx_module "${TMP_DIR}"
 
 # Configure GRUB for TDX on every release: enable TDX in KVM (kvm_intel.tdx=on)
 # and add nohibernate, then regenerate grub.cfg/initramfs. Canonical's stock
@@ -665,8 +664,7 @@ fi
 apt-get update
 check_error "Failed to update package lists"
 
-# [no-tdx test] disabled: no active TDX kernel / TDX BIOS on this VM
-# verify_tdx_hardware
+verify_tdx_hardware
 
 # Function to wait for service
 wait_for_service() {
@@ -911,11 +909,6 @@ systemctl restart pccs
 wait_for_service pccs
 check_error "Failed to start PCCS"
 sleep 5
-
-# [no-tdx test] stop here: everything below needs real SGX/TDX hardware
-# (PCKIDRetrievalTool, platform registration, qgsd/mpa services). PCCS is up.
-echo -e "${GREEN}[no-tdx test] install path OK up to PCCS; skipping hardware-only steps${NC}"
-exit 0
 
 # Get platform info and register
 cd /opt/intel/sgx-dcap-pccs/
