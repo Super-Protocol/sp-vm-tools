@@ -258,21 +258,14 @@ check_all_bios_settings() {
 # flag verification relies on a TDX-capable running kernel (dmesg "virt/tdx",
 # kvm_intel.tdx, ...). On a freshly bootstrapped host the TDX kernel is only
 # installed (not yet booted), so this returns false until the reboot.
-running_kernel_supports_tdx() {
-    # 1) running kernel built with TDX host support
-    if [ -f "/boot/config-$(uname -r)" ] && \
-       grep -q '^CONFIG_INTEL_TDX_HOST=y' "/boot/config-$(uname -r)"; then
-        return 0
-    fi
-    # 2) kvm_intel exposes the tdx parameter (only on TDX-capable kernels)
-    if [ -e /sys/module/kvm_intel/parameters/tdx ]; then
-        return 0
-    fi
-    # 3) TDX subsystem came up at boot
-    if dmesg 2>/dev/null | grep -q "virt/tdx"; then
-        return 0
-    fi
-    return 1
+# True only when TDX is active in the running kernel right now (KVM can create
+# TDs). kvm_intel sets tdx=Y exactly when the kernel booted with kvm_intel.tdx=on
+# (added by setup_grub) AND the TDX module initialized. Any other value -- "N" or
+# the file missing -- means TDX is not usable yet (typically a reboot into the
+# patched cmdline is still needed; e.g. dmesg "initialization failed: Hibernation
+# support is enabled" before nohibernate takes effect).
+tdx_active() {
+    [ "$(cat /sys/module/kvm_intel/parameters/tdx 2>/dev/null)" = "Y" ]
 }
 
 check_bios_settings() {
@@ -297,7 +290,7 @@ check_bios_settings() {
 # hardware without TDX (e.g. when testing the install flow on a plain VM).
 verify_tdx_hardware() {
     print_section_header "BIOS Configuration Verification"
-    if ! running_kernel_supports_tdx; then
+    if ! tdx_active; then
         echo -e "${RED}Running kernel $(uname -r) has no active TDX support.${NC}"
         echo "The TDX kernel is installed but not booted yet."
         echo "Reboot into the TDX kernel and re-run the bootstrap to continue"
