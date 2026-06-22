@@ -258,21 +258,14 @@ check_all_bios_settings() {
 # flag verification relies on a TDX-capable running kernel (dmesg "virt/tdx",
 # kvm_intel.tdx, ...). On a freshly bootstrapped host the TDX kernel is only
 # installed (not yet booted), so this returns false until the reboot.
-running_kernel_supports_tdx() {
-    # 1) running kernel built with TDX host support
-    if [ -f "/boot/config-$(uname -r)" ] && \
-       grep -q '^CONFIG_INTEL_TDX_HOST=y' "/boot/config-$(uname -r)"; then
-        return 0
-    fi
-    # 2) kvm_intel exposes the tdx parameter (only on TDX-capable kernels)
-    if [ -e /sys/module/kvm_intel/parameters/tdx ]; then
-        return 0
-    fi
-    # 3) TDX subsystem came up at boot
-    if dmesg 2>/dev/null | grep -q "virt/tdx"; then
-        return 0
-    fi
-    return 1
+# True only when TDX is active in the running kernel right now (KVM can create
+# TDs). kvm_intel sets tdx=Y exactly when the kernel booted with kvm_intel.tdx=on
+# (added by setup_grub) AND the TDX module initialized. Any other value -- "N" or
+# the file missing -- means TDX is not usable yet (typically a reboot into the
+# patched cmdline is still needed; e.g. dmesg "initialization failed: Hibernation
+# support is enabled" before nohibernate takes effect).
+tdx_active() {
+    [ "$(cat /sys/module/kvm_intel/parameters/tdx 2>/dev/null)" = "Y" ]
 }
 
 check_bios_settings() {
@@ -289,6 +282,133 @@ check_bios_settings() {
     # Run all checks at once
     check_all_bios_settings
     return $?
+}
+
+# Verify the host is actually TDX-ready: the running kernel must have active TDX
+# support and the BIOS must be configured. Aborts with exit 2 ("reboot required")
+# or exit 1 ("fix BIOS"). Comment out the single call site to bypass this on
+# hardware without TDX (e.g. when testing the install flow on a plain VM).
+verify_tdx_hardware() {
+    print_section_header "BIOS Configuration Verification"
+    if ! tdx_active; then
+        echo -e "${RED}Running kernel $(uname -r) has no active TDX support.${NC}"
+        echo "The TDX kernel is installed but not booted yet."
+        echo "Reboot into the TDX kernel and re-run the bootstrap to continue"
+        echo "(BIOS verification, attestation and PCCS registration)."
+        exit 2   # distinct code: "reboot required", not a failure
+    fi
+    if ! check_bios_settings; then
+        echo -e "${RED}ERROR: Required BIOS settings are not properly configured${NC}"
+        echo "Please configure BIOS settings according to the instructions above and try again"
+        exit 1
+    fi
+}
+
+# Configure PCCS: write its config + QCNL, install Node deps and SSL keys
+# (Intel-repo path only), and fix ownership. Grouped into one function to keep
+# the top-level flow readable.
+# NOTE: the `<< EOL` heredoc bodies (and their closing EOL) stay flush-left on
+# purpose -- indenting them would change the written config files.
+configure_pccs() {
+    # Create PCCS config directory
+    mkdir -p /opt/intel/sgx-dcap-pccs/config/
+
+    # Create PCCS configuration
+    print_section_header "Creating PCCS configuration..."
+    cat > /opt/intel/sgx-dcap-pccs/config/default.json << EOL
+{
+    "HTTPS_PORT" : ${PCCS_PORT},
+    "hosts" : "127.0.0.1",
+    "uri": "https://api.trustedservices.intel.com/sgx/certification/v4/",
+    "ApiKey" : "${PCCS_API_KEY}",
+    "proxy" : "",
+    "RefreshSchedule": "0 0 1 * *",
+    "UserTokenHash" : "${USER_TOKEN}",
+    "AdminTokenHash" : "${USER_TOKEN}",
+    "CachingFillMode" : "LAZY",
+    "LogLevel" : "debug",
+    "DB_CONFIG" : "sqlite",
+    "sqlite" : {
+        "database" : "database",
+        "username" : "username",
+        "password" : "password",
+        "options" : {
+            "host": "localhost",
+            "dialect": "sqlite",
+            "pool": {
+                "max": 5,
+                "min": 0,
+                "acquire": 30000,
+                "idle": 10000
+            },
+            "define": {
+                "freezeTableName": true
+            },
+            "logging" : false,
+            "storage": "pckcache.db"
+        }
+    }
+}
+EOL
+
+    # Configure QCNL
+    print_section_header "Configuring QCNL..."
+    cat > /etc/sgx_default_qcnl.conf << EOL
+PCCS_URL=https://localhost:${PCCS_PORT}/sgx/certification/v4/
+USE_SECURE_CERT=false
+RETRY_TIMES=6
+RETRY_DELAY=10
+LOCAL_PCK_URL=http://localhost:${PCCS_PORT}/sgx/certification/v4/
+LOCAL_PCK_RETRY_TIMES=6
+LOCAL_PCK_RETRY_DELAY=10
+EOL
+    check_error "Failed to create QCNL configuration"
+
+    # On the Intel SGX repo path (Ubuntu >= 25.10, incl. 26.04) the sgx-dcap-pccs
+    # package was installed with DEBIAN_FRONTEND=noninteractive, so its interactive
+    # install.sh was skipped. Reproduce here what install.sh would have done:
+    # install the Node.js dependencies and generate the HTTPS SSL keys. The
+    # Canonical PPA path (< 25.10) does this via setup-attestation-host.sh.
+    if [ "$USE_INTEL_REPO" -eq 1 ]; then
+        # Install PCCS Node.js dependencies. Without node_modules pccs_server.js
+        # fails to start with "Cannot find package 'config'".
+        print_section_header "Installing PCCS npm dependencies..."
+        (
+            cd /opt/intel/sgx-dcap-pccs/
+            npm config set engine-strict true
+            npm install
+        )
+        check_error "Failed to install PCCS npm dependencies"
+
+        # Generate self-signed SSL keys for the PCCS HTTPS endpoint. Without
+        # ssl_key/private.pem + ssl_key/file.crt PCCS cannot start its HTTPS server.
+        print_section_header "Generating PCCS SSL keys..."
+        mkdir -p /opt/intel/sgx-dcap-pccs/ssl_key
+        (
+            cd /opt/intel/sgx-dcap-pccs/ssl_key
+            openssl genrsa -out private.pem 2048
+            openssl req -new -key private.pem -out csr.pem -subj '/CN=localhost'
+            openssl x509 -req -days 365 -in csr.pem -signkey private.pem -out file.crt
+        )
+        check_error "Failed to generate PCCS SSL keys"
+    fi
+
+    # Set correct permissions
+    print_section_header "Setting permissions..."
+    chown -R pccs:pccs /opt/intel/sgx-dcap-pccs/
+    chmod -R 750 /opt/intel/sgx-dcap-pccs/
+}
+
+# Configure QGS transport. Our stack talks to the Quote Generation Service over
+# vsock, but newer tdx-qgs packages (Ubuntu 26.04+) ship /etc/qgs.conf with the
+# port commented out (defaulting to a Unix domain socket). Just write the config
+# we need: vsock on port 4050.
+configure_qgs() {
+    print_section_header "Configuring QGS (vsock port 4050)..."
+    cat > /etc/qgs.conf << EOL
+port = 4050
+number_threads = 4
+EOL
 }
 
 # On Ubuntu 24.04 the matched TDX kernel + QEMU are installed from the
@@ -404,13 +524,6 @@ install_tdx_release_packages() {
   # install_debs (common.sh) installs libslirp0, the kernel and the remaining
   # debs, and sets NEW_KERNEL_VERSION.
   install_debs "${work}"
-
-  # Boot the freshly installed custom kernel and enable TDX in KVM. setup_grub
-  # (common.sh) sets it as default and adds "kvm_intel.tdx=on" to the kernel
-  # command line -- without which kvm_intel loads without TDX and QEMU fails
-  # with "vm-type TDX not supported by KVM" (Canonical's 3.x setup no longer
-  # sets this flag).
-  setup_grub "${NEW_KERNEL_VERSION}" tdx
 }
 
 TMP_DIR=$1
@@ -463,49 +576,67 @@ else
     echo "Ubuntu ${UBUNTU_VERSION}: using Canonical kobuk-team PPA"
 fi
 
-if [ -d "${TMP_DIR}/tdx-cannonical" ]; then
-    echo -e "${YELLOW}Directory ${TMP_DIR}/tdx-cannonical already exists${NC}"
-    echo -e "Removing existing directory..."
-    rm -rf "${TMP_DIR}/tdx-cannonical"
+if [ "$USE_INTEL_REPO" -eq 1 ]; then
+    # Ubuntu 25.10+: TDX host support is already in the running stock generic
+    # kernel, and the Ubuntu archive ships a modern QEMU (>= 10) with TDX +
+    # iommufd. So we skip the canonical/tdx repo, setup-tdx-host.sh and the kobuk
+    # PPA entirely (kobuk has no build for these releases anyway) and just install
+    # QEMU from the archive -- same approach as bootstrap_snp.sh. No kernel (the
+    # host already runs a TDX-capable generic kernel) and no ovmf (the guest
+    # firmware ships in the sp-vm release; qemu-system-x86 pulls ovmf anyway).
+    print_section_header "Installing QEMU from Ubuntu archive..."
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y qemu-system-x86 qemu-utils
+    check_error "Failed to install QEMU"
+else
+    # Ubuntu < 25.10: TDX host support is not in the stock kernel, so use the
+    # canonical/tdx host setup (kobuk PPA + -intel kernel). The clone is also
+    # reused below for attestation (setup-attestation-host.sh).
+    if [ -d "${TMP_DIR}/tdx-cannonical" ]; then
+        echo -e "${YELLOW}Directory ${TMP_DIR}/tdx-cannonical already exists${NC}"
+        echo -e "Removing existing directory..."
+        rm -rf "${TMP_DIR}/tdx-cannonical"
+    fi
+
+    git clone https://github.com/canonical/tdx.git "${TMP_DIR}/tdx-cannonical"
+    if [ $? -ne 0 ]; then
+        echo "Failed to download the canonical/tdx repository."
+        exit 1
+    fi
+    SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/setup-tdx-host.sh
+
+    git -C "${TMP_DIR}/tdx-cannonical" checkout --detach "${TDX_REF}"
+    if [ $? -ne 0 ]; then
+        echo "Failed to checkout tdx ref ${TDX_REF}."
+        exit 1
+    fi
+
+    print_section_header "Installing hypervisor and kernel..."
+    echo "Running setup-tdx-host.sh..."
+    chmod +x "${SCRIPT_PATH}"
+    "${SCRIPT_PATH}"
+
+    # On 24.04 install our matched custom kernel + sp-qemu-tdx bundle on top.
+    install_tdx_release_packages "${TMP_DIR}"
 fi
 
-# Download the setup-attestation-host.sh script
-git clone https://github.com/canonical/tdx.git "${TMP_DIR}/tdx-cannonical"
-SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/setup-tdx-host.sh
-# Check for download errors
-if [ $? -ne 0 ]; then
-    echo "Failed to download the setup-tdx-host.sh script."
-    exit 1
-fi
-
-git -C "${TMP_DIR}/tdx-cannonical" checkout --detach "${TDX_REF}"
-if [ $? -ne 0 ]; then
-    echo "Failed to checkout tdx ref ${TDX_REF}."
-    exit 1
-fi
-
-# Make the script executable
-echo "Running setup-tdx-host.sh..."
-chmod +x "${SCRIPT_PATH}"
-"${SCRIPT_PATH}"
-
-# Install our hypervisor + kernel (custom kernel + sp-qemu-tdx) and TDX module
-# right after the canonical host setup, so our kernel becomes the default boot
-# entry and the BIOS verification below can run against it (after a reboot).
-print_section_header "Installing hypervisor and kernel..."
-install_tdx_release_packages "${TMP_DIR}"
+# Update the Intel TDX SEAM module (downloaded straight from Intel; independent
+# of the kernel/QEMU source above).
 update_tdx_module "${TMP_DIR}"
+
+# Configure GRUB for TDX on every release: enable TDX in KVM (kvm_intel.tdx=on)
+# and add nohibernate, then regenerate grub.cfg/initramfs. Canonical's stock
+# generic kernel (25.10+) does not enable tdx in kvm_intel by default, and the
+# -intel kernel does -- but setting the flag is harmless either way. The kernel
+# whose initramfs we regenerate / make default is the bundled custom kernel on
+# 24.04 (NEW_KERNEL_VERSION, set by install_debs) and the running distro kernel
+# elsewhere.
+print_section_header "Configuring GRUB for TDX..."
+setup_grub "${NEW_KERNEL_VERSION:-$(uname -r)}" tdx
 
 print_section_header "Configuring package repositories..."
 
 if [ "$USE_INTEL_REPO" -eq 1 ]; then
-    # Remove kobuk-team PPA if present (conflicts with Intel packages)
-    PPA_FILES=$(grep -rl "kobuk-team" /etc/apt/sources.list.d/ 2>/dev/null || true)
-    if [ -n "$PPA_FILES" ]; then
-        echo "Removing kobuk-team PPA: $PPA_FILES"
-        rm -f $PPA_FILES
-    fi
-
     # Add Intel SGX repository
     mkdir -p /etc/apt/keyrings
     curl -fsSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key \
@@ -526,19 +657,7 @@ fi
 apt-get update
 check_error "Failed to update package lists"
 
-print_section_header "BIOS Configuration Verification"
-if ! running_kernel_supports_tdx; then
-    echo -e "${RED}Running kernel $(uname -r) has no active TDX support.${NC}"
-    echo "The TDX kernel is installed but not booted yet."
-    echo "Reboot into the TDX kernel and re-run the bootstrap to continue"
-    echo "(BIOS verification, attestation and PCCS registration)."
-    exit 2   # distinct code: "reboot required", not a failure
-fi
-if ! check_bios_settings; then
-    echo -e "${RED}ERROR: Required BIOS settings are not properly configured${NC}"
-    echo "Please configure BIOS settings according to the instructions above and try again"
-    exit 1
-fi
+verify_tdx_hardware
 
 # Function to wait for service
 wait_for_service() {
@@ -743,7 +862,10 @@ if [ "$USE_INTEL_REPO" -eq 1 ]; then
     #   - libsgx-dcap-default-qpl      : Intel Quote Provider library (QPL)
     #   - sgx-ra-service               : direct (RA) registration method
     #   - sgx-pck-id-retrieval-tool    : indirect registration method
-    apt-get install -y \
+    # DEBIAN_FRONTEND=noninteractive: sgx-dcap-pccs postinst otherwise launches
+    # an interactive install.sh; noninteractive makes it skip that (we write the
+    # PCCS config ourselves below) and the package configures cleanly.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
         sgx-dcap-pccs \
         tdx-qgs \
         libsgx-dcap-default-qpl \
@@ -763,64 +885,8 @@ else
     check_error "Failed to install attestation packages"
 fi
 
-# Create PCCS config directory
-mkdir -p /opt/intel/sgx-dcap-pccs/config/
-
-# Create PCCS configuration
-print_section_header "Creating PCCS configuration..."
-cat > /opt/intel/sgx-dcap-pccs/config/default.json << EOL
-{
-    "HTTPS_PORT" : ${PCCS_PORT},
-    "hosts" : "127.0.0.1",
-    "uri": "https://api.trustedservices.intel.com/sgx/certification/v4/",
-    "ApiKey" : "${PCCS_API_KEY}",
-    "proxy" : "",
-    "RefreshSchedule": "0 0 1 * *",
-    "UserTokenHash" : "${USER_TOKEN}",
-    "AdminTokenHash" : "${USER_TOKEN}",
-    "CachingFillMode" : "LAZY",
-    "LogLevel" : "debug",
-    "DB_CONFIG" : "sqlite",
-    "sqlite" : {
-        "database" : "database",
-        "username" : "username",
-        "password" : "password",
-        "options" : {
-            "host": "localhost",
-            "dialect": "sqlite",
-            "pool": {
-                "max": 5,
-                "min": 0,
-                "acquire": 30000,
-                "idle": 10000
-            },
-            "define": {
-                "freezeTableName": true
-            },
-            "logging" : false, 
-            "storage": "pckcache.db"
-        }
-    }
-}
-EOL
-
-# Configure QCNL
-print_section_header "Configuring QCNL..."
-cat > /etc/sgx_default_qcnl.conf << EOL
-PCCS_URL=https://localhost:${PCCS_PORT}/sgx/certification/v4/
-USE_SECURE_CERT=false
-RETRY_TIMES=6
-RETRY_DELAY=10
-LOCAL_PCK_URL=http://localhost:${PCCS_PORT}/sgx/certification/v4/
-LOCAL_PCK_RETRY_TIMES=6
-LOCAL_PCK_RETRY_DELAY=10
-EOL
-check_error "Failed to create QCNL configuration"
-
-# Set correct permissions
-print_section_header "Setting permissions..."
-chown -R pccs:pccs /opt/intel/sgx-dcap-pccs/
-chmod -R 750 /opt/intel/sgx-dcap-pccs/
+# Configure PCCS (config + QCNL + npm/SSL + permissions); defined above.
+configure_pccs
 
 # Enable and start services
 print_section_header "Enabling and starting services..."
@@ -852,6 +918,7 @@ check_error "Failed to register platform"
 # written config: qgsd re-reads /etc/sgx_default_qcnl.conf, and the one-shot
 # mpa_registration_tool re-runs the registration flow.
 print_section_header "Starting remaining services..."
+configure_qgs   # patch /etc/qgs.conf for vsock before (re)starting qgsd
 systemctl restart qgsd
 wait_for_service qgsd
 systemctl restart mpa_registration_tool

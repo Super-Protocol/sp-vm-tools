@@ -132,6 +132,7 @@ IMAGE_PATH=""
 ROOTFS_HASH_PATH=""
 KERNEL_PATH=""
 PROVIDER_CONFIG_DISK_PATH=""
+QEMU_MAJOR_VERSION=0
 SNP_VCPU="EPYC-v4"
 PHYS_BITS=48
 
@@ -279,6 +280,7 @@ check_qemu_version() {
         echo "Error: could not parse QEMU version from: '${ver}'"
         exit 1
     fi
+    QEMU_MAJOR_VERSION=${major}
     if (( major < min_major )); then
         echo "Error: QEMU major version ${major} is too old (need >= ${min_major})."
         echo "Found: ${ver} at ${QEMU_PATH}"
@@ -359,6 +361,8 @@ parse_and_download_release_files() {
     required_keys=()
     if [[ "${VM_MODE}" == "sev-snp" ]]; then
         required_keys=("image" "bios_amd" "kernel" "rootfs_hash")
+    elif (( QEMU_MAJOR_VERSION >= 10 )); then
+        required_keys=("image" "bios_tdx" "kernel" "rootfs_hash")
     else
         required_keys=("image" "bios" "kernel" "rootfs_hash")
     fi
@@ -386,9 +390,15 @@ parse_and_download_release_files() {
             kernel) KERNEL_PATH=$local_path; echo "Set KERNEL_PATH to ${local_path}" ;;
             rootfs_hash) ROOTFS_HASH_PATH=$local_path; echo "Set ROOTFS_HASH_PATH to ${local_path}" ;;
             bios)
-                if [[ "${VM_MODE}" != "sev-snp" ]]; then
+                if [[ "${VM_MODE}" != "sev-snp" ]] && (( QEMU_MAJOR_VERSION < 10 )); then
                     BIOS_PATH=$local_path
-                    echo "Set BIOS_PATH to ${local_path}"
+                    echo "Set BIOS_PATH to ${local_path} (QEMU ${QEMU_MAJOR_VERSION})"
+                fi
+                ;;
+            bios_tdx)
+                if [[ "${VM_MODE}" != "sev-snp" ]] && (( QEMU_MAJOR_VERSION >= 10 )); then
+                    BIOS_PATH=$local_path
+                    echo "Set BIOS_PATH to ${local_path} (QEMU ${QEMU_MAJOR_VERSION})"
                 fi
                 ;;
             bios_amd)
@@ -399,6 +409,20 @@ parse_and_download_release_files() {
                 ;;
             *) echo "Warning: Unknown key ${key} in release JSON" ;;
         esac
+
+        # Skip downloading firmware files not needed for this mode/version
+        if [[ "$key" == "bios" ]] && { [[ "${VM_MODE}" == "sev-snp" ]] || (( QEMU_MAJOR_VERSION >= 10 )); }; then
+            echo "Skipping $filename (mode=${VM_MODE}, qemu=${QEMU_MAJOR_VERSION})"
+            continue
+        fi
+        if [[ "$key" == "bios_tdx" ]] && { [[ "${VM_MODE}" == "sev-snp" ]] || (( QEMU_MAJOR_VERSION < 10 )); }; then
+            echo "Skipping $filename (mode=${VM_MODE}, qemu=${QEMU_MAJOR_VERSION})"
+            continue
+        fi
+        if [[ "$key" == "bios_amd" ]] && [[ "${VM_MODE}" != "sev-snp" ]]; then
+            echo "Skipping $filename (mode=${VM_MODE})"
+            continue
+        fi
 
         # Check existing file
         if [[ -f "$local_path" ]]; then
@@ -844,9 +868,7 @@ main() {
 
     # Find QEMU path before using it
     find_qemu_path
-    if [[ "${VM_MODE}" == "tdx" || "${VM_MODE}" == "sev-snp" ]]; then
-        check_qemu_version
-    fi
+    check_qemu_version
 
     mkdir -p "${CACHE}"
     download_release "${RELEASE}" "${RELEASE_ASSET}" "${CACHE}" "${RELEASE_REPO}"
