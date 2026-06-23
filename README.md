@@ -19,10 +19,11 @@ The repository provides:
 - **Memory / CPU:** enough headroom to run a VM. Defaults of `start_super_protocol.sh` reserve `nproc - 2` cores and `RAM - 8 GiB` for the guest.
 - **Disk:** ≥ 512 GiB free for the guest state disk (auto-sized, but not less than 512 GiB).
 - **IOMMU enabled** in BIOS/UEFI (required for GPU passthrough).
+- **Confidential GPU (optional):** supported NVIDIA GPUs with CC mode: **H100**, **H200**, **B200** or **RTX 6000 Pro**.
 
 ### Intel TDX host
 
-- Intel Xeon CPU with **TDX** support (Sapphire Rapids / Emerald Rapids / Granite Rapids generation).
+- Intel Xeon CPU with **TDX** support: **Sapphire Rapids**, **Emerald Rapids**, **Sierra Forest** or **Granite Rapids** generation. Newer Intel family/model values are handled by the bootstrap fallback with the latest known TDX module.
 - BIOS configured with:
   - `CPU PA limit to 46 bits` — **Disabled**
   - `SMT` — **Enabled**
@@ -32,17 +33,15 @@ The repository provides:
   - `TME-MT (Multi-Tenant)` — **Enabled**, KeyIDs configured (non-zero key split)
   - `SEAM Loader` — **Enabled**
   - `TDX` — **Enabled**
-- For confidential GPU workloads: NVIDIA H100/H200 (or B200 with ConnectX-7) in CC mode, present in its own IOMMU group.
 
 ### AMD SEV-SNP host
 
-- AMD EPYC CPU: **Milan (7xx3)**, **Genoa (9xx4)** or **Turin (9xx5)**.
+- AMD EPYC CPU with **SEV-SNP** support: **Milan (7xx3)**, **Genoa (9xx4)** or **Turin (9xx5)**.
 - BIOS configured with:
   - `SEV-SNP` — **Enabled**
   - `SMEE / Memory Encryption` — **Enabled**
   - `IOMMU` — **Enabled**
   - Sufficient SEV/SEV-ES/SEV-SNP ASIDs allocated
-- For confidential GPU workloads: NVIDIA H100/H200 with CC mode support, present in its own IOMMU group.
 
 ## Bootstrapping the Host
 
