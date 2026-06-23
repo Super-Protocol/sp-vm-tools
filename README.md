@@ -139,3 +139,18 @@ For the full Swarm flow — provider configuration, building the VM image with `
 ## License
 
 See [LICENSE](LICENSE).
+
+
+## Roadmap
+
+Planned hardware support. These items are **not yet supported** and are listed
+for transparency only.
+
+| Hardware | Type | Status |
+|---|---|---|
+| NVIDIA B300 (CC mode) | Confidential GPU | 📋 Planned |
+| NVIDIA Rubin (CC mode) | Confidential GPU | 📋 Planned |
+
+> This roadmap reflects current intentions and is subject to change. It does
+> not constitute a commitment to deliver support for any hardware or feature,
+> nor to any timeline.
