@@ -13,7 +13,7 @@ The repository provides:
 
 ### Common
 
-- **OS:** Ubuntu on the host: **24.04 or newer** for Intel TDX (recommended **24.04**), **25.04 or newer** for AMD SEV-SNP (recommended **26.04**). Minimums are enforced by the bootstrap scripts.
+- **OS:** Ubuntu on the host: **24.04 or newer** for Intel TDX (recommended **24.04** or **26.04**; both are equally well supported), **25.04 or newer** for AMD SEV-SNP (recommended **26.04**). Minimums are enforced by the bootstrap scripts.
 - **Privileges:** `root` (run with `sudo`).
 - **Network:** outbound HTTPS to GitHub, AMD/Intel download servers and the Ubuntu archive.
 - **Memory / CPU:** enough headroom to run a VM. Defaults of `start_super_protocol.sh` reserve `nproc - 2` cores and `RAM - 8 GiB` for the guest.
