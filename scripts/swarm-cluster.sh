@@ -130,19 +130,24 @@ ensure_network() {
 # ----------------------------------------------------------------------------
 # 2. Generate per-node provider config from the template
 # ----------------------------------------------------------------------------
-# Logic: copy the template into WORKDIR/<role>, then substitute placeholders:
-#   __ADVERTISE_IP__   -> node local bridge IP (for advertise_addr)
-#   __BIND_IP__        -> 0.0.0.0 (listen on all; the address is local anyway)
-#   __JOIN_ADDRESSES__ -> "[]" on bootstrap, '["10.0.0.10:7946"]' on join
-#   __BOOTSTRAP_IP__   -> 10.0.0.10 (for PKI/encryption.addresses in join configs)
-#   __NODE_NAME__      -> node name
-# If a placeholder is absent from the template, sed simply makes no change (safe).
-# PKI fields and encryption.mode are NOT touched — they are owned by your template/image.
+# Takes the user's raw config.yaml (no placeholders required) and produces a
+# per-node copy with concrete values. Two-phase processing:
+#   Phase 1 (awk):  inject placeholders — replaces whatever value was there
+#                   with __PLACEHOLDER__, including multi-line pki_authority blocks.
+#                   All other fields pass through unchanged.
+#   Phase 2 (sed):  substitute placeholders with target values.
+#
+# Fields managed by the script (replaced regardless of original value):
+#   swarm_db.node_name, swarm_db.advertise_addr, swarm_db.join_addresses
+#   pki_authority.caBundle (injected if missing), pki_authority.servers (injected if missing)
+#
+# Everything else (github, tags, powerdns, base_domain, …) passes through as-is.
 prepare_config() {
     local role="$1"          # bootstrap | join1 | join2
     local node_ip="$2"
     local node_name="$3"
     local join_addr="$4"     # "" for bootstrap, "10.0.0.10:7946" for join
+    local ca_bundle="${5:-}" # PEM CA cert (join nodes only)
     local dest="${WORKDIR}/${role}"
 
     rm -rf "${dest}"
@@ -154,19 +159,68 @@ prepare_config() {
         join_yaml="[\"${join_addr}\"]"
     fi
 
-    # substitute placeholders across all yaml files of the template
     find "${dest}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 | \
     while IFS= read -r -d '' f; do
+        # --- Phase 1: inject placeholders with awk ---
+        # Handles multi-line pki_authority blocks correctly;
+        # simple scalar fields are matched by key regex.
+        awk -i inplace '
+        BEGIN                         { in_pki = 0; ca_done = 0; srv_done = 0; skip_body = 0 }
+        /^pki_authority:/             { in_pki = 1; ca_done = 0; srv_done = 0; skip_body = 0; print; next }
+        in_pki && /^[a-z]/            { in_pki = 0; skip_body = 0 }
+
+        # Skip remaining body lines of a replaced block (indent 3+ = body, indent 0-2 = next key)
+        in_pki && skip_body {
+            if (/^[[:space:]]{3,}/) { next }
+            skip_body = 0
+        }
+
+        # Replace existing caBundle block with placeholder
+        in_pki && !skip_body && /caBundle:/ {
+            print "  caBundle: |"
+            print "    __CA_BUNDLE__"
+            ca_done = 1; skip_body = 1; next
+        }
+        # Replace existing servers block with placeholder
+        in_pki && !skip_body && /servers:/ {
+            print "  servers:"
+            print "    - \"__BOOTSTRAP_IP__\""
+            srv_done = 1; skip_body = 1; next
+        }
+        # After networkID, inject caBundle/servers if not already present
+        in_pki && !skip_body && /networkID:/ {
+            print
+            if (!ca_done) { print "  caBundle: |"; print "    __CA_BUNDLE__"; ca_done = 1 }
+            if (!srv_done) { print "  servers:"; print "    - \"__BOOTSTRAP_IP__\""; srv_done = 1 }
+            next
+        }
+
+        # Simple scalar fields — replace value with placeholder
+        /^[[:space:]]*node_name:/       { sub(/:.*/, ": __NODE_NAME__"); print; next }
+        /^[[:space:]]*advertise_addr:/  { sub(/:.*/, ": __ADVERTISE_IP__"); print; next }
+        /^[[:space:]]*join_addresses:/  { sub(/:.*/, ": __JOIN_ADDRESSES__"); print; next }
+
+        { print }
+        ' "${f}"
+
+        # --- Phase 2: substitute placeholders with concrete values ---
         sed -i \
-            -e "s|__ADVERTISE_IP__|${node_ip}|g" \
+            -e "s|__ADVERTISE_IP__|\"${node_ip}\"|g" \
             -e "s|__BIND_IP__|0.0.0.0|g" \
             -e "s|__BOOTSTRAP_IP__|${BOOTSTRAP_IP}|g" \
-            -e "s|__NODE_NAME__|${node_name}|g" \
+            -e "s|__NODE_NAME__|\"${node_name}\"|g" \
             -e "s|__JOIN_ADDRESSES__|${join_yaml}|g" \
             "${f}"
+        # __CA_BUNDLE__ contains newlines — use pipe delimiter, substitute only for join nodes
+        if [[ -n "${ca_bundle}" ]]; then
+            sed -i "s|__CA_BUNDLE__|${ca_bundle}|g" "${f}"
+        else
+            # bootstrap: remove the entire caBundle placeholder block (caBundle: | + next line)
+            sed -i '/caBundle: |/{N;/__CA_BUNDLE__/d;}' "${f}"
+        fi
     done
 
-    log "provider config ready: ${dest} (ip=${node_ip}, join=${join_yaml})"
+    log "provider config ready: ${dest} (ip=${node_ip}, join=${join_yaml}, ca_bundle=$(if [[ -n "${ca_bundle}" ]]; then echo 'yes'; else echo 'no'; fi))"
     echo "${dest}"
 }
 
@@ -276,29 +330,63 @@ start_vm() {
 }
 
 # ----------------------------------------------------------------------------
-# 4. Healthcheck: wait until bootstrap is listening on gossip AND PKI
+# 4. Healthcheck: wait until bootstrap is listening on gossip AND PKI is serving
+#    the CA certificate (not just port open — we pull the actual PEM)
 # ----------------------------------------------------------------------------
 wait_bootstrap() {
     local timeout="${1:-1000}"
     local waited=0
-    log "Waiting for bootstrap (${BOOTSTRAP_IP}: ${GOSSIP_PORT} gossip + ${PKI_PORT} pki), timeout ${timeout}s"
+    local pki_url="https://${BOOTSTRAP_IP}:${PKI_PORT}/api/v1/pki/certs/ca"
+    log "Waiting for bootstrap: gossip ${BOOTSTRAP_IP}:${GOSSIP_PORT} + PKI ${pki_url}"
+    log "  timeout: ${timeout}s"
+
     while (( waited < timeout )); do
         local gossip_ok=false pki_ok=false
         # gossip 7946 (tcp) — swarm-db memberlist
         if nc -z -w2 "${BOOTSTRAP_IP}" "${GOSSIP_PORT}" 2>/dev/null; then gossip_ok=true; fi
-        # pki 9443 — required by join nodes to obtain the encryption key
-        if nc -z -w2 "${BOOTSTRAP_IP}" "${PKI_PORT}" 2>/dev/null; then pki_ok=true; fi
+
+        # pki 9443 — must actually serve the CA certificate (not just accept TCP)
+        local pki_resp
+        pki_resp="$(curl -sk --connect-timeout 2 --max-time 5 "${pki_url}" 2>/dev/null || true)"
+        if [[ -n "${pki_resp}" ]] && echo "${pki_resp}" | grep -q 'BEGIN CERTIFICATE'; then
+            pki_ok=true
+        fi
 
         if [[ "${gossip_ok}" == true && "${pki_ok}" == true ]]; then
-            log "bootstrap is ready (gossip + pki listening)"
+            log "bootstrap is ready (gossip=${gossip_ok}, PKI serving CA cert)"
             return 0
         fi
 
-        log "waiting for bootstrap: ${waited}s elapsed, gossip=${gossip_ok}, pki=${pki_ok}"
-
+        local pki_status="down"
+        [[ "${pki_ok}" == true ]] && pki_status="serving"
+        log "  [${waited}s] gossip=$(if ${gossip_ok}; then echo 'up'; else echo 'down'; fi)  pki=${pki_status}"
         sleep 5; waited=$(( waited + 5 ))
     done
     die "bootstrap did not come up within ${timeout}s. Check: tmux attach -t ${TMUX_BOOTSTRAP}"
+}
+
+# ----------------------------------------------------------------------------
+# 4b. Fetch the CA bundle from the bootstrap PKI authority
+# ----------------------------------------------------------------------------
+fetch_ca_bundle() {
+    local pki_url="https://${BOOTSTRAP_IP}:${PKI_PORT}/api/v1/pki/certs/ca"
+    log "Fetching CA bundle from bootstrap PKI: ${pki_url}"
+
+    local ca_pem
+    ca_pem="$(curl -sk --connect-timeout 5 --max-time 10 "${pki_url}" 2>/dev/null)" || true
+    if [[ -z "${ca_pem}" ]]; then
+        die "Failed to fetch CA bundle from ${pki_url} — PKI not responding"
+    fi
+    if ! echo "${ca_pem}" | grep -q 'BEGIN CERTIFICATE'; then
+        err "Response doesn't look like a PEM certificate:"
+        err "${ca_pem}"
+        die "Invalid CA bundle from ${pki_url}"
+    fi
+
+    log "CA bundle fetched successfully (${#ca_pem} bytes)"
+
+    # Return it via stdout (caller captures with $())
+    echo "${ca_pem}"
 }
 
 # ----------------------------------------------------------------------------
@@ -340,28 +428,38 @@ cmd_up() {
     [[ -n "${PROVIDER_TEMPLATE}" ]] || die "Specify --provider-config-template <dir>"
     [[ -d "${PROVIDER_TEMPLATE}" ]] || die "Template ${PROVIDER_TEMPLATE} not found"
     [[ -x "${START_SCRIPT}" ]] || die "start script not found/executable: ${START_SCRIPT}"
-    command -v nc &>/dev/null || die "nc is required (apt install netcat-openbsd)"
+    command -v nc &>/dev/null   || die "nc is required (apt install netcat-openbsd)"
+    command -v curl &>/dev/null || die "curl is required (apt install curl)"
+    command -v awk &>/dev/null  || die "awk is required"
     command -v tmux &>/dev/null || die "tmux is required (apt install tmux)"
-    command -v nft &>/dev/null || die "nftables is required (apt install nftables)"
+    command -v nft &>/dev/null  || die "nftables is required (apt install nftables)"
 
     mkdir -p "${CACHE}" "${WORKDIR}"
 
     ensure_network
 
-    # generate configs
-    local boot_dir join1_dir join2_dir
+    # --- bootstrap node (no CA bundle, no join addresses) ---
+    local boot_dir
     boot_dir="$(prepare_config bootstrap "${BOOTSTRAP_IP}" "swarm-bootstrap" "")"
-    join1_dir="$(prepare_config join1 "${JOIN_IPS[0]}" "swarm-join-1" "${BOOTSTRAP_IP}:${GOSSIP_PORT}")"
-    join2_dir="$(prepare_config join2 "${JOIN_IPS[1]}" "swarm-join-2" "${BOOTSTRAP_IP}:${GOSSIP_PORT}")"
 
-    # bootstrap first, with GPU and swarm-init
     local boot_gpu=false
     [[ "${GPU_TARGET}" == "bootstrap" ]] && boot_gpu=true
     start_vm "${TMUX_BOOTSTRAP}" "${BOOTSTRAP_IP}" "${CID_BOOTSTRAP}" "${boot_dir}" true "${boot_gpu}" "${SSH_PORT_BOOTSTRAP}"
 
     wait_bootstrap 1000
 
-    # join nodes, no GPU, no swarm-init
+    # --- fetch PKI CA bundle from bootstrap ---
+    log "Bootstrap is up — fetching CA bundle for join nodes..."
+    local ca_bundle
+    ca_bundle="$(fetch_ca_bundle)"
+    log "CA bundle: $(echo "${ca_bundle}" | head -1) ... ($(echo "${ca_bundle}" | wc -l) lines)"
+
+    # --- join nodes (with CA bundle and bootstrap gossip address) ---
+    local join1_dir join2_dir
+    log "Generating join-node provider configs with CA bundle..."
+    join1_dir="$(prepare_config join1 "${JOIN_IPS[0]}" "swarm-join-1" "${BOOTSTRAP_IP}:${GOSSIP_PORT}" "${ca_bundle}")"
+    join2_dir="$(prepare_config join2 "${JOIN_IPS[1]}" "swarm-join-2" "${BOOTSTRAP_IP}:${GOSSIP_PORT}" "${ca_bundle}")"
+
     start_vm "${TMUX_JOIN[0]}" "${JOIN_IPS[0]}" "${CID_JOIN[0]}" "${join1_dir}" false false "${SSH_PORT_JOIN[0]}"
     start_vm "${TMUX_JOIN[1]}" "${JOIN_IPS[1]}" "${CID_JOIN[1]}" "${join2_dir}" false false "${SSH_PORT_JOIN[1]}"
 
