@@ -50,6 +50,7 @@ VM_MEM=20
 STATE_DISK_SIZE=50
 
 VM_MODE=""                     # empty = auto-detect (tdx/sev-snp) in start script
+RELEASE=""                     # empty = latest; pin a working build, e.g. build-358
 CACHE="/data/sp-vm/cache"
 START_SCRIPT="${HOME}/projects/sp-vm-tools/scripts/start_super_protocol.sh"
 PROVIDER_TEMPLATE=""           # provider config template dir (--provider-config-template)
@@ -191,6 +192,9 @@ start_vm() {
     local mode_args=()
     [[ -n "${VM_MODE}" ]] && mode_args=(--mode "${VM_MODE}")
 
+    local release_args=()
+    [[ -n "${RELEASE}" ]] && release_args=(--release "${RELEASE}")
+
     # build the patched start-script command line in tap mode
     local cmd=(
         "${START_SCRIPT}"
@@ -206,6 +210,7 @@ start_vm() {
         --cache "${CACHE}"
         --guest-cid "${cid}"
         "${mode_args[@]}"
+        "${release_args[@]}"
         "${gpu_args[@]}"
         --swarm-init "${swarm_init}"
     )
@@ -213,6 +218,18 @@ start_vm() {
     log "Starting ${session}: ip=${node_ip} cid=${cid} tap=${tap_iface} swarm-init=${swarm_init} gpu=${with_gpu}"
     # tmux session; the command is visible in history, the VM lives as long as QEMU runs
     tmux new-session -d -s "${session}" "echo 'CMD: ${cmd[*]}'; ${cmd[*]} 2>&1 | tee ${CACHE}/log-${node_ip##*.}.txt"
+
+    # Fail fast: if the command dies immediately (bad flags, missing release, etc.),
+    # the tmux session collapses and we must not proceed into a blind wait.
+    # The image download alone takes a while, so we only check that the session
+    # survives the first few seconds — enough to catch instant failures.
+    sleep 6
+    if ! tmux has-session -t "${session}" 2>/dev/null; then
+        err "Session ${session} exited immediately — startup failed."
+        err "Last lines of ${CACHE}/log-${node_ip##*.}.txt:"
+        tail -n 20 "${CACHE}/log-${node_ip##*.}.txt" 2>/dev/null | sed 's/^/    /' >&2 || true
+        die "Aborting. Fix the error above (often: wrong --release, or start script not patched)."
+    fi
 }
 
 # ----------------------------------------------------------------------------
@@ -377,6 +394,7 @@ while [[ $# -gt 0 ]]; do
         --mem)            VM_MEM="$2"; shift 2 ;;
         --state-disk-size) STATE_DISK_SIZE="$2"; shift 2 ;;
         --mode)           VM_MODE="$2"; shift 2 ;;
+        --release)        RELEASE="$2"; shift 2 ;;
         --gpu-target)     GPU_TARGET="$2"; shift 2 ;;   # bootstrap | none
         --bootstrap-ip)   BOOTSTRAP_IP="$2"; shift 2 ;;
         *) die "Unknown argument: $1" ;;
