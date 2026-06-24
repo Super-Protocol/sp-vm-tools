@@ -58,6 +58,12 @@ WORKDIR="/data/sp-vm/cluster"  # per-node provider configs are generated here
 WAN_IFACE=""                   # empty = auto-detect from ip route
 GPU_TARGET="bootstrap"         # bootstrap | none — where to pass the GPU (single-GPU host)
 
+# Debug mode: passes --debug true + --log_file to the start script (verbose boot log),
+# and forwards SSH per node on distinct host ports (internal use only).
+DEBUG_MODE="false"
+SSH_PORT_BOOTSTRAP=2210
+SSH_PORT_JOIN=(2211 2212)
+
 # tmux sessions
 TMUX_BOOTSTRAP="swarm-bootstrap"
 TMUX_JOIN=("swarm-join-1" "swarm-join-2")
@@ -174,6 +180,7 @@ start_vm() {
     local provider_dir="$4"
     local swarm_init="$5"    # true | false
     local with_gpu="$6"      # true | false
+    local ssh_port="${7:-}"  # host SSH port (debug mode only)
     local tap_iface="sw-tap-${node_ip##*.}"
     local mac; mac="$(mac_for_ip "${node_ip}")"
 
@@ -195,6 +202,17 @@ start_vm() {
     local release_args=()
     [[ -n "${RELEASE}" ]] && release_args=(--release "${RELEASE}")
 
+    # Debug mode: verbose boot log + per-node SSH port. start_super_protocol.sh
+    # requires --log_file when --debug true. NOTE: the script forwards SSH via
+    # hostfwd (user-mode) only; in tap mode that hostfwd is inactive, so SSH must
+    # go to the VM's bridge IP (ssh ubuntu@<node_ip>). The main value of debug
+    # here is the verbose serial/boot log written to the log file.
+    local debug_args=()
+    if [[ "${DEBUG_MODE}" == "true" ]]; then
+        debug_args=(--debug true --log_file "${CACHE}/boot-${node_ip##*.}.log")
+        [[ -n "${ssh_port}" ]] && debug_args+=(--ssh_port "${ssh_port}")
+    fi
+
     # build the patched start-script command line in tap mode
     local cmd=(
         "${START_SCRIPT}"
@@ -204,6 +222,7 @@ start_vm() {
         --cores "${VM_CORES}"
         --mem "${VM_MEM}"
         --provider_config "${provider_dir}"
+        --mac_address "${mac}"
         --state_disk_size "${STATE_DISK_SIZE}"
         --state_disk_path "${CACHE}/state-${node_ip##*.}.qcow2"
         --provider_config_disk_path "${CACHE}/pcfg-${node_ip##*.}.img"
@@ -212,10 +231,11 @@ start_vm() {
         "${mode_args[@]}"
         "${release_args[@]}"
         "${gpu_args[@]}"
+        "${debug_args[@]}"
         --swarm-init "${swarm_init}"
     )
 
-    log "Starting ${session}: ip=${node_ip} cid=${cid} tap=${tap_iface} swarm-init=${swarm_init} gpu=${with_gpu}"
+    log "Starting ${session}: ip=${node_ip} cid=${cid} tap=${tap_iface} swarm-init=${swarm_init} gpu=${with_gpu} debug=${DEBUG_MODE}"
 
     # Safety net: drop any empty array elements before building the runner.
     # An empty positional arg would shift the start-script's two-step arg parser
@@ -345,13 +365,13 @@ cmd_up() {
     # bootstrap first, with GPU and swarm-init
     local boot_gpu=false
     [[ "${GPU_TARGET}" == "bootstrap" ]] && boot_gpu=true
-    start_vm "${TMUX_BOOTSTRAP}" "${BOOTSTRAP_IP}" "${CID_BOOTSTRAP}" "${boot_dir}" true "${boot_gpu}"
+    start_vm "${TMUX_BOOTSTRAP}" "${BOOTSTRAP_IP}" "${CID_BOOTSTRAP}" "${boot_dir}" true "${boot_gpu}" "${SSH_PORT_BOOTSTRAP}"
 
     wait_bootstrap 600
 
     # join nodes, no GPU, no swarm-init
-    start_vm "${TMUX_JOIN[0]}" "${JOIN_IPS[0]}" "${CID_JOIN[0]}" "${join1_dir}" false false
-    start_vm "${TMUX_JOIN[1]}" "${JOIN_IPS[1]}" "${CID_JOIN[1]}" "${join2_dir}" false false
+    start_vm "${TMUX_JOIN[0]}" "${JOIN_IPS[0]}" "${CID_JOIN[0]}" "${join1_dir}" false false "${SSH_PORT_JOIN[0]}"
+    start_vm "${TMUX_JOIN[1]}" "${JOIN_IPS[1]}" "${CID_JOIN[1]}" "${join2_dir}" false false "${SSH_PORT_JOIN[1]}"
 
     # external ingress
     setup_dnat
@@ -428,6 +448,7 @@ while [[ $# -gt 0 ]]; do
         --state-disk-size) STATE_DISK_SIZE="$2"; shift 2 ;;
         --mode)           VM_MODE="$2"; shift 2 ;;
         --release)        RELEASE="$2"; shift 2 ;;
+        --debug)          DEBUG_MODE="$2"; shift 2 ;;
         --gpu-target)     GPU_TARGET="$2"; shift 2 ;;   # bootstrap | none
         --bootstrap-ip)   BOOTSTRAP_IP="$2"; shift 2 ;;
         *) die "Unknown argument: $1" ;;
