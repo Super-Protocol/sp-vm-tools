@@ -139,6 +139,7 @@ ensure_network() {
 #
 # Fields managed by the script (replaced regardless of original value):
 #   swarm_db.node_name, swarm_db.advertise_addr, swarm_db.join_addresses
+#   pki_authority.networkID (auto-generated UUID, same for all nodes)
 #   pki_authority.caBundle (injected if missing), pki_authority.servers (injected if missing)
 #
 # Everything else (github, tags, powerdns, base_domain, …) passes through as-is.
@@ -148,6 +149,7 @@ prepare_config() {
     local node_name="$3"
     local join_addr="$4"     # "" for bootstrap, "10.0.0.10:7946" for join
     local ca_bundle="${5:-}" # PEM CA cert (join nodes only)
+    local network_id="${6:-}" # UUID for pki_authority.networkID (same across cluster)
     local dest="${WORKDIR}/${role}"
 
     rm -rf "${dest}"
@@ -187,8 +189,9 @@ prepare_config() {
             print "    - \"__BOOTSTRAP_IP__\""
             srv_done = 1; skip_body = 1; next
         }
-        # After networkID, inject caBundle/servers if not already present
+        # Replace networkID value with placeholder (auto-generated UUID)
         in_pki && !skip_body && /networkID:/ {
+            sub(/:.*/, ": __NETWORK_ID__")
             print
             if (!ca_done) { print "  caBundle: |"; print "    __CA_BUNDLE__"; ca_done = 1 }
             if (!srv_done) { print "  servers:"; print "    - \"__BOOTSTRAP_IP__\""; srv_done = 1 }
@@ -210,6 +213,7 @@ prepare_config() {
             -e "s|__BOOTSTRAP_IP__|${BOOTSTRAP_IP}|g" \
             -e "s|__NODE_NAME__|\"${node_name}\"|g" \
             -e "s|__JOIN_ADDRESSES__|${join_yaml}|g" \
+            -e "s|__NETWORK_ID__|\"${network_id}\"|g" \
             "${f}"
         # __CA_BUNDLE__ contains newlines — use pipe delimiter, substitute only for join nodes
         if [[ -n "${ca_bundle}" ]]; then
@@ -220,7 +224,7 @@ prepare_config() {
         fi
     done
 
-    log "provider config ready: ${dest} (ip=${node_ip}, join=${join_yaml}, ca_bundle=$(if [[ -n "${ca_bundle}" ]]; then echo 'yes'; else echo 'no'; fi))"
+    log "provider config ready: ${dest} (ip=${node_ip}, join=${join_yaml}, network_id=${network_id}, ca_bundle=$(if [[ -n "${ca_bundle}" ]]; then echo 'yes'; else echo 'no'; fi))"
     echo "${dest}"
 }
 
@@ -438,9 +442,20 @@ cmd_up() {
 
     ensure_network
 
+    # --- generate cluster-wide networkID (UUID) ---
+    local network_id
+    if command -v uuidgen &>/dev/null; then
+        network_id="$(uuidgen)"
+    elif [[ -r /proc/sys/kernel/random/uuid ]]; then
+        network_id="$(cat /proc/sys/kernel/random/uuid)"
+    else
+        network_id="$(od -x /dev/urandom | head -1 | awk '{print $2$3$4"-"$5$6"-"$7$8"-"$9$10"-"$11$12$13}')"
+    fi
+    log "Cluster networkID: ${network_id}"
+
     # --- bootstrap node (no CA bundle, no join addresses) ---
     local boot_dir
-    boot_dir="$(prepare_config bootstrap "${BOOTSTRAP_IP}" "swarm-bootstrap" "")"
+    boot_dir="$(prepare_config bootstrap "${BOOTSTRAP_IP}" "swarm-bootstrap" "" "" "${network_id}")"
 
     local boot_gpu=false
     [[ "${GPU_TARGET}" == "bootstrap" ]] && boot_gpu=true
@@ -457,8 +472,8 @@ cmd_up() {
     # --- join nodes (with CA bundle and bootstrap gossip address) ---
     local join1_dir join2_dir
     log "Generating join-node provider configs with CA bundle..."
-    join1_dir="$(prepare_config join1 "${JOIN_IPS[0]}" "swarm-join-1" "${BOOTSTRAP_IP}:${GOSSIP_PORT}" "${ca_bundle}")"
-    join2_dir="$(prepare_config join2 "${JOIN_IPS[1]}" "swarm-join-2" "${BOOTSTRAP_IP}:${GOSSIP_PORT}" "${ca_bundle}")"
+    join1_dir="$(prepare_config join1 "${JOIN_IPS[0]}" "swarm-join-1" "${BOOTSTRAP_IP}:${GOSSIP_PORT}" "${ca_bundle}" "${network_id}")"
+    join2_dir="$(prepare_config join2 "${JOIN_IPS[1]}" "swarm-join-2" "${BOOTSTRAP_IP}:${GOSSIP_PORT}" "${ca_bundle}" "${network_id}")"
 
     start_vm "${TMUX_JOIN[0]}" "${JOIN_IPS[0]}" "${CID_JOIN[0]}" "${join1_dir}" false false "${SSH_PORT_JOIN[0]}"
     start_vm "${TMUX_JOIN[1]}" "${JOIN_IPS[1]}" "${CID_JOIN[1]}" "${join2_dir}" false false "${SSH_PORT_JOIN[1]}"
