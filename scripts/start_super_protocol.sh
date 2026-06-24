@@ -32,6 +32,12 @@ DEFAULT_GUEST_CID=3
 DEFAULT_SWARM_INIT=false
 DEFAULT_ALLOW_UNTRUSTED=false
 
+DEFAULT_NETDEV_MODE="user"       # user | tap
+DEFAULT_BRIDGE="swarmbr0"
+NETDEV_MODE="${DEFAULT_NETDEV_MODE}"
+BRIDGE="${DEFAULT_BRIDGE}"
+TAP_IFACE=""
+
 LOG_FILE=""
 DEFAULT_MAC_PREFIX="52:54:00:12:34"
 DEFAULT_MAC_SUFFIX="56"
@@ -97,6 +103,9 @@ usage() {
     echo "  --build_dir <path>             Path to the local builded kata container (default: no)"
     echo "  --swarm-init <true|false>      Enable swarm-init mode (default: ${DEFAULT_SWARM_INIT})"
     echo "  --allow-untrusted <true|false> Allow untrusted mode (default: ${DEFAULT_ALLOW_UNTRUSTED})"
+    echo "  --netdev_mode <user|tap>       QEMU netdev backend (default: ${DEFAULT_NETDEV_MODE})"
+    echo "  --bridge <name>                Bridge to attach tap to in tap mode (default: ${DEFAULT_BRIDGE})"
+    echo "  --tap_iface <name>             Explicit tap interface name (default: sw-tap<nic_id>)"
     echo ""
 }
 
@@ -165,6 +174,9 @@ parse_args() {
             --build_dir) LOCAL_BUILD_DIR=$2; shift ;;
             --swarm-init) SWARM_INIT=$2; shift ;;
             --allow-untrusted) ALLOW_UNTRUSTED=$2; shift ;;
+            --netdev_mode) NETDEV_MODE=$2; shift ;;
+            --bridge) BRIDGE=$2; shift ;;
+            --tap_iface) TAP_IFACE=$2; shift ;;
             --help) usage; exit 0;;
             *) echo "Unknown parameter: $1"; usage ; exit 1 ;;
         esac
@@ -983,23 +995,51 @@ main() {
             ;;
     esac
 
-    NETWORK_SETTINGS=" -device virtio-net-pci,netdev=nic_id$BASE_NIC,mac=$MAC_ADDRESS"
-    NETWORK_SETTINGS+=" -netdev user,id=nic_id$BASE_NIC"
-    if [[ -n "$HTTP_PORT" ]]; then
-        NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$HTTP_PORT-:80"
+    if [[ "${NETDEV_MODE}" == "tap" ]]; then
+        # --- tap/bridge mode ---------------------------------------------
+        # The VM gets a real address in the bridge subnet via cloud-init/netplan
+        # inside the image (ens2: addresses: [10.0.0.1X/24]). Here, only
+        # we connect tap to the bridge; forwarding is done by nftables on the host.
+        if [[ -z "${TAP_IFACE}" ]]; then
+            TAP_IFACE="sw-tap${BASE_NIC}"
+        fi
+    
+        # the bridge must exist (created by swarm-cluster.sh ensure-network)
+        if ! ip link show "${BRIDGE}" &>/dev/null; then
+            echo "Error: bridge ${BRIDGE} does not exist. Run 'swarm-cluster.sh ensure-network' first."
+            exit 1
+        fi
+    
+        # create tap, bring it up, and connect it to the bridge (idempotent)
+        if ! ip link show "${TAP_IFACE}" &>/dev/null; then 
+            ip tuntap add dev "${TAP_IFACE}" mode tap user root 
+        fi 
+        ip link set "${TAP_IFACE}" master "${BRIDGE}" 
+        ip link set "${TAP_IFACE}" up 
+    
+        # script=no/downscript=no - QEMU does not pull /etc/qemu-ifup, tap is already ready 
+        NETWORK_SETTINGS=" -device virtio-net-pci,netdev=nic_id$BASE_NIC,mac=$MAC_ADDRESS" 
+        NETWORK_SETTINGS+=" -netdev tap,id=nic_id$BASE_NIC,ifname=${TAP_IFACE},script=no,downscript=no" 
+    else 
+        # --- user mode (original behavior, no changes) ----------- 
+        NETWORK_SETTINGS=" -device virtio-net-pci,netdev=nic_id$BASE_NIC,mac=$MAC_ADDRESS" 
+        NETWORK_SETTINGS+=" -netdev user,id=nic_id$BASE_NIC" 
+        if [[ -n "$HTTP_PORT" ]]; then 
+            NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$HTTP_PORT-:80" 
+        fi 
+        if [[ -n "$HTTPS_PORT" ]]; then 
+            NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$HTTPS_PORT-:443" 
+        fi 
+        if [[ -n "$PKI_PORT" ]]; then 
+            NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$PKI_PORT-:9443" 
+        fi 
+        NETWORK_SETTINGS+=",hostfwd=udp:$IP_ADDRESS:$WG_PORT-:51820" 
+        NETWORK_SETTINGS+=",hostfwd=udp:$IP_ADDRESS:$SWARM_DB_GOSSIP_PORT-:7946" 
+        NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$SWARM_DB_GOSSIP_PORT-:7946" 
+        NETWORK_SETTINGS+=",hostfwd=udp:$IP_ADDRESS:$DNS_PORT-:53" 
+        NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$DNS_PORT-:53" 
     fi
-    if [[ -n "$HTTPS_PORT" ]]; then
-        NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$HTTPS_PORT-:443"
-    fi
-    if [[ -n "$PKI_PORT" ]]; then
-        NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$PKI_PORT-:9443"
-    fi
-
-    NETWORK_SETTINGS+=",hostfwd=udp:$IP_ADDRESS:$WG_PORT-:51820"
-    NETWORK_SETTINGS+=",hostfwd=udp:$IP_ADDRESS:$SWARM_DB_GOSSIP_PORT-:7946"
-    NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$SWARM_DB_GOSSIP_PORT-:7946"
-    NETWORK_SETTINGS+=",hostfwd=udp:$IP_ADDRESS:$DNS_PORT-:53"
-    NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$DNS_PORT-:53"
+    
     DEBUG_PARAMS=""
     KERNEL_CMD_LINE=""
     ROOTFS_HASH="$(cat "$ROOTFS_HASH_PATH")";
