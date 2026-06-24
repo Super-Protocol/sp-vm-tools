@@ -284,9 +284,24 @@ prepare_config() {
             -e "s|__JOIN_ADDRESSES__|${join_yaml}|g" \
             -e "s|__NETWORK_ID__|\"${network_id}\"|g" \
             "${f}"
-        # __CA_BUNDLE__ contains newlines — use pipe delimiter, substitute only for join nodes
+        # __CA_BUNDLE__ contains newlines — sed can't handle multiline replacement.
+        # Replace the placeholder line with the PEM, preserving the YAML block indent.
         if [[ -n "${ca_bundle}" ]]; then
-            sed -i "s|__CA_BUNDLE__|${ca_bundle}|g" "${f}"
+            # Detect the indentation of the __CA_BUNDLE__ line and apply it to every PEM line.
+            CA_BUNDLE="${ca_bundle}" awk '
+                /__CA_BUNDLE__/ {
+                    match($0, /^[[:space:]]*/)
+                    indent = substr($0, 1, RLENGTH)
+                    n = split(ENVIRON["CA_BUNDLE"], lines, "\n")
+                    for (i = 1; i <= n; i++) {
+                        # drop a possible trailing empty line
+                        if (i == n && lines[i] == "") continue
+                        print indent lines[i]
+                    }
+                    next
+                }
+                { print }
+            ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
         else
             # bootstrap: remove caBundle and servers blocks (bootstrap is self-sufficient,
             # join_addresses/caBundle/servers must be all-empty or all-non-empty)
@@ -431,15 +446,20 @@ wait_bootstrap() {
         fi
 
         if [[ "${gossip_ok}" == true && "${pki_ok}" == true ]]; then
+            echo >&2
             log "bootstrap is ready (gossip=${gossip_ok}, PKI serving CA cert)"
             return 0
         fi
 
         local pki_status="down"
         [[ "${pki_ok}" == true ]] && pki_status="serving"
-        log "  [${waited}s] gossip=$(if ${gossip_ok}; then echo 'up'; else echo 'down'; fi)  pki=${pki_status}"
+        printf '\r[%s]   [%ss] gossip=%s  pki=%s\033[K' \
+            "$(date +%H:%M:%S)" "${waited}" \
+            "$(if ${gossip_ok}; then echo 'up'; else echo 'down'; fi)" \
+            "${pki_status}" >&2
         sleep 5; waited=$(( waited + 5 ))
     done
+    echo >&2
     die "bootstrap did not come up within ${timeout}s. Check: tmux attach -t ${TMUX_BOOTSTRAP}"
 }
 
