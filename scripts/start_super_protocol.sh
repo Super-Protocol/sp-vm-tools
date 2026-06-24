@@ -995,49 +995,48 @@ main() {
             ;;
     esac
 
-    if [[ "${NETDEV_MODE}" == "tap" ]]; then
-        # --- tap/bridge mode ---------------------------------------------
-        # The VM gets a real address in the bridge subnet via cloud-init/netplan
-        # inside the image (ens2: addresses: [10.0.0.1X/24]). Here, only
-        # we connect tap to the bridge; forwarding is done by nftables on the host.
+if [[ "${NETDEV_MODE}" == "tap" ]]; then
         if [[ -z "${TAP_IFACE}" ]]; then
             TAP_IFACE="sw-tap${BASE_NIC}"
         fi
-    
-        # the bridge must exist (created by swarm-cluster.sh ensure-network)
+
         if ! ip link show "${BRIDGE}" &>/dev/null; then
             echo "Error: bridge ${BRIDGE} does not exist. Run 'swarm-cluster.sh ensure-network' first."
             exit 1
         fi
-    
-        # create tap, bring it up, and connect it to the bridge (idempotent)
-        if ! ip link show "${TAP_IFACE}" &>/dev/null; then 
-            ip tuntap add dev "${TAP_IFACE}" mode tap user root 
-        fi 
-        ip link set "${TAP_IFACE}" master "${BRIDGE}" 
-        ip link set "${TAP_IFACE}" up 
-    
-        # script=no/downscript=no - QEMU does not pull /etc/qemu-ifup, tap is already ready 
-        NETWORK_SETTINGS=" -device virtio-net-pci,netdev=nic_id$BASE_NIC,mac=$MAC_ADDRESS" 
-        NETWORK_SETTINGS+=" -netdev tap,id=nic_id$BASE_NIC,ifname=${TAP_IFACE},script=no,downscript=no" 
-    else 
-        # --- user mode (original behavior, no changes) ----------- 
-        NETWORK_SETTINGS=" -device virtio-net-pci,netdev=nic_id$BASE_NIC,mac=$MAC_ADDRESS" 
-        NETWORK_SETTINGS+=" -netdev user,id=nic_id$BASE_NIC" 
-        if [[ -n "$HTTP_PORT" ]]; then 
-            NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$HTTP_PORT-:80" 
-        fi 
-        if [[ -n "$HTTPS_PORT" ]]; then 
-            NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$HTTPS_PORT-:443" 
-        fi 
-        if [[ -n "$PKI_PORT" ]]; then 
-            NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$PKI_PORT-:9443" 
-        fi 
-        NETWORK_SETTINGS+=",hostfwd=udp:$IP_ADDRESS:$WG_PORT-:51820" 
-        NETWORK_SETTINGS+=",hostfwd=udp:$IP_ADDRESS:$SWARM_DB_GOSSIP_PORT-:7946" 
-        NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$SWARM_DB_GOSSIP_PORT-:7946" 
-        NETWORK_SETTINGS+=",hostfwd=udp:$IP_ADDRESS:$DNS_PORT-:53" 
-        NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$DNS_PORT-:53" 
+
+        if ! ip link show "${TAP_IFACE}" &>/dev/null; then
+            ip tuntap add dev "${TAP_IFACE}" mode tap user root
+        fi
+        ip link set "${TAP_IFACE}" master "${BRIDGE}"
+        ip link set "${TAP_IFACE}" up
+
+        NETWORK_SETTINGS=" -device virtio-net-pci,netdev=nic_id$BASE_NIC,mac=$MAC_ADDRESS"
+        NETWORK_SETTINGS+=" -netdev tap,id=nic_id$BASE_NIC,ifname=${TAP_IFACE},script=no,downscript=no"
+
+        if [[ "${DEBUG_MODE}" == "true" ]]; then
+            local dbg_nic=$(( BASE_NIC + 100 ))
+            NETWORK_SETTINGS+=" -device virtio-net-pci,netdev=nic_dbg${dbg_nic}"
+            NETWORK_SETTINGS+=" -netdev user,id=nic_dbg${dbg_nic},hostfwd=tcp:127.0.0.1:${SSH_PORT}-:22"
+            echo "DEBUG: SSH forwarded on 127.0.0.1:${SSH_PORT} via secondary user-mode NIC"
+        fi
+    else
+        NETWORK_SETTINGS=" -device virtio-net-pci,netdev=nic_id$BASE_NIC,mac=$MAC_ADDRESS"
+        NETWORK_SETTINGS+=" -netdev user,id=nic_id$BASE_NIC"
+        if [[ -n "$HTTP_PORT" ]]; then
+            NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$HTTP_PORT-:80"
+        fi
+        if [[ -n "$HTTPS_PORT" ]]; then
+            NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$HTTPS_PORT-:443"
+        fi
+        if [[ -n "$PKI_PORT" ]]; then
+            NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$PKI_PORT-:9443"
+        fi
+        NETWORK_SETTINGS+=",hostfwd=udp:$IP_ADDRESS:$WG_PORT-:51820"
+        NETWORK_SETTINGS+=",hostfwd=udp:$IP_ADDRESS:$SWARM_DB_GOSSIP_PORT-:7946"
+        NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$SWARM_DB_GOSSIP_PORT-:7946"
+        NETWORK_SETTINGS+=",hostfwd=udp:$IP_ADDRESS:$DNS_PORT-:53"
+        NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$DNS_PORT-:53"
     fi
     
     DEBUG_PARAMS=""
@@ -1058,11 +1057,13 @@ main() {
     fi
 
     if [[ ${DEBUG_MODE} == true ]]; then
-        NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
-         KERNEL_CMD_LINE="root=LABEL=rootfs console=ttyS0${CLEARCPUID_PARAM}\
-                        systemd.log_level=trace systemd.log_target=log \
-                        rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH} \
-                        sp-debug=true${SNP_ADDITIONAL_PARAMS}"
+        if [[ "${NETDEV_MODE}" != "tap" ]]; then
+            NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
+        fi
+        KERNEL_CMD_LINE="root=LABEL=rootfs console=ttyS0${CLEARCPUID_PARAM}\
+            systemd.log_level=trace systemd.log_target=log \
+            rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH} \
+            sp-debug=true${SNP_ADDITIONAL_PARAMS}"
     else
         KERNEL_CMD_LINE="root=LABEL=rootfs${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH}${SNP_ADDITIONAL_PARAMS}"
     fi
