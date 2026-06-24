@@ -216,8 +216,22 @@ start_vm() {
     )
 
     log "Starting ${session}: ip=${node_ip} cid=${cid} tap=${tap_iface} swarm-init=${swarm_init} gpu=${with_gpu}"
-    # tmux session; the command is visible in history, the VM lives as long as QEMU runs
-    tmux new-session -d -s "${session}" "echo 'CMD: ${cmd[*]}'; ${cmd[*]} 2>&1 | tee ${CACHE}/log-${node_ip##*.}.txt"
+
+    # Write the launch command to an executable runner script, then run THAT in tmux.
+    # Passing the whole command as a single "${cmd[*]}" string to tmux (which runs it
+    # via sh -c) mangles quoting and empty array elements; a runner script expands the
+    # array correctly with "$@"-style semantics and is also handy for manual restarts.
+    local runner="${CACHE}/run-${node_ip##*.}.sh"
+    {
+        echo '#!/bin/bash'
+        echo 'set -o pipefail'
+        printf 'exec'
+        printf ' %q' "${cmd[@]}"
+        printf ' 2>&1 | tee %q\n' "${CACHE}/log-${node_ip##*.}.txt"
+    } > "${runner}"
+    chmod +x "${runner}"
+
+    tmux new-session -d -s "${session}" "${runner}"
 
     # Fail fast: if the command dies immediately (bad flags, missing release, etc.),
     # the tmux session collapses and we must not proceed into a blind wait.
