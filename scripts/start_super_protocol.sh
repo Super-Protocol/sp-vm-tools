@@ -1079,19 +1079,23 @@ if [[ "${NETDEV_MODE}" == "tap" ]]; then
         KERNEL_CMD_LINE+=" allow_untrusted=true"
     fi
 
-    # Tap mode: configure static IP via kernel ip= parameter (no netplan/cloud-init needed)
+    # Tap mode: pass MAC-bound network config to the guest via custom spnet.*
+    # kernel params. The guest's sp-tap-network.service reads these from
+    # /proc/cmdline and matches the interface BY MAC (not by name), so the
+    # config is immune to PCI-slot reordering (e.g. the GPU node enumerating
+    # the NIC as enp0s2 instead of enp0s1).
+    #
+    # We deliberately do NOT use the kernel's built-in ip= here: ip= can only
+    # target an interface by NAME, which is exactly the fragile coupling we are
+    # removing. spnet.* are ignored by the kernel and parsed only by the guest.
     if [[ "${NETDEV_MODE}" == "tap" ]] && [[ -n "${VM_IP}" ]]; then
         local _vm_ip_addr="${VM_IP%/*}"
         local _vm_ip_prefix="${VM_IP#*/}"
         local _vm_ip_gw="${_vm_ip_addr%.*}.1"
-        local _vm_ip_mask
-        case "${_vm_ip_prefix}" in
-            8)  _vm_ip_mask="255.0.0.0" ;;
-            16) _vm_ip_mask="255.255.0.0" ;;
-            24) _vm_ip_mask="255.255.255.0" ;;
-            *)  _vm_ip_mask="255.255.255.0" ;;
-        esac
-        KERNEL_CMD_LINE+=" ip=${_vm_ip_addr}::${_vm_ip_gw}:${_vm_ip_mask}::enp0s1:off"
+        # MAC_ADDRESS is already validated above and passed to virtio-net-pci.
+        # Lower-case it for a stable, predictable match in the guest.
+        local _vm_mac="${MAC_ADDRESS,,}"
+        KERNEL_CMD_LINE+=" spnet.mac=${_vm_mac} spnet.ip=${_vm_ip_addr}/${_vm_ip_prefix} spnet.gw=${_vm_ip_gw}"
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \

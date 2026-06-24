@@ -44,10 +44,29 @@ WAN_TCP_PORTS=(80 443 9443)
 WAN_UDP_PORTS=(53)
 WAN_TCP_ALSO_UDP=(53)          # 53 is forwarded both tcp and udp
 
-# Per-node resources (split the host; tune to your machine)
-VM_CORES=10
-VM_MEM=20
+# Per-node resources.
+# Bootstrap (GPU node) gets the REMAINDER of host resources after the host
+# reserve and the join nodes are accounted for. Join nodes get a fixed minimum.
+# Override any of these with flags; if not set, the defaults here are used
+# automatically and bootstrap is sized dynamically from the detected host.
 STATE_DISK_SIZE=50
+
+# Host reserve — left for host OS, kernel, and QEMU per-VM overhead.
+# CC-VMs (TDX/SEV-SNP) reserve memory HARD (no swap, no overcommit), so
+# under-reserving here causes VM launch FAILURE, not slowdown. Be generous.
+HOST_RESERVE_CORES=4         # cores left for the host OS / kernel / qemu threads
+HOST_RESERVE_MEM=8           # GB left for the host OS
+QEMU_MEM_OVERHEAD_PER_VM=1   # GB headroom per VM (firmware, device model)
+
+# Join-node minimums (auto-used when not overridden by --join-cores/--join-mem)
+JOIN_CORES=4
+JOIN_MEM=4
+
+# Computed at runtime by compute_allocation(); do not set by hand.
+BOOTSTRAP_CORES=""
+BOOTSTRAP_MEM=""
+HOST_TOTAL_CORES=""
+HOST_TOTAL_MEM=""
 
 VM_MODE=""                     # empty = auto-detect (tdx/sev-snp) in start script
 RELEASE=""                     # empty = latest; pin a working build, e.g. build-358
@@ -88,6 +107,56 @@ mac_for_ip() {
     # 10.0.0.11 -> 52:54:00:12:34:11
     local ip="$1"; local last="${ip##*.}"
     printf "%s:%02d" "${MAC_BASE}" "${last}"
+}
+
+# ----------------------------------------------------------------------------
+# Resource detection + allocation
+# ----------------------------------------------------------------------------
+detect_host_resources() {
+    HOST_TOTAL_CORES="$(nproc)"
+    # MemTotal is in kB; round DOWN to whole GB to stay conservative.
+    # NOTE: on a TDX host the kernel may already have carved out protected/CMA
+    # memory before userspace, so MemTotal can be LESS than the physical DIMMs.
+    # That is in our favour: we allocate from what the OS actually sees.
+    local mem_kb; mem_kb="$(awk '/^MemTotal:/{print $2}' /proc/meminfo)"
+    HOST_TOTAL_MEM=$(( mem_kb / 1024 / 1024 ))
+    log "Host resources detected: ${HOST_TOTAL_CORES} cores, ${HOST_TOTAL_MEM}GB RAM"
+}
+
+# Bootstrap = host_total - host_reserve - (join nodes) - (qemu overhead).
+# Join nodes use the fixed minimums (JOIN_CORES/JOIN_MEM), which are either the
+# built-in defaults or whatever was passed via --join-cores/--join-mem.
+compute_allocation() {
+    detect_host_resources
+
+    local num_join="${#JOIN_IPS[@]}"
+    local num_vms=$(( num_join + 1 ))
+
+    # --- cores ---
+    local join_cores_total=$(( JOIN_CORES * num_join ))
+    local reserved_cores=$(( HOST_RESERVE_CORES + join_cores_total ))
+    BOOTSTRAP_CORES=$(( HOST_TOTAL_CORES - reserved_cores ))
+    # Some QEMU topologies dislike odd vCPU counts; round bootstrap down to even.
+    BOOTSTRAP_CORES=$(( (BOOTSTRAP_CORES / 2) * 2 ))
+
+    # --- memory ---
+    local join_mem_total=$(( JOIN_MEM * num_join ))
+    local qemu_overhead=$(( QEMU_MEM_OVERHEAD_PER_VM * num_vms ))
+    local reserved_mem=$(( HOST_RESERVE_MEM + join_mem_total + qemu_overhead ))
+    BOOTSTRAP_MEM=$(( HOST_TOTAL_MEM - reserved_mem ))
+
+    # --- sanity checks ---
+    if (( BOOTSTRAP_CORES < JOIN_CORES )); then
+        die "Not enough cores: host=${HOST_TOTAL_CORES}, reserve=${HOST_RESERVE_CORES}, join=${join_cores_total} (${JOIN_CORES}x${num_join}) -> bootstrap would get ${BOOTSTRAP_CORES}. Lower --join-cores or --host-reserve-cores."
+    fi
+    if (( BOOTSTRAP_MEM < JOIN_MEM )); then
+        die "Not enough RAM: host=${HOST_TOTAL_MEM}GB, reserve=${HOST_RESERVE_MEM}GB, join=${join_mem_total}GB (${JOIN_MEM}x${num_join}), qemu=${qemu_overhead}GB -> bootstrap would get ${BOOTSTRAP_MEM}GB. Lower --join-mem or --host-reserve-mem."
+    fi
+
+    log "Resource allocation:"
+    log "  bootstrap : ${BOOTSTRAP_CORES} cores, ${BOOTSTRAP_MEM}GB RAM (+GPU)"
+    log "  join x${num_join}    : ${JOIN_CORES} cores, ${JOIN_MEM}GB RAM each"
+    log "  host kept : ${HOST_RESERVE_CORES} cores, ${HOST_RESERVE_MEM}GB + ${qemu_overhead}GB qemu overhead"
 }
 
 # ----------------------------------------------------------------------------
@@ -240,7 +309,9 @@ start_vm() {
     local provider_dir="$4"
     local swarm_init="$5"    # true | false
     local with_gpu="$6"      # true | false
-    local ssh_port="${7:-}"  # host SSH port (debug mode only)
+    local node_cores="$7"    # vCPU count for this node
+    local node_mem="$8"      # RAM (GB) for this node
+    local ssh_port="${9:-}"  # host SSH port (debug mode only)
     local tap_iface="sw-tap-${node_ip##*.}"
     local mac; mac="$(mac_for_ip "${node_ip}")"
 
@@ -279,8 +350,8 @@ start_vm() {
         --netdev_mode tap
         --bridge "${BRIDGE}"
         --tap_iface "${tap_iface}"
-        --cores "${VM_CORES}"
-        --mem "${VM_MEM}"
+        --cores "${node_cores}"
+        --mem "${node_mem}"
         --provider_config "${provider_dir}"
         --mac_address "${mac}"
         --vm_ip "${node_ip}/24"
@@ -443,6 +514,9 @@ cmd_up() {
 
     mkdir -p "${CACHE}" "${WORKDIR}"
 
+    # Detect host resources and size the bootstrap node dynamically.
+    compute_allocation
+
     ensure_network
 
     # --- generate cluster-wide networkID (UUID) ---
@@ -462,7 +536,8 @@ cmd_up() {
 
     local boot_gpu=false
     [[ "${GPU_TARGET}" == "bootstrap" ]] && boot_gpu=true
-    start_vm "${TMUX_BOOTSTRAP}" "${BOOTSTRAP_IP}" "${CID_BOOTSTRAP}" "${boot_dir}" true "${boot_gpu}" "${SSH_PORT_BOOTSTRAP}"
+    start_vm "${TMUX_BOOTSTRAP}" "${BOOTSTRAP_IP}" "${CID_BOOTSTRAP}" "${boot_dir}" \
+        true "${boot_gpu}" "${BOOTSTRAP_CORES}" "${BOOTSTRAP_MEM}" "${SSH_PORT_BOOTSTRAP}"
 
     wait_bootstrap 1000
 
@@ -478,8 +553,10 @@ cmd_up() {
     join1_dir="$(prepare_config join1 "${JOIN_IPS[0]}" "swarm-join-1" "${BOOTSTRAP_IP}:${GOSSIP_PORT}" "${ca_bundle}" "${network_id}")"
     join2_dir="$(prepare_config join2 "${JOIN_IPS[1]}" "swarm-join-2" "${BOOTSTRAP_IP}:${GOSSIP_PORT}" "${ca_bundle}" "${network_id}")"
 
-    start_vm "${TMUX_JOIN[0]}" "${JOIN_IPS[0]}" "${CID_JOIN[0]}" "${join1_dir}" false false "${SSH_PORT_JOIN[0]}"
-    start_vm "${TMUX_JOIN[1]}" "${JOIN_IPS[1]}" "${CID_JOIN[1]}" "${join2_dir}" false false "${SSH_PORT_JOIN[1]}"
+    start_vm "${TMUX_JOIN[0]}" "${JOIN_IPS[0]}" "${CID_JOIN[0]}" "${join1_dir}" \
+        false false "${JOIN_CORES}" "${JOIN_MEM}" "${SSH_PORT_JOIN[0]}"
+    start_vm "${TMUX_JOIN[1]}" "${JOIN_IPS[1]}" "${CID_JOIN[1]}" "${join2_dir}" \
+        false false "${JOIN_CORES}" "${JOIN_MEM}" "${SSH_PORT_JOIN[1]}"
 
     # external ingress
     setup_dnat
@@ -521,6 +598,13 @@ cmd_down() {
 }
 
 cmd_status() {
+    echo "=== resources ==="
+    if [[ -n "$(command -v nproc)" ]]; then
+        local _c; _c="$(nproc)"
+        local _m; _m=$(( $(awk '/^MemTotal:/{print $2}' /proc/meminfo) / 1024 / 1024 ))
+        echo "  host: ${_c} cores, ${_m}GB"
+        echo "  plan: bootstrap=remainder+GPU, join=${JOIN_CORES}c/${JOIN_MEM}g each, reserve=${HOST_RESERVE_CORES}c/${HOST_RESERVE_MEM}g"
+    fi
     echo "=== tmux ==="
     tmux ls 2>/dev/null | grep -E 'swarm-' || echo "  no sessions"
     echo "=== bridge ==="
@@ -551,8 +635,10 @@ while [[ $# -gt 0 ]]; do
         --wan-iface)      WAN_IFACE="$2"; shift 2 ;;
         --cache)          CACHE="$2"; shift 2 ;;
         --workdir)        WORKDIR="$2"; shift 2 ;;
-        --cores)          VM_CORES="$2"; shift 2 ;;
-        --mem)            VM_MEM="$2"; shift 2 ;;
+        --join-cores)         JOIN_CORES="$2"; shift 2 ;;
+        --join-mem)           JOIN_MEM="$2"; shift 2 ;;
+        --host-reserve-cores) HOST_RESERVE_CORES="$2"; shift 2 ;;
+        --host-reserve-mem)   HOST_RESERVE_MEM="$2"; shift 2 ;;
         --state-disk-size) STATE_DISK_SIZE="$2"; shift 2 ;;
         --mode)           VM_MODE="$2"; shift 2 ;;
         --release)        RELEASE="$2"; shift 2 ;;
