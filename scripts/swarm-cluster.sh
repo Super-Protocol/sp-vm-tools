@@ -283,6 +283,7 @@ start_vm() {
         --mem "${VM_MEM}"
         --provider_config "${provider_dir}"
         --mac_address "${mac}"
+        --vm_ip "${node_ip}/24"
         --state_disk_size "${STATE_DISK_SIZE}"
         --state_disk_path "${CACHE}/state-${node_ip##*.}.qcow2"
         --provider_config_disk_path "${CACHE}/pcfg-${node_ip##*.}.img"

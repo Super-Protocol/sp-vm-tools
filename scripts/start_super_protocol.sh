@@ -106,6 +106,7 @@ usage() {
     echo "  --netdev_mode <user|tap>       QEMU netdev backend (default: ${DEFAULT_NETDEV_MODE})"
     echo "  --bridge <name>                Bridge to attach tap to in tap mode (default: ${DEFAULT_BRIDGE})"
     echo "  --tap_iface <name>             Explicit tap interface name (default: sw-tap<nic_id>)"
+    echo "  --vm_ip <ip/prefix>            VM IP address in tap mode (e.g. 10.0.0.10/24), passed via kernel ip= param"
     echo ""
 }
 
@@ -122,6 +123,7 @@ PROVIDER_CONFIG=""
 DEBUG_MODE=${DEFAULT_DEBUG}
 SWARM_INIT=${DEFAULT_SWARM_INIT}
 ALLOW_UNTRUSTED=${DEFAULT_ALLOW_UNTRUSTED}
+VM_IP=""
 RELEASE=""
 RELEASE_FILEPATH=""
 
@@ -177,6 +179,7 @@ parse_args() {
             --netdev_mode) NETDEV_MODE=$2; shift ;;
             --bridge) BRIDGE=$2; shift ;;
             --tap_iface) TAP_IFACE=$2; shift ;;
+            --vm_ip) VM_IP=$2; shift ;;
             --help) usage; exit 0;;
             *) echo "Unknown parameter: $1"; usage ; exit 1 ;;
         esac
@@ -1074,6 +1077,22 @@ if [[ "${NETDEV_MODE}" == "tap" ]]; then
     
     if [[ ${ALLOW_UNTRUSTED} == true ]]; then
         KERNEL_CMD_LINE+=" allow_untrusted=true"
+    fi
+
+    # Tap mode: configure static IP via kernel ip= parameter (no netplan/cloud-init needed)
+    if [[ "${NETDEV_MODE}" == "tap" ]] && [[ -n "${VM_IP}" ]]; then
+        local _vm_ip_addr="${VM_IP%/*}"
+        local _vm_ip_prefix="${VM_IP#*/}"
+        local _vm_ip_gw="${_vm_ip_addr%.*}.1"
+        # Compute netmask from CIDR prefix
+        local _vm_ip_mask
+        case "${_vm_ip_prefix}" in
+            8)  _vm_ip_mask="255.0.0.0" ;;
+            16) _vm_ip_mask="255.255.0.0" ;;
+            24) _vm_ip_mask="255.255.255.0" ;;
+            *)  _vm_ip_mask="255.255.255.0" ;;
+        esac
+        KERNEL_CMD_LINE+=" ip=${_vm_ip_addr}::${_vm_ip_gw}:${_vm_ip_mask}::enp0s1:off"
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
