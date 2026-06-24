@@ -65,7 +65,7 @@ TMUX_JOIN=("swarm-join-1" "swarm-join-2")
 # ----------------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------------
-log()  { echo -e "[$(date +%H:%M:%S)] $*"; }
+log()  { echo -e "[$(date +%H:%M:%S)] $*" >&2; }
 err()  { echo -e "[$(date +%H:%M:%S)] ERROR: $*" >&2; }
 die()  { err "$*"; exit 1; }
 
@@ -217,16 +217,25 @@ start_vm() {
 
     log "Starting ${session}: ip=${node_ip} cid=${cid} tap=${tap_iface} swarm-init=${swarm_init} gpu=${with_gpu}"
 
+    # Safety net: drop any empty array elements before building the runner.
+    # An empty positional arg would shift the start-script's two-step arg parser
+    # and split a "--flag value" pair (the classic "Unknown parameter: provider").
+    local cmd_clean=()
+    local a
+    for a in "${cmd[@]}"; do
+        [[ -n "${a}" ]] && cmd_clean+=("${a}")
+    done
+
     # Write the launch command to an executable runner script, then run THAT in tmux.
     # Passing the whole command as a single "${cmd[*]}" string to tmux (which runs it
     # via sh -c) mangles quoting and empty array elements; a runner script expands the
-    # array correctly with "$@"-style semantics and is also handy for manual restarts.
+    # array correctly and is also handy for manual restarts.
     local runner="${CACHE}/run-${node_ip##*.}.sh"
     {
         echo '#!/bin/bash'
         echo 'set -o pipefail'
         printf 'exec'
-        printf ' %q' "${cmd[@]}"
+        printf ' %q' "${cmd_clean[@]}"
         printf ' 2>&1 | tee %q\n' "${CACHE}/log-${node_ip##*.}.txt"
     } > "${runner}"
     chmod +x "${runner}"
