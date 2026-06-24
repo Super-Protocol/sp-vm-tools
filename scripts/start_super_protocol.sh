@@ -1084,7 +1084,6 @@ if [[ "${NETDEV_MODE}" == "tap" ]]; then
         local _vm_ip_addr="${VM_IP%/*}"
         local _vm_ip_prefix="${VM_IP#*/}"
         local _vm_ip_gw="${_vm_ip_addr%.*}.1"
-        # Compute netmask from CIDR prefix
         local _vm_ip_mask
         case "${_vm_ip_prefix}" in
             8)  _vm_ip_mask="255.0.0.0" ;;
