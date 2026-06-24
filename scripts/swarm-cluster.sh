@@ -260,6 +260,7 @@ start_vm() {
 # ----------------------------------------------------------------------------
 wait_bootstrap() {
     local timeout="${1:-600}"
+    local logf="${CACHE}/log-${BOOTSTRAP_IP##*.}.txt"
     local waited=0
     log "Waiting for bootstrap (${BOOTSTRAP_IP}: ${GOSSIP_PORT} gossip + ${PKI_PORT} pki), timeout ${timeout}s"
     while (( waited < timeout )); do
@@ -270,12 +271,21 @@ wait_bootstrap() {
         if nc -z -w2 "${BOOTSTRAP_IP}" "${PKI_PORT}" 2>/dev/null; then pki_ok=true; fi
 
         if [[ "${gossip_ok}" == true && "${pki_ok}" == true ]]; then
+            printf '\033[2K\r' >&2   # clear the live line
             log "bootstrap is ready (gossip + pki listening)"
             return 0
         fi
+
+        # live mini-view: last log line + image size + waited/status, updated in place
+        local last="" imgsz=""
+        last="$(tail -n1 "${logf}" 2>/dev/null | tr -d '\r' | cut -c1-80)"
+        imgsz="$(du -sh "${CACHE}/${RELEASE:-}"/*.img 2>/dev/null | awk '{print $1}' | head -1)"
+        printf '\033[2K\r[%ds] gossip=%s pki=%s img=%s | %s' \
+            "${waited}" "${gossip_ok}" "${pki_ok}" "${imgsz:-?}" "${last}" >&2
+
         sleep 5; waited=$(( waited + 5 ))
-        (( waited % 30 == 0 )) && log "  ...waiting (${waited}s): gossip=${gossip_ok} pki=${pki_ok}"
     done
+    printf '\033[2K\r' >&2
     die "bootstrap did not come up within ${timeout}s. Check: tmux attach -t ${TMUX_BOOTSTRAP}"
 }
 
