@@ -279,7 +279,7 @@ start_vm() {
 # 4. Healthcheck: wait until bootstrap is listening on gossip AND PKI
 # ----------------------------------------------------------------------------
 wait_bootstrap() {
-    local timeout="${1:-600}"
+    local timeout="${1:-1000}"
     local waited=0
     log "Waiting for bootstrap (${BOOTSTRAP_IP}: ${GOSSIP_PORT} gossip + ${PKI_PORT} pki), timeout ${timeout}s"
     while (( waited < timeout )); do
@@ -359,7 +359,7 @@ cmd_up() {
     [[ "${GPU_TARGET}" == "bootstrap" ]] && boot_gpu=true
     start_vm "${TMUX_BOOTSTRAP}" "${BOOTSTRAP_IP}" "${CID_BOOTSTRAP}" "${boot_dir}" true "${boot_gpu}" "${SSH_PORT_BOOTSTRAP}"
 
-    wait_bootstrap 600
+    wait_bootstrap 1000
 
     # join nodes, no GPU, no swarm-init
     start_vm "${TMUX_JOIN[0]}" "${JOIN_IPS[0]}" "${CID_JOIN[0]}" "${join1_dir}" false false "${SSH_PORT_JOIN[0]}"
