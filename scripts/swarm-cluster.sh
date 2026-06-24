@@ -219,8 +219,10 @@ prepare_config() {
         if [[ -n "${ca_bundle}" ]]; then
             sed -i "s|__CA_BUNDLE__|${ca_bundle}|g" "${f}"
         else
-            # bootstrap: remove the entire caBundle placeholder block (caBundle: | + next line)
+            # bootstrap: remove caBundle and servers blocks (bootstrap is self-sufficient,
+            # join_addresses/caBundle/servers must be all-empty or all-non-empty)
             sed -i '/caBundle: |/{N;/__CA_BUNDLE__/d;}' "${f}"
+            sed -i '/servers:/{N;d;}' "${f}"
         fi
     done
 
