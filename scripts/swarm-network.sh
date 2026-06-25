@@ -72,23 +72,6 @@ die()  { err "$*"; exit 1; }
 
 require_root() { [[ "$EUID" -eq 0 ]] || die "Must be run as root (use sudo)."; }
 
-ensure_haproxy() {
-    if [[ -z "${HAPROXY_BIN}" ]]; then
-        log "haproxy not found, installing..."
-        apt-get update -qq && apt-get install -y -qq haproxy
-        HAPROXY_BIN="$(command -v haproxy)"
-        [[ -n "${HAPROXY_BIN}" ]] || die "haproxy installation failed"
-    fi
-}
-
-ensure_nft() {
-    if ! command -v nft &>/dev/null; then
-        log "nftables not found, installing..."
-        apt-get update -qq && apt-get install -y -qq nftables
-        command -v nft &>/dev/null || die "nftables installation failed"
-    fi
-}
-
 detect_wan_iface() {
     if [[ -n "${WAN_IFACE}" ]]; then echo "${WAN_IFACE}"; return; fi
     ip route get 8.8.8.8 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -1
@@ -191,7 +174,7 @@ frontend ingress_${p}
 
 backend gw_${p}
     balance roundrobin
-    server-template gw ${MAX_BACKENDS} ${gw}:${GW_BACKEND_PORT} resolvers swarm_dns resolve-prefer ipv4 check
+    server-template gw ${MAX_BACKENDS} ${gw}:${GW_BACKEND_PORT} resolvers swarm_dns resolve-prefer ipv4 init-addr none check
 
 EOF
     done
@@ -199,62 +182,8 @@ EOF
     log "HAProxy config written: ${HAPROXY_CFG}"
 }
 
-# ----------------------------------------------------------------------------
-# Wait for HAProxy DNS resolution + backend health, single-line status.
-# dns=ok ONLY when at least one A-record is actually returned (empty != ok).
-# ----------------------------------------------------------------------------
-wait_haproxy_resolve() {
-    local timeout="${1:-60}"
-    local waited=0
-    local gw; gw="$(gw_hostname)"
-    log "Waiting for HAProxy to resolve ${gw} (timeout ${timeout}s)..."
-
-    while (( waited < timeout )); do
-        # newline-separated list of resolved IPv4 addresses (may be empty)
-        local resolved_ips ip_count
-        resolved_ips="$(getent ahostsv4 "${gw}" 2>/dev/null | awk '{print $1}' | sort -u)"
-        ip_count="$(printf '%s\n' "${resolved_ips}" | grep -c .)"
-
-        # dns=ok iff we got >=1 real A-record
-        local resolve_status="down"
-        (( ip_count > 0 )) && resolve_status="ok"
-
-        # probe each resolved backend on the gateway port
-        local backends_up=0 ip
-        if (( ip_count > 0 )); then
-            while IFS= read -r ip; do
-                [[ -n "${ip}" ]] || continue
-                nc -z -w2 "${ip}" "${GW_BACKEND_PORT}" 2>/dev/null && backends_up=$(( backends_up + 1 ))
-            done <<< "${resolved_ips}"
-        fi
-
-        # printable ip list
-        local ips_display; ips_display="$(printf '%s ' ${resolved_ips})"
-        [[ -z "${ips_display// }" ]] && ips_display="(none)"
-
-        printf '\r[%s]   [%ss] dns=%s  backends=%s/%s  ips=%s\033[K' \
-            "$(date +%H:%M:%S)" "${waited}" \
-            "${resolve_status}" "${backends_up}" "${ip_count}" "${ips_display}" >&2
-
-        if (( backends_up > 0 )); then
-            echo >&2
-            log "HAProxy ingress ready: ${backends_up}/${ip_count} backends up (${gw})"
-            return 0
-        fi
-
-        sleep 3; waited=$(( waited + 3 ))
-    done
-    echo >&2
-    if (( ip_count > 0 )); then
-        log "HAProxy: DNS resolved (${ip_count} IPs) but no backend reachable on ${GW_BACKEND_PORT} (continuing; HAProxy will keep re-resolving)."
-    else
-        log "HAProxy: ${gw} has NO A-records yet — cluster hasn't published the gateway record. Ingress is up but has no backends until it does (continuing)."
-    fi
-    return 0
-}
-
 start_haproxy() {
-    ensure_haproxy
+    [[ -n "${HAPROXY_BIN}" ]] || die "haproxy not installed (apt install haproxy)."
     write_haproxy_cfg
 
     # validate before (re)starting
@@ -288,16 +217,15 @@ stop_haproxy() {
 # ----------------------------------------------------------------------------
 cmd_up() {
     require_root
-    ensure_nft
+    command -v nft &>/dev/null || die "nftables is required (apt install nftables)."
     ensure_bridge_nat
     start_haproxy
-    wait_haproxy_resolve 120
     log "Network ready. Ingress 80/443 -> $(gw_hostname) (dynamic, multi-backend)."
 }
 
 cmd_bridge_only() {
     require_root
-    ensure_nft
+    command -v nft &>/dev/null || die "nftables is required."
     ensure_bridge_nat
     log "Bridge + NAT ready (no ingress)."
 }
