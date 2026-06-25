@@ -601,8 +601,9 @@ setup_grub() {
     fi
 
     # Create a custom configuration file to ensure our kernel is first
-    echo "# Custom kernel order configuration" > /etc/default/grub.d/99-tdx-kernel.cfg
-    echo "GRUB_DEFAULT=0" >> /etc/default/grub.d/99-tdx-kernel.cfg
+    mkdir -p /etc/default/grub.d
+    echo "# Custom kernel order configuration" > "/etc/default/grub.d/99-${type}-kernel.cfg"
+    echo "GRUB_DEFAULT=0" >> "/etc/default/grub.d/99-${type}-kernel.cfg"
     
     # Force regeneration of grub.cfg and initramfs
     update-initramfs -u -k "${new_kernel}"

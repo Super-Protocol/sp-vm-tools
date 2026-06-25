@@ -14,6 +14,10 @@ get_kernel_log() {
     fi
 }
 
+SNP_RELEASE_REPO="Super-Protocol/sp-vm-tools"
+SNP_RELEASE_TAG="38-tdx+snp"
+SNP_RELEASE_ASSET="package-snp.tar.gz"
+
 check_snp_status() {
     print_section_header "SNP Status Validation"
     
@@ -274,10 +278,42 @@ run_comprehensive_snp_gpu_check() {
     return $snp_status
 }
 
+install_snp_release_packages() {
+    local tmp_dir="$1"
+    local work="${tmp_dir}/snp-pkg"
+    local tag_enc="${SNP_RELEASE_TAG//+/%2B}"
+    local url="https://github.com/${SNP_RELEASE_REPO}/releases/download/${tag_enc}/${SNP_RELEASE_ASSET}"
+
+    echo "Installing SEV-SNP kernel + QEMU from ${SNP_RELEASE_REPO}@${SNP_RELEASE_TAG}..."
+    mkdir -p "${work}"
+    echo "Downloading ${SNP_RELEASE_ASSET} (~160 MB), this may take a while..."
+    wget -O "${work}/${SNP_RELEASE_ASSET}" "${url}"
+    echo "Download complete: ${work}/${SNP_RELEASE_ASSET}"
+    tar -xzf "${work}/${SNP_RELEASE_ASSET}" -C "${work}"
+
+    # Install all packages from the release archive: custom kernel, headers and QEMU.
+    # install_debs (common.sh) also sets CURRENT_KERNEL and NEW_KERNEL_VERSION.
+    install_debs "${work}"
+}
+
 install_prerequisites() {
-    print_section_header "Installing Prerequisites"
-    echo "Installing QEMU from Ubuntu repository..."
-    apt update && DEBIAN_FRONTEND=noninteractive apt install -y qemu-system-x86 qemu-utils
+    local tmp_dir="$1"
+    local ubuntu_version=""
+
+    print_section_header "Installing SNP Hypervisor Stack"
+    CURRENT_KERNEL=$(uname -r)
+    NEW_KERNEL_VERSION="${CURRENT_KERNEL}"
+
+    [ -f /etc/os-release ] && ubuntu_version=$(. /etc/os-release && echo "$VERSION_ID")
+    if [ "$ubuntu_version" = "24.04" ]; then
+        # Ubuntu 24.04 needs the matched SEV-SNP kernel/QEMU bundle from our release.
+        # Newer Ubuntu releases carry the required kernel support and QEMU in archive.
+        install_snp_release_packages "${tmp_dir}"
+        setup_grub "${NEW_KERNEL_VERSION:-$(uname -r)}" snp
+    else
+        echo "Ubuntu ${ubuntu_version:-unknown}: using distro kernel and QEMU"
+        apt update && DEBIAN_FRONTEND=noninteractive apt install -y qemu-system-x86 qemu-utils
+    fi
 }
 
 update_snp_firmware() {
@@ -296,7 +332,7 @@ update_snp_firmware() {
         firmware_name="amd_sev_fam1ah_model0xh_1.55.65"
         destination_filename="amd_sev_fam1ah_model0xh.sbin"
     else
-        echo "Skipping firmware update: Model is not Milan or Genoa."
+        echo "Skipping firmware update: Model is not Milan, Genoa or Turin."
         return 0
     fi
 
@@ -324,7 +360,7 @@ update_snp_firmware() {
 }
 
 bootstrap() {
-    check_os_version
+    check_os_version "24.04"
 
     CPU_MODEL=$(lscpu | grep "^Model name:" | sed 's/Model name: *//')
 
@@ -364,6 +400,22 @@ bootstrap() {
     echo "Installing required tools..."
     apt update && apt install -y unzip wget
 
+    install_prerequisites "${TMP_DIR}"
+
+    print_section_header "SNP Firmware Update"
+    echo "Updating SNP firmware..."
+    update_snp_firmware "${TMP_DIR}" "${AMD_GEN}"
+
+    # On Ubuntu 24.04 the SNP-capable kernel is only active after rebooting into it.
+    # Stop before BIOS/SNP validation so the checks run against the right kernel.
+    if [ -n "${NEW_KERNEL_VERSION:-}" ] && [ "${NEW_KERNEL_VERSION}" != "${CURRENT_KERNEL:-$(uname -r)}" ]; then
+        print_section_header "Reboot Required"
+        echo "Installed SEV-SNP kernel ${NEW_KERNEL_VERSION}; currently running ${CURRENT_KERNEL}."
+        echo "Reboot into the new kernel, then re-run this script to complete SNP setup."
+        rm -rf "${TMP_DIR}"
+        exit 0
+    fi
+
     if [ -f "$(dirname "${BASH_SOURCE[0]}")/setup_snp.sh" ]; then
         echo "Running SEV_SNP setup script..."
         cp "$(dirname "${BASH_SOURCE[0]}")/setup_snp.sh" "${TMP_DIR}/"
@@ -375,33 +427,6 @@ bootstrap() {
     else 
         echo -e "${RED}ERROR: setup_snp.sh not found${NC}"
         exit 1
-    fi
-
-    install_prerequisites
-
-    print_section_header "SNP Firmware Update"
-    echo "Updating SNP firmware..."
-    update_snp_firmware "${TMP_DIR}" "${AMD_GEN}"
-
-    # Check if kernel was actually installed
-    print_section_header "System State Check"
-    if [ "$NEW_KERNEL_VERSION" != "$CURRENT_KERNEL" ]; then
-        echo "System reboot required to apply changes"
-        echo "1. Reboot now"
-        echo "2. Continue without reboot (not recommended)"
-        read -p "Choose (1/2): " choice
-        case $choice in
-            1)
-                print_section_header "System Reboot"
-                echo "System will reboot in 10 seconds..."
-                echo "Please run this script again after reboot to complete the setup."
-                sleep 10
-                reboot && exit 0
-                ;;
-            2)
-                echo "Continuing without reboot (not recommended)..."
-                ;;
-        esac
     fi
 
     print_section_header "SNP GPU Compatibility Check"
@@ -430,9 +455,6 @@ bootstrap() {
 
     print_section_header "Installation Status"
     echo "Installation complete."
-    if [ "$NEW_KERNEL_VERSION" != "$CURRENT_KERNEL" ] && [ "$choice" = "2" ]; then
-        echo "NOTE: A system reboot is still required to activate all changes."
-    fi
 }
 
 source_common
