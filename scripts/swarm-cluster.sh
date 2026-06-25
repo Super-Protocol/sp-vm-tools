@@ -244,11 +244,11 @@ prepare_config() {
             ${ca_bundle:+--ca-bundle "${ca_bundle}"}
     done
 
-    # Verify networkID was written (check the yaml with pki_authority)
-    local cfg
-    cfg="$(grep -Rl 'pki_authority:' "${dest}" --include='*.yaml' --include='*.yml' 2>/dev/null | head -1)"
-    if [[ -z "${cfg}" ]]; then
-        err "No yaml with pki_authority found in ${dest}"
+    # Verify networkID was written to config.yaml
+    local cfg="${dest}/config.yaml"
+    if [[ ! -f "${cfg}" ]]; then
+        err "${cfg} not found. Files in ${dest}:"
+        find "${dest}" -type f \( -name '*.yaml' -o -name '*.yml' \) | sed 's/^/  /' >&2
         return 1
     fi
     if ! grep -q "networkID:.*${network_id}" "${cfg}"; then
