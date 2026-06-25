@@ -244,9 +244,15 @@ prepare_config() {
             ${ca_bundle:+--ca-bundle "${ca_bundle}"}
     done
 
-    # Verify networkID was written to the main config.yaml
-    if ! grep -q "networkID:.*${network_id}" "${dest}/config.yaml"; then
-        err "networkID ${network_id} not found in ${dest}/config.yaml — config patching failed!"
+    # Verify networkID was written (check the yaml with pki_authority)
+    local cfg
+    cfg="$(grep -Rl 'pki_authority:' "${dest}" --include='*.yaml' --include='*.yml' 2>/dev/null | head -1)"
+    if [[ -z "${cfg}" ]]; then
+        err "No yaml with pki_authority found in ${dest}"
+        return 1
+    fi
+    if ! grep -q "networkID:.*${network_id}" "${cfg}"; then
+        err "networkID ${network_id} not found in ${cfg} — config patching failed!"
         return 1
     fi
 
