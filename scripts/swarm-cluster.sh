@@ -363,26 +363,22 @@ ensure_global_id() {
 #         prepare_config AFTER the awk section-rewrite, BEFORE the verifications. ---
 inject_top_level_identity() {
     local dest="$1"
-    local gw_host="gw.dyn.${GLOBAL_ID}.${BASE_DOMAIN}"
 
     find "${dest}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 | \
     while IFS= read -r -d '' f; do
         local tmp; tmp="$(mktemp)"
         awk \
-            -v gid="${GLOBAL_ID}" \
-            -v gwh="${gw_host}" '
-        BEGIN { seen_gid = 0; seen_gwh = 0 }
-        # Replace existing top-level keys in place.
-        /^global_id:[ \t]*/        { print "global_id: \"" gid "\""; seen_gid = 1; next }
-        /^gateway_hostname:[ \t]*/ { print "gateway_hostname: \"" gwh "\""; seen_gwh = 1; next }
+            -v gid="${GLOBAL_ID}" '
+        BEGIN { seen_gid = 0 }
+        # Replace existing top-level key in place; gateway_hostname is left as-is from template.
+        /^global_id:[ \t]*/  { print "global_id: \"" gid "\""; seen_gid = 1; next }
         { print }
         END {
             if (!seen_gid) print "global_id: \"" gid "\""
-            if (!seen_gwh) print "gateway_hostname: \"" gwh "\""
         }
         ' "${f}" > "${tmp}" && mv "${tmp}" "${f}"
     done
-    log "  injected top-level: global_id=${GLOBAL_ID}, gateway_hostname=${gw_host}"
+    log "  injected top-level: global_id=${GLOBAL_ID} (gateway_hostname left unchanged from template)"
 }
 
 # ----------------------------------------------------------------------------
