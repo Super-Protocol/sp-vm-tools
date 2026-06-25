@@ -200,7 +200,8 @@ EOF
 }
 
 # ----------------------------------------------------------------------------
-# Wait for HAProxy DNS resolution + backend health, single-line status (like bootstrap wait).
+# Wait for HAProxy DNS resolution + backend health, single-line status.
+# dns=ok ONLY when at least one A-record is actually returned (empty != ok).
 # ----------------------------------------------------------------------------
 wait_haproxy_resolve() {
     local timeout="${1:-60}"
@@ -209,27 +210,31 @@ wait_haproxy_resolve() {
     log "Waiting for HAProxy to resolve ${gw} (timeout ${timeout}s)..."
 
     while (( waited < timeout )); do
-        local resolved_ips
-        resolved_ips="$(getent ahostsv4 "${gw}" 2>/dev/null | awk '{print $1}' | sort -u | xargs echo 2>/dev/null || echo 'none')"
-        local ip_count; ip_count="$(echo "${resolved_ips}" | sed 's/none//' | wc -w)"
+        # newline-separated list of resolved IPv4 addresses (may be empty)
+        local resolved_ips ip_count
+        resolved_ips="$(getent ahostsv4 "${gw}" 2>/dev/null | awk '{print $1}' | sort -u)"
+        ip_count="$(printf '%s\n' "${resolved_ips}" | grep -c .)"
 
-        local backends_up=0
-        if [[ "${resolved_ips}" != "none" ]]; then
-            local ip
-            for ip in ${resolved_ips}; do
-                if nc -z -w2 "${ip}" "${GW_BACKEND_PORT}" 2>/dev/null; then
-                    backends_up=$(( backends_up + 1 ))
-                fi
-            done
+        # dns=ok iff we got >=1 real A-record
+        local resolve_status="down"
+        (( ip_count > 0 )) && resolve_status="ok"
+
+        # probe each resolved backend on the gateway port
+        local backends_up=0 ip
+        if (( ip_count > 0 )); then
+            while IFS= read -r ip; do
+                [[ -n "${ip}" ]] || continue
+                nc -z -w2 "${ip}" "${GW_BACKEND_PORT}" 2>/dev/null && backends_up=$(( backends_up + 1 ))
+            done <<< "${resolved_ips}"
         fi
 
-        local resolve_status="down"
-        [[ "${resolved_ips}" != "none" ]] && resolve_status="ok"
+        # printable ip list
+        local ips_display; ips_display="$(printf '%s ' ${resolved_ips})"
+        [[ -z "${ips_display// }" ]] && ips_display="(none)"
 
         printf '\r[%s]   [%ss] dns=%s  backends=%s/%s  ips=%s\033[K' \
             "$(date +%H:%M:%S)" "${waited}" \
-            "${resolve_status}" "${backends_up}" "${ip_count}" \
-            "${resolved_ips}" >&2
+            "${resolve_status}" "${backends_up}" "${ip_count}" "${ips_display}" >&2
 
         if (( backends_up > 0 )); then
             echo >&2
@@ -240,7 +245,11 @@ wait_haproxy_resolve() {
         sleep 3; waited=$(( waited + 3 ))
     done
     echo >&2
-    log "HAProxy: DNS resolved but no backends reachable on ${GW_BACKEND_PORT} (continuing anyway)."
+    if (( ip_count > 0 )); then
+        log "HAProxy: DNS resolved (${ip_count} IPs) but no backend reachable on ${GW_BACKEND_PORT} (continuing; HAProxy will keep re-resolving)."
+    else
+        log "HAProxy: ${gw} has NO A-records yet — cluster hasn't published the gateway record. Ingress is up but has no backends until it does (continuing)."
+    fi
     return 0
 }
 
