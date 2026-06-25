@@ -565,7 +565,11 @@ cmd_up() {
     command -v nc &>/dev/null   || die "nc is required (apt install netcat-openbsd)"
     command -v curl &>/dev/null || die "curl is required (apt install curl)"
     command -v tmux &>/dev/null || die "tmux is required (apt install tmux)"
-    command -v nft &>/dev/null  || die "nftables is required (apt install nftables)"
+    if ! command -v nft &>/dev/null; then
+        log "nftables not found, installing..."
+        apt-get update -qq && apt-get install -y -qq nftables
+        command -v nft &>/dev/null || die "nftables installation failed"
+    fi
     
     mkdir -p "${CACHE}" "${WORKDIR}"
 

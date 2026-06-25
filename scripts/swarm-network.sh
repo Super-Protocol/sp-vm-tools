@@ -72,6 +72,23 @@ die()  { err "$*"; exit 1; }
 
 require_root() { [[ "$EUID" -eq 0 ]] || die "Must be run as root (use sudo)."; }
 
+ensure_haproxy() {
+    if [[ -z "${HAPROXY_BIN}" ]]; then
+        log "haproxy not found, installing..."
+        apt-get update -qq && apt-get install -y -qq haproxy
+        HAPROXY_BIN="$(command -v haproxy)"
+        [[ -n "${HAPROXY_BIN}" ]] || die "haproxy installation failed"
+    fi
+}
+
+ensure_nft() {
+    if ! command -v nft &>/dev/null; then
+        log "nftables not found, installing..."
+        apt-get update -qq && apt-get install -y -qq nftables
+        command -v nft &>/dev/null || die "nftables installation failed"
+    fi
+}
+
 detect_wan_iface() {
     if [[ -n "${WAN_IFACE}" ]]; then echo "${WAN_IFACE}"; return; fi
     ip route get 8.8.8.8 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -1
@@ -183,7 +200,7 @@ EOF
 }
 
 start_haproxy() {
-    [[ -n "${HAPROXY_BIN}" ]] || die "haproxy not installed (apt install haproxy)."
+    ensure_haproxy
     write_haproxy_cfg
 
     # validate before (re)starting
@@ -217,7 +234,7 @@ stop_haproxy() {
 # ----------------------------------------------------------------------------
 cmd_up() {
     require_root
-    command -v nft &>/dev/null || die "nftables is required (apt install nftables)."
+    ensure_nft
     ensure_bridge_nat
     start_haproxy
     log "Network ready. Ingress 80/443 -> $(gw_hostname) (dynamic, multi-backend)."
@@ -225,7 +242,7 @@ cmd_up() {
 
 cmd_bridge_only() {
     require_root
-    command -v nft &>/dev/null || die "nftables is required."
+    ensure_nft
     ensure_bridge_nat
     log "Bridge + NAT ready (no ingress)."
 }
