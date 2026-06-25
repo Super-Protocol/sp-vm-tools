@@ -235,7 +235,7 @@ prepare_config() {
         # --- Phase 1: inject placeholders with awk ---
         # Handles multi-line pki_authority blocks correctly;
         # simple scalar fields are matched by key regex.
-        awk -i inplace '
+        awk -i inplace -v role="${role}" '
         BEGIN                         { in_pki = 0; ca_done = 0; srv_done = 0; skip_body = 0 }
         /^pki_authority:/             { in_pki = 1; ca_done = 0; srv_done = 0; skip_body = 0; print; next }
         in_pki && /^[a-z]/            { in_pki = 0; skip_body = 0 }
@@ -252,10 +252,8 @@ prepare_config() {
             print "    __CA_BUNDLE__"
             ca_done = 1; skip_body = 1; next
         }
-        # Replace existing servers block with placeholder
-        in_pki && !skip_body && /servers:/ {
-            print "  servers:"
-            print "    - \"__BOOTSTRAP_IP__\""
+        # Bootstrap: remove existing servers block (join nodes keep original)
+        in_pki && !skip_body && role == "bootstrap" && /servers:/ {
             srv_done = 1; skip_body = 1; next
         }
         # Replace networkID value with placeholder (auto-generated UUID)
@@ -263,7 +261,7 @@ prepare_config() {
             sub(/:.*/, ": __NETWORK_ID__")
             print
             if (!ca_done) { print "  caBundle: |"; print "    __CA_BUNDLE__"; ca_done = 1 }
-            if (!srv_done) { print "  servers:"; print "    - \"__BOOTSTRAP_IP__\""; srv_done = 1 }
+            if (role == "bootstrap" && !srv_done) { print "  servers: []"; srv_done = 1 }
             next
         }
 
@@ -303,10 +301,9 @@ prepare_config() {
                 { print }
             ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
         else
-            # bootstrap: remove caBundle and servers blocks (bootstrap is self-sufficient,
-            # join_addresses/caBundle/servers must be all-empty or all-non-empty)
+            # bootstrap: remove caBundle block (bootstrap is self-sufficient).
+            # servers is already handled by awk (removed or set to []).
             sed -i '/caBundle: |/{N;/__CA_BUNDLE__/d;}' "${f}"
-            sed -i '/servers:/{N;d;}' "${f}"
         fi
     done
 
