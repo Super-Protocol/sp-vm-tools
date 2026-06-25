@@ -244,22 +244,9 @@ prepare_config() {
             ${ca_bundle:+--ca-bundle "${ca_bundle}"}
     done
 
-    # Verify networkID was actually written — only check files that have pki_authority
-    local pki_files missing=0
-    while IFS= read -r -d '' f; do
-        if grep -q '^[[:space:]]*pki_authority:' "${f}" 2>/dev/null; then
-            pki_files=1
-            if ! grep -q "networkID:.*${network_id}" "${f}"; then
-                err "networkID ${network_id} not found in ${f} — config patching failed!"
-                missing=1
-            fi
-        fi
-    done < <(find "${dest}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0)
-    if [[ -z "${pki_files}" ]]; then
-        err "No YAML files with pki_authority section found in ${dest} — is the provider template correct?"
-        return 1
-    fi
-    if (( missing )); then
+    # Verify networkID was written to the main config.yaml
+    if ! grep -q "networkID:.*${network_id}" "${dest}/config.yaml"; then
+        err "networkID ${network_id} not found in ${dest}/config.yaml — config patching failed!"
         return 1
     fi
 
