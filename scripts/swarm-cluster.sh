@@ -232,52 +232,78 @@ prepare_config() {
             -v is_bootstrap="${is_bootstrap}" \
             -v ca_file="${ca_file}" '
         function indent(s,   i) { i = match(s, /[^ ]/); return (i ? i - 1 : 0) }
-        # are we currently inside a top-level section named `name`?
-        # section starts at a line with indent 0 matching `name:` and nothing after the colon
+
+        # Emit the networkID + (for join) caBundle + (for bootstrap) servers
+        # that belong to the pki section, exactly once.
+        function flush_pki(   cl) {
+            if (!pki_nid_done) {
+                print "  networkID: \"" network_id "\""
+                pki_nid_done = 1
+            }
+            if (ca_file != "" && !pki_ca_done) {
+                print "  caBundle: |"
+                while ((getline cl < ca_file) > 0) print "    " cl
+                close(ca_file)
+                pki_ca_done = 1
+            }
+            if (is_bootstrap == "yes" && !pki_srv_done) {
+                print "  servers: []"
+                pki_srv_done = 1
+            }
+        }
+
         BEGIN { sec = "" }
         {
             ind = indent($0)
             line = $0
-            # detect a NEW top-level key (indent 0, not a list item, not blank/comment)
+
+            # A new top-level key (indent 0, real key, not a comment) ends any section.
             if (ind == 0 && line !~ /^[ \t]*#/ && line ~ /^[A-Za-z0-9_]+:/) {
                 key = line; sub(/:.*/, "", key)
-                # close pki_authority section if we are leaving it and still owe networkID
-                if (sec == "pki" && !pki_nid_done) {
-                    print "  networkID: \"" network_id "\""
-                    pki_nid_done = 1
-                    if (is_bootstrap == "yes" && !pki_srv_done) {
-                        print "  servers: []"; pki_srv_done = 1
-                    }
-                }
+                # leaving pki without having written everything → flush now
+                if (sec == "pki") flush_pki()
+
                 if      (key == "swarm_db")      { sec = "swarm_db" }
-                else if (key == "pki_authority") { sec = "pki"; pki_nid_done = 0; pki_srv_done = 0 }
+                else if (key == "pki_authority") { sec = "pki"; pki_nid_done = 0; pki_ca_done = 0; pki_srv_done = 0 }
                 else                             { sec = "" }
                 print line
                 next
             }
 
             if (sec == "swarm_db") {
-                if (line ~ /^[ \t]+node_name:/)      { print "  node_name: \"" node_name "\""; next }
+                if (line ~ /^[ \t]+node_name:/)      { print "  node_name: \"" node_name "\"";      next }
                 if (line ~ /^[ \t]+advertise_addr:/) { print "  advertise_addr: \"" advertise_ip "\""; next }
-                if (line ~ /^[ \t]+join_addresses:/) { print "  join_addresses: " join_yaml; next }
+                if (line ~ /^[ \t]+join_addresses:/) { print "  join_addresses: " join_yaml;        next }
+                print line; next
             }
 
             if (sec == "pki") {
+                # networkID: print our value, then immediately the caBundle (join)
+                # and servers (bootstrap), so they are guaranteed to land here.
                 if (line ~ /^[ \t]+networkID:/) {
-                    print "  networkID: \"" network_id "\""; pki_nid_done = 1; next
+                    flush_pki()
+                    next
                 }
-                if (line ~ /^[ \t]+servers:/ && is_bootstrap == "yes") {
-                    print "  servers: []"; pki_srv_done = 1
-                    # skip any list items belonging to the old servers block
+                # Existing caBundle in the template: drop it and its block body;
+                # the real one is emitted by flush_pki() at networkID time.
+                if (line ~ /^[ \t]+caBundle:/) {
+                    if (ca_file != "" && !pki_ca_done) {
+                        print "  caBundle: |"
+                        while ((getline cl < ca_file) > 0) print "    " cl
+                        close(ca_file)
+                        pki_ca_done = 1
+                    }
+                    # swallow the old literal-block body (indent deeper than caBundle:)
                     while ((getline nx) > 0) {
                         if (indent(nx) > ind) continue
-                        $0 = nx; ind = indent($0); line = $0
-                        # re-handle this line by falling through: it is a new key/sibling
-                        if (ind == 0 && line ~ /^[A-Za-z0-9_]+:/) {
+                        # not part of the body → re-feed this line through main loop
+                        $0 = nx
+                        ind = indent($0); line = $0
+                        if (ind == 0 && line !~ /^[ \t]*#/ && line ~ /^[A-Za-z0-9_]+:/) {
                             key = line; sub(/:.*/, "", key)
-                            if (!pki_nid_done) { print "  networkID: \"" network_id "\""; pki_nid_done = 1 }
+                            if (sec == "pki") flush_pki()
                             if      (key == "swarm_db")      sec = "swarm_db"
-                            else if (key == "pki_authority") { sec = "pki"; pki_nid_done = 0; pki_srv_done = 0 }
+                            else if (key == "pki_authority") { sec = "pki"; pki_nid_done = 0; pki_ca_done = 0; pki_srv_done = 0 }
                             else                             sec = ""
                         }
                         print line
@@ -285,25 +311,33 @@ prepare_config() {
                     }
                     next
                 }
-                if (line ~ /^[ \t]+caBundle:/ && ca_file != "") {
-                    print "  caBundle: |"
-                    while ((getline cl < ca_file) > 0) print "    " cl
-                    close(ca_file)
-                    # skip the old caBundle block body
+                # Existing servers block on bootstrap: replace with [] and skip body.
+                if (line ~ /^[ \t]+servers:/ && is_bootstrap == "yes") {
+                    if (!pki_srv_done) { print "  servers: []"; pki_srv_done = 1 }
                     while ((getline nx) > 0) {
                         if (indent(nx) > ind) continue
-                        print nx; break
+                        $0 = nx
+                        ind = indent($0); line = $0
+                        if (ind == 0 && line !~ /^[ \t]*#/ && line ~ /^[A-Za-z0-9_]+:/) {
+                            key = line; sub(/:.*/, "", key)
+                            if (sec == "pki") flush_pki()
+                            if      (key == "swarm_db")      sec = "swarm_db"
+                            else if (key == "pki_authority") { sec = "pki"; pki_nid_done = 0; pki_ca_done = 0; pki_srv_done = 0 }
+                            else                             sec = ""
+                        }
+                        print line
+                        break
                     }
                     next
                 }
+                print line; next
             }
+
             print line
         }
         END {
-            if (sec == "pki" && !pki_nid_done) {
-                print "  networkID: \"" network_id "\""
-                if (is_bootstrap == "yes" && !pki_srv_done) print "  servers: []"
-            }
+            # File ended while still inside pki and we never hit networkID.
+            if (sec == "pki") flush_pki()
         }
         ' "${f}" > "${tmp}" && mv "${tmp}" "${f}"
     done
@@ -316,6 +350,15 @@ prepare_config() {
         err "networkID ${network_id} not found at pki_authority level under ${dest}"
         find "${dest}" -type f \( -name '*.yaml' -o -name '*.yml' \) | sed 's/^/  /' >&2
         return 1
+    fi
+
+    # Verify caBundle actually got injected for join nodes.
+    if [[ "${is_bootstrap}" == "no" && -n "${ca_bundle}" ]]; then
+        if ! grep -Rqs "BEGIN CERTIFICATE" \
+                --include='*.yaml' --include='*.yml' "${dest}"; then
+            err "caBundle (CA cert) not injected into ${dest}"
+            return 1
+        fi
     fi
 
     log "provider config ready: ${dest} (ip=${node_ip}, join=${join_yaml}, network_id=${network_id}, ca=$([[ -n ${ca_file} ]] && echo yes || echo no))"
