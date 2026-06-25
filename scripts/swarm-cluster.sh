@@ -244,14 +244,23 @@ prepare_config() {
             ${ca_bundle:+--ca-bundle "${ca_bundle}"}
     done
 
-    # Verify networkID was actually written (safety net)
-    local first_yaml
-    first_yaml="$(find "${dest}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print -quit)"
-    if [[ -n "${first_yaml}" ]]; then
-        if ! grep -q "networkID:.*${network_id}" "${first_yaml}"; then
-            err "networkID ${network_id} not found in ${first_yaml} — config patching failed!"
-            return 1
+    # Verify networkID was actually written — only check files that have pki_authority
+    local pki_files missing=0
+    while IFS= read -r -d '' f; do
+        if grep -q '^[[:space:]]*pki_authority:' "${f}" 2>/dev/null; then
+            pki_files=1
+            if ! grep -q "networkID:.*${network_id}" "${f}"; then
+                err "networkID ${network_id} not found in ${f} — config patching failed!"
+                missing=1
+            fi
         fi
+    done < <(find "${dest}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0)
+    if [[ -z "${pki_files}" ]]; then
+        err "No YAML files with pki_authority section found in ${dest} — is the provider template correct?"
+        return 1
+    fi
+    if (( missing )); then
+        return 1
     fi
 
     log "provider config ready: ${dest} (ip=${node_ip}, join=${join_yaml}, network_id=${network_id}, ca_bundle=$(if [[ -n "${ca_bundle}" ]]; then echo 'yes'; else echo 'no'; fi))"
