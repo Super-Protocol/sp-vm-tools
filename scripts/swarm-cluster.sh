@@ -66,13 +66,13 @@ HOST_TOTAL_MEM=""
 VM_MODE=""                     # empty = auto-detect (tdx/sev-snp) in start script
 RELEASE=""                     # empty = latest; pin a working build, e.g. build-358
 CACHE="/data/sp-vm/cache"
-START_SCRIPT="${HOME}/projects/sp-vm-tools/scripts/start_super_protocol.sh"
+START_SCRIPT="${PWD}/start_super_protocol.sh"
 PROVIDER_TEMPLATE=""           # provider config template dir (--provider-config-template)
 WORKDIR="/data/sp-vm/cluster"  # per-node provider configs are generated here
 WAN_IFACE=""                   # empty = auto-detect from ip route
 GPU_TARGET="bootstrap"         # bootstrap | none — where to pass the GPU (single-GPU host)
 
-NETWORK_SCRIPT="${HOME}/projects/sp-vm-tools/scripts/swarm-network.sh"
+NETWORK_SCRIPT="${PWD}/swarm-network.sh"
 GLOBAL_ID=""                   # empty = generate a fresh one on `up`
 BASE_DOMAIN="superprotocol.io" # gw hostname = gw.dyn.<global_id>.<base_domain>
 GW_BACKEND_PORT=443
