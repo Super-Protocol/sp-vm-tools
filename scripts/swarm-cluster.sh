@@ -72,6 +72,7 @@ VM_MODE=""                     # empty = auto-detect (tdx/sev-snp) in start scri
 RELEASE=""                     # empty = latest; pin a working build, e.g. build-358
 CACHE="/data/sp-vm/cache"
 START_SCRIPT="${HOME}/projects/sp-vm-tools/scripts/start_super_protocol.sh"
+PYTHON_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_patch_provider_config.py"
 PROVIDER_TEMPLATE=""           # provider config template dir (--provider-config-template)
 WORKDIR="/data/sp-vm/cluster"  # per-node provider configs are generated here
 WAN_IFACE=""                   # empty = auto-detect from ip route
@@ -200,16 +201,13 @@ ensure_network() {
 # 2. Generate per-node provider config from the template
 # ----------------------------------------------------------------------------
 # Takes the user's raw config.yaml (no placeholders required) and produces a
-# per-node copy with concrete values. Two-phase processing:
-#   Phase 1 (awk):  inject placeholders — replaces whatever value was there
-#                   with __PLACEHOLDER__, including multi-line pki_authority blocks.
-#                   All other fields pass through unchanged.
-#   Phase 2 (sed):  substitute placeholders with target values.
+# per-node copy with concrete values, using a Python helper for reliable YAML
+# line-by-line processing (handles multi-line blocks, missing keys, indentation).
 #
 # Fields managed by the script (replaced regardless of original value):
 #   swarm_db.node_name, swarm_db.advertise_addr, swarm_db.join_addresses
 #   pki_authority.networkID (auto-generated UUID, same for all nodes)
-#   pki_authority.caBundle (injected if missing), pki_authority.servers (injected if missing)
+#   pki_authority.caBundle (injected if missing), pki_authority.servers (replaced for bootstrap)
 #
 # Everything else (github, tags, powerdns, base_domain, …) passes through as-is.
 prepare_config() {
@@ -230,82 +228,31 @@ prepare_config() {
         join_yaml="[\"${join_addr}\"]"
     fi
 
+    # Determine the Python role: map "bootstrap" → "bootstrap", everything else → "join"
+    local py_role="join"
+    [[ "${role}" == "bootstrap" ]] && py_role="bootstrap"
+
     find "${dest}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 | \
     while IFS= read -r -d '' f; do
-        # --- Phase 1: inject placeholders with awk ---
-        # Handles multi-line pki_authority blocks correctly;
-        # simple scalar fields are matched by key regex.
-        awk -i inplace -v role="${role}" '
-        BEGIN                         { in_pki = 0; ca_done = 0; srv_done = 0; skip_body = 0 }
-        /^pki_authority:/             { in_pki = 1; ca_done = 0; srv_done = 0; skip_body = 0; print; next }
-        in_pki && /^[a-z]/            { in_pki = 0; skip_body = 0 }
-
-        # Skip remaining body lines of a replaced block (indent 3+ = body, indent 0-2 = next key)
-        in_pki && skip_body {
-            if (/^[[:space:]]{3,}/) { next }
-            skip_body = 0
-        }
-
-        # Replace existing caBundle block with placeholder
-        in_pki && !skip_body && /caBundle:/ {
-            print "  caBundle: |"
-            print "    __CA_BUNDLE__"
-            ca_done = 1; skip_body = 1; next
-        }
-        # Bootstrap: remove existing servers block (join nodes keep original)
-        in_pki && !skip_body && role == "bootstrap" && /servers:/ {
-            srv_done = 1; skip_body = 1; next
-        }
-        # Replace networkID value with placeholder (auto-generated UUID)
-        in_pki && !skip_body && /networkID:/ {
-            sub(/:.*/, ": __NETWORK_ID__")
-            print
-            if (!ca_done) { print "  caBundle: |"; print "    __CA_BUNDLE__"; ca_done = 1 }
-            if (role == "bootstrap" && !srv_done) { print "  servers: []"; srv_done = 1 }
-            next
-        }
-
-        # Simple scalar fields — replace value with placeholder
-        /^[[:space:]]*node_name:/       { sub(/:.*/, ": __NODE_NAME__"); print; next }
-        /^[[:space:]]*advertise_addr:/  { sub(/:.*/, ": __ADVERTISE_IP__"); print; next }
-        /^[[:space:]]*join_addresses:/  { sub(/:.*/, ": __JOIN_ADDRESSES__"); print; next }
-
-        { print }
-        ' "${f}"
-
-        # --- Phase 2: substitute placeholders with concrete values ---
-        sed -i \
-            -e "s|__ADVERTISE_IP__|\"${node_ip}\"|g" \
-            -e "s|__BIND_IP__|0.0.0.0|g" \
-            -e "s|__BOOTSTRAP_IP__|${BOOTSTRAP_IP}|g" \
-            -e "s|__NODE_NAME__|\"${node_name}\"|g" \
-            -e "s|__JOIN_ADDRESSES__|${join_yaml}|g" \
-            -e "s|__NETWORK_ID__|\"${network_id}\"|g" \
-            "${f}"
-        # __CA_BUNDLE__ contains newlines — sed can't handle multiline replacement.
-        # Replace the placeholder line with the PEM, preserving the YAML block indent.
-        if [[ -n "${ca_bundle}" ]]; then
-            # Detect the indentation of the __CA_BUNDLE__ line and apply it to every PEM line.
-            CA_BUNDLE="${ca_bundle}" awk '
-                /__CA_BUNDLE__/ {
-                    match($0, /^[[:space:]]*/)
-                    indent = substr($0, 1, RLENGTH)
-                    n = split(ENVIRON["CA_BUNDLE"], lines, "\n")
-                    for (i = 1; i <= n; i++) {
-                        # drop a possible trailing empty line
-                        if (i == n && lines[i] == "") continue
-                        print indent lines[i]
-                    }
-                    next
-                }
-                { print }
-            ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
-        else
-            # bootstrap: remove caBundle block (bootstrap is self-sufficient).
-            # servers is already handled by awk (removed or set to []).
-            sed -i '/caBundle: |/{N;/__CA_BUNDLE__/d;}' "${f}"
-        fi
+        "${PYTHON_HELPER}" \
+            --file "${f}" \
+            --node-name "${node_name}" \
+            --advertise-ip "${node_ip}" \
+            --join-addresses "${join_yaml}" \
+            --network-id "${network_id}" \
+            --role "${py_role}" \
+            ${ca_bundle:+--ca-bundle "${ca_bundle}"}
     done
+
+    # Verify networkID was actually written (safety net)
+    local first_yaml
+    first_yaml="$(find "${dest}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print -quit)"
+    if [[ -n "${first_yaml}" ]]; then
+        if ! grep -q "networkID:.*${network_id}" "${first_yaml}"; then
+            err "networkID ${network_id} not found in ${first_yaml} — config patching failed!"
+            return 1
+        fi
+    fi
 
     log "provider config ready: ${dest} (ip=${node_ip}, join=${join_yaml}, network_id=${network_id}, ca_bundle=$(if [[ -n "${ca_bundle}" ]]; then echo 'yes'; else echo 'no'; fi))"
     echo "${dest}"
@@ -438,7 +385,7 @@ wait_bootstrap() {
         # pki 9443 — must actually serve the CA certificate (not just accept TCP)
         local pki_resp
         pki_resp="$(curl -sk --connect-timeout 2 --max-time 5 "${pki_url}" 2>/dev/null || true)"
-        if [[ -n "${pki_resp}" ]] && echo "${pki_resp}" | grep -q 'BEGIN CERTIFICATE'; then
+        if [[ -n "${pki_resp}" && "${pki_resp}" == *"BEGIN CERTIFICATE"* ]]; then
             pki_ok=true
         fi
 
@@ -472,9 +419,9 @@ fetch_ca_bundle() {
     if [[ -z "${ca_pem}" ]]; then
         die "Failed to fetch CA bundle from ${pki_url} — PKI not responding"
     fi
-    if ! echo "${ca_pem}" | grep -q 'BEGIN CERTIFICATE'; then
+    if [[ "${ca_pem}" != *"BEGIN CERTIFICATE"* ]]; then
         err "Response doesn't look like a PEM certificate:"
-        err "${ca_pem}"
+        printf '%s\n' "${ca_pem}" >&2
         die "Invalid CA bundle from ${pki_url}"
     fi
 
@@ -525,7 +472,8 @@ cmd_up() {
     [[ -x "${START_SCRIPT}" ]] || die "start script not found/executable: ${START_SCRIPT}"
     command -v nc &>/dev/null   || die "nc is required (apt install netcat-openbsd)"
     command -v curl &>/dev/null || die "curl is required (apt install curl)"
-    command -v awk &>/dev/null  || die "awk is required"
+    command -v python3 &>/dev/null || die "python3 is required"
+    [[ -x "${PYTHON_HELPER}" ]] || die "Python helper not found/executable: ${PYTHON_HELPER}"
     command -v tmux &>/dev/null || die "tmux is required (apt install tmux)"
     command -v nft &>/dev/null  || die "nftables is required (apt install nftables)"
 
@@ -562,7 +510,7 @@ cmd_up() {
     log "Bootstrap is up — fetching CA bundle for join nodes..."
     local ca_bundle
     ca_bundle="$(fetch_ca_bundle)"
-    log "CA bundle: $(echo "${ca_bundle}" | head -1) ... ($(echo "${ca_bundle}" | wc -l) lines)"
+    log "CA bundle: $(printf '%s' "${ca_bundle}" | head -1) ... ($(printf '%s' "${ca_bundle}" | wc -l) lines)"
 
     # --- join nodes (with CA bundle and bootstrap gossip address) ---
     local join1_dir join2_dir
