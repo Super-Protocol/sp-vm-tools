@@ -474,7 +474,8 @@ cmd_up() {
     [[ -x "${PYTHON_HELPER}" ]] || die "Python helper not found/executable: ${PYTHON_HELPER}"
     command -v tmux &>/dev/null || die "tmux is required (apt install tmux)"
     command -v nft &>/dev/null  || die "nftables is required (apt install nftables)"
-
+    
+    python3 -c 'import ruamel.yaml' 2>/dev/null || die "ruamel.yaml required (pip install ruamel.yaml)"
     mkdir -p "${CACHE}" "${WORKDIR}"
 
     # Detect host resources and size the bootstrap node dynamically.
