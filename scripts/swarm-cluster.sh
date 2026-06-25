@@ -244,15 +244,11 @@ prepare_config() {
             ${ca_bundle:+--ca-bundle "${ca_bundle}"}
     done
 
-    # Verify networkID was written to config.yaml
-    local cfg="${dest}/config.yaml"
-    if [[ ! -f "${cfg}" ]]; then
-        err "${cfg} not found. Files in ${dest}:"
+    if ! grep -Rqs "networkID:.*${network_id}" \
+            --include='*.yaml' --include='*.yml' "${dest}"; then
+        err "networkID ${network_id} not found in any YAML under ${dest} — config patching failed!"
+        err "Files in ${dest}:"
         find "${dest}" -type f \( -name '*.yaml' -o -name '*.yml' \) | sed 's/^/  /' >&2
-        return 1
-    fi
-    if ! grep -q "networkID:.*${network_id}" "${cfg}"; then
-        err "networkID ${network_id} not found in ${cfg} — config patching failed!"
         return 1
     fi
 
