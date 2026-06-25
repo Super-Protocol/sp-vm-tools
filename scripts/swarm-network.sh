@@ -199,6 +199,51 @@ EOF
     log "HAProxy config written: ${HAPROXY_CFG}"
 }
 
+# ----------------------------------------------------------------------------
+# Wait for HAProxy DNS resolution + backend health, single-line status (like bootstrap wait).
+# ----------------------------------------------------------------------------
+wait_haproxy_resolve() {
+    local timeout="${1:-60}"
+    local waited=0
+    local gw; gw="$(gw_hostname)"
+    log "Waiting for HAProxy to resolve ${gw} (timeout ${timeout}s)..."
+
+    while (( waited < timeout )); do
+        local resolved_ips
+        resolved_ips="$(getent ahostsv4 "${gw}" 2>/dev/null | awk '{print $1}' | sort -u | xargs echo 2>/dev/null || echo 'none')"
+        local ip_count; ip_count="$(echo "${resolved_ips}" | sed 's/none//' | wc -w)"
+
+        local backends_up=0
+        if [[ "${resolved_ips}" != "none" ]]; then
+            local ip
+            for ip in ${resolved_ips}; do
+                if nc -z -w2 "${ip}" "${GW_BACKEND_PORT}" 2>/dev/null; then
+                    backends_up=$(( backends_up + 1 ))
+                fi
+            done
+        fi
+
+        local resolve_status="down"
+        [[ "${resolved_ips}" != "none" ]] && resolve_status="ok"
+
+        printf '\r[%s]   [%ss] dns=%s  backends=%s/%s  ips=%s\033[K' \
+            "$(date +%H:%M:%S)" "${waited}" \
+            "${resolve_status}" "${backends_up}" "${ip_count}" \
+            "${resolved_ips}" >&2
+
+        if (( backends_up > 0 )); then
+            echo >&2
+            log "HAProxy ingress ready: ${backends_up}/${ip_count} backends up (${gw})"
+            return 0
+        fi
+
+        sleep 3; waited=$(( waited + 3 ))
+    done
+    echo >&2
+    log "HAProxy: DNS resolved but no backends reachable on ${GW_BACKEND_PORT} (continuing anyway)."
+    return 0
+}
+
 start_haproxy() {
     ensure_haproxy
     write_haproxy_cfg
@@ -237,6 +282,7 @@ cmd_up() {
     ensure_nft
     ensure_bridge_nat
     start_haproxy
+    wait_haproxy_resolve 120
     log "Network ready. Ingress 80/443 -> $(gw_hostname) (dynamic, multi-backend)."
 }
 
