@@ -72,7 +72,6 @@ VM_MODE=""                     # empty = auto-detect (tdx/sev-snp) in start scri
 RELEASE=""                     # empty = latest; pin a working build, e.g. build-358
 CACHE="/data/sp-vm/cache"
 START_SCRIPT="${HOME}/projects/sp-vm-tools/scripts/start_super_protocol.sh"
-PYTHON_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_patch_provider_config.py"
 PROVIDER_TEMPLATE=""           # provider config template dir (--provider-config-template)
 WORKDIR="/data/sp-vm/cluster"  # per-node provider configs are generated here
 WAN_IFACE=""                   # empty = auto-detect from ip route
@@ -197,62 +196,129 @@ ensure_network() {
     log "Network ready: bridge ${BRIDGE}, NAT via ${wan}"
 }
 
-# ----------------------------------------------------------------------------
-# 2. Generate per-node provider config from the template
-# ----------------------------------------------------------------------------
-# Takes the user's raw config.yaml (no placeholders required) and produces a
-# per-node copy with concrete values, using a Python helper for reliable YAML
-# line-by-line processing (handles multi-line blocks, missing keys, indentation).
-#
-# Fields managed by the script (replaced regardless of original value):
-#   swarm_db.node_name, swarm_db.advertise_addr, swarm_db.join_addresses
-#   pki_authority.networkID (auto-generated UUID, same for all nodes)
-#   pki_authority.caBundle (injected if missing), pki_authority.servers (replaced for bootstrap)
-#
-# Everything else (github, tags, powerdns, base_domain, …) passes through as-is.
 prepare_config() {
-    local role="$1"          # bootstrap | join1 | join2
+    local role="$1"
     local node_ip="$2"
     local node_name="$3"
-    local join_addr="$4"     # "" for bootstrap, "10.0.0.10:7946" for join
-    local ca_bundle="${5:-}" # PEM CA cert (join nodes only)
-    local network_id="${6:-}" # UUID for pki_authority.networkID (same across cluster)
+    local join_addr="$4"
+    local ca_bundle="${5:-}"
+    local network_id="${6:-}"
     local dest="${WORKDIR}/${role}"
 
-    rm -rf "${dest}"
-    mkdir -p "${dest}"
+    rm -rf "${dest}"; mkdir -p "${dest}"
     cp -r "${PROVIDER_TEMPLATE}/." "${dest}/"
 
     local join_yaml="[]"
-    if [[ -n "${join_addr}" ]]; then
-        join_yaml="[\"${join_addr}\"]"
-    fi
+    [[ -n "${join_addr}" ]] && join_yaml="[\"${join_addr}\"]"
 
-    # Determine the Python role: map "bootstrap" → "bootstrap", everything else → "join"
-    local py_role="join"
-    [[ "${role}" == "bootstrap" ]] && py_role="bootstrap"
+    local is_bootstrap="no"
+    [[ "${role}" == "bootstrap" ]] && is_bootstrap="yes"
+
+    # caBundle written to a temp file so awk reads it line-by-line (join nodes only)
+    local ca_file=""
+    if [[ "${is_bootstrap}" == "no" && -n "${ca_bundle}" ]]; then
+        ca_file="$(mktemp)"
+        printf '%s\n' "${ca_bundle}" > "${ca_file}"
+    fi
 
     find "${dest}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 | \
     while IFS= read -r -d '' f; do
-        "${PYTHON_HELPER}" \
-            --file "${f}" \
-            --node-name "${node_name}" \
-            --advertise-ip "${node_ip}" \
-            --join-addresses "${join_yaml}" \
-            --network-id "${network_id}" \
-            --role "${py_role}" \
-            ${ca_bundle:+--ca-bundle "${ca_bundle}"}
+        local tmp; tmp="$(mktemp)"
+        awk \
+            -v node_name="${node_name}" \
+            -v advertise_ip="${node_ip}" \
+            -v join_yaml="${join_yaml}" \
+            -v network_id="${network_id}" \
+            -v is_bootstrap="${is_bootstrap}" \
+            -v ca_file="${ca_file}" '
+        function indent(s,   i) { i = match(s, /[^ ]/); return (i ? i - 1 : 0) }
+        # are we currently inside a top-level section named `name`?
+        # section starts at a line with indent 0 matching `name:` and nothing after the colon
+        BEGIN { sec = "" }
+        {
+            ind = indent($0)
+            line = $0
+            # detect a NEW top-level key (indent 0, not a list item, not blank/comment)
+            if (ind == 0 && line !~ /^[ \t]*#/ && line ~ /^[A-Za-z0-9_]+:/) {
+                key = line; sub(/:.*/, "", key)
+                # close pki_authority section if we are leaving it and still owe networkID
+                if (sec == "pki" && !pki_nid_done) {
+                    print "  networkID: \"" network_id "\""
+                    pki_nid_done = 1
+                    if (is_bootstrap == "yes" && !pki_srv_done) {
+                        print "  servers: []"; pki_srv_done = 1
+                    }
+                }
+                if      (key == "swarm_db")      { sec = "swarm_db" }
+                else if (key == "pki_authority") { sec = "pki"; pki_nid_done = 0; pki_srv_done = 0 }
+                else                             { sec = "" }
+                print line
+                next
+            }
+
+            if (sec == "swarm_db") {
+                if (line ~ /^[ \t]+node_name:/)      { print "  node_name: \"" node_name "\""; next }
+                if (line ~ /^[ \t]+advertise_addr:/) { print "  advertise_addr: \"" advertise_ip "\""; next }
+                if (line ~ /^[ \t]+join_addresses:/) { print "  join_addresses: " join_yaml; next }
+            }
+
+            if (sec == "pki") {
+                if (line ~ /^[ \t]+networkID:/) {
+                    print "  networkID: \"" network_id "\""; pki_nid_done = 1; next
+                }
+                if (line ~ /^[ \t]+servers:/ && is_bootstrap == "yes") {
+                    print "  servers: []"; pki_srv_done = 1
+                    # skip any list items belonging to the old servers block
+                    while ((getline nx) > 0) {
+                        if (indent(nx) > ind) continue
+                        $0 = nx; ind = indent($0); line = $0
+                        # re-handle this line by falling through: it is a new key/sibling
+                        if (ind == 0 && line ~ /^[A-Za-z0-9_]+:/) {
+                            key = line; sub(/:.*/, "", key)
+                            if (!pki_nid_done) { print "  networkID: \"" network_id "\""; pki_nid_done = 1 }
+                            if      (key == "swarm_db")      sec = "swarm_db"
+                            else if (key == "pki_authority") { sec = "pki"; pki_nid_done = 0; pki_srv_done = 0 }
+                            else                             sec = ""
+                        }
+                        print line
+                        break
+                    }
+                    next
+                }
+                if (line ~ /^[ \t]+caBundle:/ && ca_file != "") {
+                    print "  caBundle: |"
+                    while ((getline cl < ca_file) > 0) print "    " cl
+                    close(ca_file)
+                    # skip the old caBundle block body
+                    while ((getline nx) > 0) {
+                        if (indent(nx) > ind) continue
+                        print nx; break
+                    }
+                    next
+                }
+            }
+            print line
+        }
+        END {
+            if (sec == "pki" && !pki_nid_done) {
+                print "  networkID: \"" network_id "\""
+                if (is_bootstrap == "yes" && !pki_srv_done) print "  servers: []"
+            }
+        }
+        ' "${f}" > "${tmp}" && mv "${tmp}" "${f}"
     done
 
-    if ! grep -Rqs "networkID:.*${network_id}" \
+    [[ -n "${ca_file}" ]] && rm -f "${ca_file}"
+
+    # Verify networkID landed in a real pki_authority section (indent 0 → child indent 2)
+    if ! grep -Rqs "^  networkID:.*${network_id}" \
             --include='*.yaml' --include='*.yml' "${dest}"; then
-        err "networkID ${network_id} not found in any YAML under ${dest} — config patching failed!"
-        err "Files in ${dest}:"
+        err "networkID ${network_id} not found at pki_authority level under ${dest}"
         find "${dest}" -type f \( -name '*.yaml' -o -name '*.yml' \) | sed 's/^/  /' >&2
         return 1
     fi
 
-    log "provider config ready: ${dest} (ip=${node_ip}, join=${join_yaml}, network_id=${network_id}, ca_bundle=$(if [[ -n "${ca_bundle}" ]]; then echo 'yes'; else echo 'no'; fi))"
+    log "provider config ready: ${dest} (ip=${node_ip}, join=${join_yaml}, network_id=${network_id}, ca=$([[ -n ${ca_file} ]] && echo yes || echo no))"
     echo "${dest}"
 }
 
@@ -470,12 +536,9 @@ cmd_up() {
     [[ -x "${START_SCRIPT}" ]] || die "start script not found/executable: ${START_SCRIPT}"
     command -v nc &>/dev/null   || die "nc is required (apt install netcat-openbsd)"
     command -v curl &>/dev/null || die "curl is required (apt install curl)"
-    command -v python3 &>/dev/null || die "python3 is required"
-    [[ -x "${PYTHON_HELPER}" ]] || die "Python helper not found/executable: ${PYTHON_HELPER}"
     command -v tmux &>/dev/null || die "tmux is required (apt install tmux)"
     command -v nft &>/dev/null  || die "nftables is required (apt install nftables)"
     
-    python3 -c 'import ruamel.yaml' 2>/dev/null || die "ruamel.yaml required (pip install ruamel.yaml)"
     mkdir -p "${CACHE}" "${WORKDIR}"
 
     # Detect host resources and size the bootstrap node dynamically.
