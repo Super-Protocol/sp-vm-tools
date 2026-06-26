@@ -20,11 +20,10 @@
 #     HAProxy re-resolves on a short interval and adds/removes backends live.
 #
 # Notes:
-#   - DNS is PUBLIC: the record is served by a public authoritative DNS, so HAProxy's
-#     resolver points at a public nameserver, not the bootstrap node. Keep the TTL on
-#     gw.dyn.* LOW (cluster side) so migrations propagate quickly.
-#   - 53/9443 are intentionally NOT exposed here (ingress is 80/443 only).
-#   - client source IP is NOT preserved (no PROXY protocol) — by design for this setup.
+#   - DNS is INTERNAL: the gw.dyn.<global_id>.* record is served authoritatively by
+#     the bootstrap node on the bridge (10.0.0.10:53). HAProxy's resolver points at
+#     the bootstrap, NOT a public nameserver. Keep the TTL on gw.dyn.* LOW (cluster
+#     side) so gateway migrations propagate quickly.
 #
 # Usage:
 #   sudo ./swarm-network.sh up   --global-id <id> [--base-domain <d>] [opts]
@@ -51,9 +50,15 @@ GW_BACKEND_PORT=443                # port the gateway service listens on inside 
 # WAN ports HAProxy accepts (TLS passthrough on 443, plain TCP on 80)
 INGRESS_PORTS=(80 443)
 
-# Public resolver HAProxy uses to follow the gw.dyn.* record.
-# (DNS is public; do NOT point this at the bootstrap node.)
-RESOLVER_ADDRS=("1.1.1.1:53" "8.8.8.8:53")
+# Bootstrap node serves the authoritative dyn.<global_id>.* zone on the bridge.
+# HAProxy must resolve gw.dyn.* HERE, not at a public resolver, because the
+# record is internal to the cluster (10.0.0.x) and only the bootstrap knows the
+# live set. Bind to the bridge IP, reachable host->bootstrap without DNAT.
+BOOTSTRAP_DNS_IP="10.0.0.10"
+DNS_PORT=53
+
+# Resolver HAProxy uses to follow the gw.dyn.* record — the bootstrap node.
+RESOLVER_ADDRS=("${BOOTSTRAP_DNS_IP}:${DNS_PORT}")
 DNS_HOLD_VALID="5s"                # how long HAProxy trusts a good resolution
 DNS_HOLD_OBSOLETE="5s"             # grace before dropping a vanished record
 RESOLVE_RETRIES=3
@@ -119,8 +124,7 @@ ensure_bridge_nat() {
 # ----------------------------------------------------------------------------
 write_haproxy_cfg() {
     local gw; gw="$(gw_hostname)"
-    log "Generating HAProxy config: ingress 80/443 -> ${gw}:${GW_BACKEND_PORT}"
-
+    log "Generating HAProxy config: ingress 80/443 -> ${gw}:${GW_BACKEND_PORT} (via bootstrap DNS ${BOOTSTRAP_DNS_IP}:${DNS_PORT})"
     mkdir -p "$(dirname "${HAPROXY_CFG}")"
 
     # Build the resolvers nameserver lines
@@ -148,8 +152,9 @@ defaults
     timeout server  50s
     retries 3
 
-# Runtime DNS resolution against the PUBLIC authoritative DNS.
-# Keep gw.dyn.* TTL low on the cluster side so migrations propagate fast.
+# Runtime DNS resolution against the bootstrap node's authoritative DNS
+# (serves the internal dyn.<global_id>.* zone on the bridge). Keep gw.dyn.*
+# TTL low on the cluster side so migrations propagate fast.
 resolvers swarm_dns
 ${ns_lines}    resolve_retries ${RESOLVE_RETRIES}
     timeout resolve 1s
@@ -183,6 +188,12 @@ EOF
 }
 
 start_haproxy() {
+    # Sanity: can we reach the bootstrap DNS at all? (init-addr none means HAProxy
+    # starts even if not — so check explicitly to avoid a silent no-backends state.)
+    if ! nc -z -u -w2 "${BOOTSTRAP_DNS_IP}" "${DNS_PORT}" 2>/dev/null; then
+        log "WARN: bootstrap DNS ${BOOTSTRAP_DNS_IP}:${DNS_PORT} not reachable yet — HAProxy will start with no backends until it answers."
+    fi
+
     [[ -n "${HAPROXY_BIN}" ]] || die "haproxy not installed (apt install haproxy)."
     write_haproxy_cfg
 
@@ -255,8 +266,14 @@ cmd_status() {
         echo "  running (pid $(cat "${HAPROXY_PIDFILE}")), cfg ${HAPROXY_CFG}"
         if [[ -n "${GLOBAL_ID}" ]]; then
             echo "  ingress target: $(gw_hostname):${GW_BACKEND_PORT}"
-            echo "  current A-records:"
-            getent ahostsv4 "$(gw_hostname)" 2>/dev/null | awk '{print "    "$1}' | sort -u || echo "    (resolve failed)"
+            echo "  current A-records (via bootstrap ${BOOTSTRAP_DNS_IP}):"
+            if command -v dig &>/dev/null; then
+                dig +short @"${BOOTSTRAP_DNS_IP}" "$(gw_hostname)" A 2>/dev/null \
+                    | sed 's/^/    /' | grep . || echo "    (resolve failed)"
+            else
+                nslookup "$(gw_hostname)" "${BOOTSTRAP_DNS_IP}" 2>/dev/null \
+                    | awk '/^Address: /{print "    "$2}' | grep . || echo "    (resolve failed / install dnsutils)"
+            fi
         fi
     else
         echo "  not running"
@@ -274,6 +291,7 @@ while [[ $# -gt 0 ]]; do
         --gw-backend-port)  GW_BACKEND_PORT="$2"; shift 2 ;;
         --bridge)           BRIDGE="$2"; shift 2 ;;
         --wan-iface)        WAN_IFACE="$2"; shift 2 ;;
+        --bootstrap-dns)    BOOTSTRAP_DNS_IP="$2"; RESOLVER_ADDRS=("${BOOTSTRAP_DNS_IP}:${DNS_PORT}"); shift 2 ;;
         --resolver)         RESOLVER_ADDRS=("$2"); shift 2 ;;   # single override
         --max-backends)     MAX_BACKENDS="$2"; shift 2 ;;
         --haproxy-cfg)      HAPROXY_CFG="$2"; shift 2 ;;
