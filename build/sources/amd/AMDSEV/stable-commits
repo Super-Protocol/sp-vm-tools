@@ -1,0 +1,20 @@
+#
+# Repos/Branches for SEV-SNP support
+#
+
+# hypervisor commit
+KERNEL_GIT_URL="https://github.com/AMDESE/linux.git"
+KERNEL_HOST_BRANCH="snp-host-latest"
+KERNEL_GUEST_BRANCH="snp-guest-latest"
+
+# base/template kernel config (defaults to /boot/config-`uname -r`)
+#KERNEL_HOST_CONFIG_TEMPLATE=/path/to/kernel/config
+#KERNEL_GUEST_CONFIG_TEMPLATE=/path/to/kernel/config
+
+# qemu commit
+QEMU_GIT_URL="https://github.com/AMDESE/qemu.git"
+QEMU_BRANCH="snp-latest"
+
+# guest bios (snp-latest branch currently points to "edk2-stable202502")
+OVMF_GIT_URL="https://github.com/tianocore/edk2.git"
+OVMF_BRANCH="master"
