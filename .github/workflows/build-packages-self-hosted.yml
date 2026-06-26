@@ -1,30 +1,106 @@
-# This is a basic workflow to help you get started with Actions
-
 name: Build packages self-hosted
 
-# Controls when the workflow will run
 on:
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: "Select build type"
+        required: true
+        default: "BOTH"
+        type: choice
+        options:
+          - TDX
+          - SNP
+          - BOTH
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
   build:
-    # The type of runner that the job will run on
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
+    permissions:
+      contents: write
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
-
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Setup clean workspace
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          WORK_DIR="/home/gh-runner/builds/run-${{ github.run_number }}"
+          echo "WORK_DIR=$WORK_DIR" >> $GITHUB_ENV
+
+          mkdir -p /home/gh-runner/builds
+          
+          find /home/gh-runner/builds -maxdepth 1 -name "run-*" -type d | \
+            sort -V | head -n -3 | xargs rm -rf 2>/dev/null || true
+          
+          rm -rf "$WORK_DIR" 2>/dev/null || true
+          mkdir -p "$WORK_DIR"
+          cd "$WORK_DIR"
+          
+          git init .
+          git remote add origin https://github.com/${{ github.repository }}.git
+          git fetch --depth 1 origin ${{ github.sha }}
+          git checkout ${{ github.sha }}
+          
+      - name: Set build type and runner ID
+        working-directory: ${{ env.WORK_DIR }}
+        run: | 
+          echo "BUILD_TYPE=${{ github.event.inputs.build_type }}" >> $GITHUB_ENV
+          echo "RUNNER_ID=${{ github.run_number }}" >> $GITHUB_ENV
+        
+      - name: Run TDX docker build
+        if: ${{ github.event.inputs.build_type == 'TDX' || github.event.inputs.build_type == 'BOTH' }}
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          NON_INTERACTIVE=1 FORCE_REBUILD_CONTAINER=1 ./build/build_in_docker.sh tdx
+          
+      - name: Run SNP docker build
+        if: ${{ github.event.inputs.build_type == 'SNP' || github.event.inputs.build_type == 'BOTH' }}
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          NON_INTERACTIVE=1 FORCE_REBUILD_CONTAINER=1 ./build/build_in_docker.sh snp
+          
+      - name: Set release name
+        id: release-name
+        run: |
+          if [[ "${BUILD_TYPE}" == "BOTH" ]]; then
+            echo "RELEASE_NAME=${RUNNER_ID}-tdx+snp" >> $GITHUB_ENV
+          elif [[ "${BUILD_TYPE}" == "TDX" ]]; then
+            echo "RELEASE_NAME=${RUNNER_ID}-tdx" >> $GITHUB_ENV
+          elif [[ "${BUILD_TYPE}" == "SNP" ]]; then
+            echo "RELEASE_NAME=${RUNNER_ID}-snp" >> $GITHUB_ENV
+          else
+            echo "Error: Unknown BUILD_TYPE ${BUILD_TYPE}" >&2
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+        with:
+          tag_name: "${{ env.RELEASE_NAME }}"
+          release_name: "Release ${{ env.RELEASE_NAME }}"
+          draft: false
+          prerelease: true
+
+      - name: Upload TDX Release Asset
+        if: ${{ github.event.inputs.build_type == 'TDX' || github.event.inputs.build_type == 'BOTH' }}
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.WORK_DIR }}/build/out/tdx/package-tdx.tar.gz
+          asset_name: package-tdx.tar.gz
+          asset_content_type: application/gzip
+      
+      - name: Upload SNP Release Asset
+        if: ${{ github.event.inputs.build_type == 'SNP' || github.event.inputs.build_type == 'BOTH' }}
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{ env.WORK_DIR }}/build/out/snp/package-snp.tar.gz
+          asset_name: package-snp.tar.gz
+          asset_content_type: application/gzip

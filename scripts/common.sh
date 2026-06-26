@@ -173,21 +173,24 @@ EOF
 }
 
 setup_cx7_bridge_vfio() {
+    local iommu_param="$1"
+
+    if [[ "$iommu_param" != "intel_iommu=on" && "$iommu_param" != "amd_iommu=on" ]]; then
+        echo "Invalid IOMMU parameter '${iommu_param}'. Expected intel_iommu=on or amd_iommu=on."
+        return 1
+    fi
+
     echo "Setting up CX7 Bridge devices for VFIO passthrough..."
 
     # Check IOMMU
     if [ ! -d "/sys/kernel/iommu_groups" ] || [ -z "$(find /sys/kernel/iommu_groups/ -type l 2>/dev/null)" ]; then
-        echo "❌ IOMMU not enabled. Adding to GRUB configuration..."
-        
-        if ! grep -q 'intel_iommu=on' /etc/default/grub; then
-            if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub; then
-                sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)/\1 intel_iommu=on iommu=pt/' /etc/default/grub
-            else
-                echo 'GRUB_CMDLINE_LINUX_DEFAULT="intel_iommu=on iommu=pt"' >> /etc/default/grub
-            fi
-        fi
-        
-        echo "⚠️  IOMMU added to GRUB. Reboot required."
+        echo "IOMMU not enabled. Adding platform-specific IOMMU options to GRUB..."
+
+        ensure_cmdline_param "$iommu_param"
+        ensure_cmdline_param "iommu=pt"
+        update-grub2 || update-grub
+
+        echo "⚠️  IOMMU options added to GRUB (${iommu_param} iommu=pt). Reboot required."
         return 1
     fi
 
@@ -601,8 +604,9 @@ setup_grub() {
     fi
 
     # Create a custom configuration file to ensure our kernel is first
-    echo "# Custom kernel order configuration" > /etc/default/grub.d/99-tdx-kernel.cfg
-    echo "GRUB_DEFAULT=0" >> /etc/default/grub.d/99-tdx-kernel.cfg
+    mkdir -p /etc/default/grub.d
+    echo "# Custom kernel order configuration" > "/etc/default/grub.d/99-${type}-kernel.cfg"
+    echo "GRUB_DEFAULT=0" >> "/etc/default/grub.d/99-${type}-kernel.cfg"
     
     # Force regeneration of grub.cfg and initramfs
     update-initramfs -u -k "${new_kernel}"

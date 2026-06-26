@@ -50,7 +50,7 @@ bootstrap() {
     if command -v lspci >/dev/null; then
         echo "Checking NVIDIA GPU configuration..."
         setup_nvidia_gpus "${TMP_DIR}" || true
-        setup_cx7_bridge_vfio
+        setup_cx7_bridge_vfio "intel_iommu=on"
         verify_cx7_vfio_setup
     else
         echo "Skipping NVIDIA GPU check (lspci not found)"
