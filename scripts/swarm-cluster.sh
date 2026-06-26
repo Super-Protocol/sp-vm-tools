@@ -44,7 +44,11 @@ CID_JOIN=(123 124)
 # reserve and the join nodes are accounted for. Join nodes get a fixed minimum.
 # Override any of these with flags; if not set, the defaults here are used
 # automatically and bootstrap is sized dynamically from the detected host.
-STATE_DISK_SIZE=50
+#
+# Disk: auto-detected — 90% of free space on CACHE, split proportionally to CPU
+# cores. Override with --state-disk-size (applies to all nodes equally).
+STATE_DISK_SIZE=""             # empty = auto (proportional to cores); set to override
+HOST_DISK_RESERVE_PCT=10        # % of free disk left for the host
 
 # Host reserve — left for host OS, kernel, and QEMU per-VM overhead.
 # CC-VMs (TDX/SEV-SNP) reserve memory HARD (no swap, no overcommit), so
@@ -60,8 +64,12 @@ JOIN_MEM=4
 # Computed at runtime by compute_allocation(); do not set by hand.
 BOOTSTRAP_CORES=""
 BOOTSTRAP_MEM=""
+BOOTSTRAP_DISK=""
+JOIN_DISK=""
 HOST_TOTAL_CORES=""
 HOST_TOTAL_MEM=""
+HOST_TOTAL_DISK=""
+HOST_AVAIL_DISK=""
 
 VM_MODE=""                     # empty = auto-detect (tdx/sev-snp) in start script
 RELEASE=""                     # empty = latest; pin a working build, e.g. build-358
@@ -123,6 +131,21 @@ detect_host_resources() {
     log "Host resources detected: ${HOST_TOTAL_CORES} cores, ${HOST_TOTAL_MEM}GB RAM"
 }
 
+# Detect free disk space (GB) on the filesystem that hosts CACHE.
+# Called by compute_allocation() only when STATE_DISK_SIZE is empty (auto mode).
+detect_host_disk() {
+    mkdir -p "${CACHE}"
+    # df --output=avail returns blocks; -B G gives integer GB (rounded down).
+    local avail_gb
+    avail_gb="$(df --output=avail -BG "${CACHE}" 2>/dev/null | tail -1 | tr -d ' G')" || true
+    if [[ -z "${avail_gb}" || "${avail_gb}" -le 0 ]]; then
+        die "Cannot detect free disk space on ${CACHE}. Check filesystem."
+    fi
+    HOST_AVAIL_DISK="${avail_gb}"
+    HOST_TOTAL_DISK="$(df --output=size -BG "${CACHE}" 2>/dev/null | tail -1 | tr -d ' G')" || true
+    log "Host disk detected: ${HOST_AVAIL_DISK}GB free (total: ${HOST_TOTAL_DISK}GB) on ${CACHE}"
+}
+
 # Bootstrap = host_total - host_reserve - (join nodes) - (qemu overhead).
 # Join nodes use the fixed minimums (JOIN_CORES/JOIN_MEM), which are either the
 # built-in defaults or whatever was passed via --join-cores/--join-mem.
@@ -153,9 +176,36 @@ compute_allocation() {
         die "Not enough RAM: host=${HOST_TOTAL_MEM}GB, reserve=${HOST_RESERVE_MEM}GB, join=${join_mem_total}GB (${JOIN_MEM}x${num_join}), qemu=${qemu_overhead}GB -> bootstrap would get ${BOOTSTRAP_MEM}GB. Lower --join-mem or --host-reserve-mem."
     fi
 
+    # --- disk (auto or manual) ---
+    if [[ -n "${STATE_DISK_SIZE}" ]]; then
+        # Manual override: same size for all nodes.
+        BOOTSTRAP_DISK="${STATE_DISK_SIZE}"
+        JOIN_DISK="${STATE_DISK_SIZE}"
+        log "Disk allocation (manual): ${STATE_DISK_SIZE}GB per node"
+    else
+        # Auto: 90% of free space, split proportionally to CPU cores.
+        detect_host_disk
+        local host_keep_pct="${HOST_DISK_RESERVE_PCT}"
+        local alloc_gb=$(( HOST_AVAIL_DISK * (100 - host_keep_pct) / 100 ))
+        local total_cores=$(( BOOTSTRAP_CORES + join_cores_total ))
+        if (( total_cores <= 0 )); then
+            die "total_cores is zero — cannot compute disk allocation"
+        fi
+        BOOTSTRAP_DISK=$(( alloc_gb * BOOTSTRAP_CORES / total_cores ))
+        JOIN_DISK=$(( alloc_gb * JOIN_CORES / total_cores ))
+        # Ensure minimum 10GB per node so the VM has enough for rootfs + state.
+        local min_disk=10
+        if (( BOOTSTRAP_DISK < min_disk )); then BOOTSTRAP_DISK="${min_disk}"; fi
+        if (( JOIN_DISK < min_disk )); then JOIN_DISK="${min_disk}"; fi
+        log "Disk allocation (auto: ${alloc_gb}GB usable = ${HOST_AVAIL_DISK}GB free − ${host_keep_pct}% host reserve):"
+        log "  bootstrap : ${BOOTSTRAP_DISK}GB (${BOOTSTRAP_CORES}/${total_cores} of ${alloc_gb}GB)"
+        log "  join      : ${JOIN_DISK}GB each (${JOIN_CORES}/${total_cores} of ${alloc_gb}GB)"
+        log "  host kept : ~$(( HOST_AVAIL_DISK - alloc_gb ))GB (${host_keep_pct}% free space)"
+    fi
+
     log "Resource allocation:"
-    log "  bootstrap : ${BOOTSTRAP_CORES} cores, ${BOOTSTRAP_MEM}GB RAM (+GPU)"
-    log "  join x${num_join}    : ${JOIN_CORES} cores, ${JOIN_MEM}GB RAM each"
+    log "  bootstrap : ${BOOTSTRAP_CORES} cores, ${BOOTSTRAP_MEM}GB RAM, ${BOOTSTRAP_DISK}GB disk (+GPU)"
+    log "  join x${num_join}    : ${JOIN_CORES} cores, ${JOIN_MEM}GB RAM, ${JOIN_DISK}GB disk each"
     log "  host kept : ${HOST_RESERVE_CORES} cores, ${HOST_RESERVE_MEM}GB + ${qemu_overhead}GB qemu overhead"
 }
 
@@ -393,7 +443,8 @@ start_vm() {
     local with_gpu="$6"      # true | false
     local node_cores="$7"    # vCPU count for this node
     local node_mem="$8"      # RAM (GB) for this node
-    local ssh_port="${9:-}"  # host SSH port (debug mode only)
+    local node_disk="$9"     # state disk (GB) for this node
+    local ssh_port="${10:-}" # host SSH port (debug mode only)
     local tap_iface="sw-tap-${node_ip##*.}"
     local mac; mac="$(mac_for_ip "${node_ip}")"
 
@@ -437,7 +488,7 @@ start_vm() {
         --provider_config "${provider_dir}"
         --mac_address "${mac}"
         --vm_ip "${node_ip}/24"
-        --state_disk_size "${STATE_DISK_SIZE}"
+        --state_disk_size "${node_disk}"
         --state_disk_path "${CACHE}/state-${node_ip##*.}.qcow2"
         --provider_config_disk_path "${CACHE}/pcfg-${node_ip##*.}.img"
         --cache "${CACHE}"
@@ -449,7 +500,7 @@ start_vm() {
         --swarm-init "${swarm_init}"
     )
 
-    log "Starting ${session}: ip=${node_ip} cid=${cid} tap=${tap_iface} swarm-init=${swarm_init} gpu=${with_gpu} debug=${DEBUG_MODE}"
+    log "Starting ${session}: ip=${node_ip} cid=${cid} tap=${tap_iface} swarm-init=${swarm_init} gpu=${with_gpu} cores=${node_cores} mem=${node_mem}GB disk=${node_disk}GB debug=${DEBUG_MODE}"
 
     # Safety net: drop any empty array elements before building the runner.
     # An empty positional arg would shift the start-script's two-step arg parser
@@ -599,7 +650,7 @@ cmd_up() {
     local boot_gpu=false
     [[ "${GPU_TARGET}" == "bootstrap" ]] && boot_gpu=true
     start_vm "${TMUX_BOOTSTRAP}" "${BOOTSTRAP_IP}" "${CID_BOOTSTRAP}" "${boot_dir}" \
-        true "${boot_gpu}" "${BOOTSTRAP_CORES}" "${BOOTSTRAP_MEM}" "${SSH_PORT_BOOTSTRAP}"
+        true "${boot_gpu}" "${BOOTSTRAP_CORES}" "${BOOTSTRAP_MEM}" "${BOOTSTRAP_DISK}" "${SSH_PORT_BOOTSTRAP}"
 
     wait_bootstrap 1000
 
@@ -616,9 +667,9 @@ cmd_up() {
     join2_dir="$(prepare_config join2 "${JOIN_IPS[1]}" "swarm-join-2" "${BOOTSTRAP_IP}:${GOSSIP_PORT}" "${ca_bundle}" "${network_id}")"
 
     start_vm "${TMUX_JOIN[0]}" "${JOIN_IPS[0]}" "${CID_JOIN[0]}" "${join1_dir}" \
-        false false "${JOIN_CORES}" "${JOIN_MEM}" "${SSH_PORT_JOIN[0]}"
+        false false "${JOIN_CORES}" "${JOIN_MEM}" "${JOIN_DISK}" "${SSH_PORT_JOIN[0]}"
     start_vm "${TMUX_JOIN[1]}" "${JOIN_IPS[1]}" "${CID_JOIN[1]}" "${join2_dir}" \
-        false false "${JOIN_CORES}" "${JOIN_MEM}" "${SSH_PORT_JOIN[1]}"
+        false false "${JOIN_CORES}" "${JOIN_MEM}" "${JOIN_DISK}" "${SSH_PORT_JOIN[1]}"
 
     # external ingress
     "${NETWORK_SCRIPT}" up \
