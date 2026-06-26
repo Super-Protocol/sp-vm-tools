@@ -15,7 +15,7 @@ get_kernel_log() {
 }
 
 SNP_RELEASE_REPO="Super-Protocol/sp-vm-tools"
-SNP_RELEASE_TAG="38-tdx+snp"
+SNP_RELEASE_TAG="42-snp"
 SNP_RELEASE_ASSET="package-snp.tar.gz"
 
 check_snp_status() {

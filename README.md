@@ -13,7 +13,7 @@ The repository provides:
 
 ### Common
 
-- **OS:** Ubuntu on the host: **24.04 or newer** for Intel TDX and AMD SEV-SNP (recommended **26.04** for both). Minimums are enforced by the bootstrap scripts.
+- **OS:** Ubuntu on the host: supported LTS releases are **24.04 LTS** and **26.04 LTS** for Intel TDX and AMD SEV-SNP (recommended **26.04 LTS** for both). Supported versions are enforced by the bootstrap scripts.
 - **Privileges:** `root` (run with `sudo`).
 - **Network:** outbound HTTPS to GitHub, AMD/Intel download servers and the Ubuntu archive.
 - **Memory / CPU:** enough headroom to run a VM. Defaults of `start_super_protocol.sh` reserve `nproc - 2` cores and `RAM - 8 GiB` for the guest.
@@ -76,6 +76,12 @@ What it does:
 
 ### 2b. Bootstrap an AMD SEV-SNP host
 
+> **Ubuntu 24.04 note:** on Ubuntu 24.04, the SNP bootstrap installs a bundled
+> Linux **6.16** kernel. On some systems, network interfaces may be renamed after
+> reboot, which can affect networking and remote SSH access. Make sure you have
+> iKVM or other interactive console access before rebooting so you can reconfigure
+> networking for the new interface names if needed.
+
 ```bash
 sudo ./scripts/bootstrap_snp.sh
 ```
@@ -83,7 +89,7 @@ sudo ./scripts/bootstrap_snp.sh
 What it does:
 
 1. Verifies Ubuntu version, root privileges and detects the EPYC generation (Milan / Genoa / Turin).
-2. Installs the SEV-SNP hypervisor stack: bundled kernel/QEMU from `package-snp.tar.gz` in release `38-tdx+snp` on Ubuntu 24.04, or distro QEMU on newer Ubuntu releases.
+2. Installs the SEV-SNP hypervisor stack: bundled kernel/QEMU from `package-snp.tar.gz` in release `42-snp` on Ubuntu 24.04, or distro QEMU on newer Ubuntu releases.
 3. Downloads and installs the matching AMD SEV firmware blob to `/lib/firmware/amd/` and reloads `ccp` / `kvm_amd`.
 4. Runs SNP status checks (RMP table, SEV / SEV-SNP API versions, ASID allocation, IOMMU groups, hugepages, CPU governor).
 5. Configures NVIDIA GPUs for CC mode and binds them to `vfio-pci`.
