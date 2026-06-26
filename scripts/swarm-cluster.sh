@@ -39,11 +39,6 @@ MAC_BASE="52:54:00:12:34"      # suffix = last octet of the IP (10/11/12)
 CID_BOOTSTRAP=122
 CID_JOIN=(123 124)
 
-# Ports forwarded externally to bootstrap
-WAN_TCP_PORTS=(80 443 9443)
-WAN_UDP_PORTS=(53)
-WAN_TCP_ALSO_UDP=(53)          # 53 is forwarded both tcp and udp
-
 # Per-node resources.
 # Bootstrap (GPU node) gets the REMAINDER of host resources after the host
 # reserve and the join nodes are accounted for. Join nodes get a fixed minimum.
@@ -71,11 +66,16 @@ HOST_TOTAL_MEM=""
 VM_MODE=""                     # empty = auto-detect (tdx/sev-snp) in start script
 RELEASE=""                     # empty = latest; pin a working build, e.g. build-358
 CACHE="/data/sp-vm/cache"
-START_SCRIPT="${HOME}/projects/sp-vm-tools/scripts/start_super_protocol.sh"
+START_SCRIPT="${PWD}/start_super_protocol.sh"
 PROVIDER_TEMPLATE=""           # provider config template dir (--provider-config-template)
 WORKDIR="/data/sp-vm/cluster"  # per-node provider configs are generated here
 WAN_IFACE=""                   # empty = auto-detect from ip route
 GPU_TARGET="bootstrap"         # bootstrap | none — where to pass the GPU (single-GPU host)
+
+NETWORK_SCRIPT="${PWD}/swarm-network.sh"
+GLOBAL_ID=""                   # empty = generate a fresh one on `up`
+BASE_DOMAIN="superprotocol.io" # gw hostname = gw.dyn.<global_id>.<base_domain>
+GW_BACKEND_PORT=443
 
 # Debug mode: passes --debug true + --log_file to the start script (verbose boot log),
 # and forwards SSH per node on distinct host ports (internal use only).
@@ -157,43 +157,6 @@ compute_allocation() {
     log "  bootstrap : ${BOOTSTRAP_CORES} cores, ${BOOTSTRAP_MEM}GB RAM (+GPU)"
     log "  join x${num_join}    : ${JOIN_CORES} cores, ${JOIN_MEM}GB RAM each"
     log "  host kept : ${HOST_RESERVE_CORES} cores, ${HOST_RESERVE_MEM}GB + ${qemu_overhead}GB qemu overhead"
-}
-
-# ----------------------------------------------------------------------------
-# 1. Network: bridge + forwarding + outbound NAT (for egress: GHCR/ACME pulls)
-# ----------------------------------------------------------------------------
-ensure_network() {
-    require_root
-    local wan; wan="$(detect_wan_iface)"
-    [[ -n "${wan}" ]] || die "Could not determine WAN interface. Pass --wan-iface."
-
-    log "WAN interface: ${wan}"
-
-    # bridge (idempotent)
-    if ! ip link show "${BRIDGE}" &>/dev/null; then
-        log "Creating bridge ${BRIDGE} (${HOST_GW_IP}/24)"
-        ip link add name "${BRIDGE}" type bridge
-        ip addr add "${HOST_GW_IP}/24" dev "${BRIDGE}"
-        ip link set "${BRIDGE}" up
-    else
-        log "bridge ${BRIDGE} already exists"
-        # make sure the address is present
-        ip addr show dev "${BRIDGE}" | grep -q "${HOST_GW_IP}/24" || \
-            ip addr add "${HOST_GW_IP}/24" dev "${BRIDGE}"
-        ip link set "${BRIDGE}" up
-    fi
-
-    # ip forwarding
-    sysctl -q -w net.ipv4.ip_forward=1
-
-    # Outbound NAT for VM egress (pull service images from GHCR, ACME, etc.).
-    # nftables: a dedicated table so it can be torn down easily.
-    nft list table ip swarm_nat &>/dev/null && nft delete table ip swarm_nat
-    nft add table ip swarm_nat
-    nft add chain ip swarm_nat postrouting '{ type nat hook postrouting priority 100 ; }'
-    nft add rule  ip swarm_nat postrouting ip saddr "${SUBNET_CIDR}" oifname "${wan}" masquerade
-
-    log "Network ready: bridge ${BRIDGE}, NAT via ${wan}"
 }
 
 prepare_config() {
@@ -344,6 +307,8 @@ prepare_config() {
 
     [[ -n "${ca_file}" ]] && rm -f "${ca_file}"
 
+    inject_top_level_identity "${dest}" 
+
     # Verify networkID landed in a real pki_authority section (indent 0 → child indent 2)
     if ! grep -Rqs "^  networkID:.*${network_id}" \
             --include='*.yaml' --include='*.yml' "${dest}"; then
@@ -363,6 +328,57 @@ prepare_config() {
 
     log "provider config ready: ${dest} (ip=${node_ip}, join=${join_yaml}, network_id=${network_id}, ca=$([[ -n ${ca_file} ]] && echo yes || echo no))"
     echo "${dest}"
+}
+
+# ============================================================================
+# PATCH for swarm-cluster.sh — global_id generation + top-level config injection
+# ============================================================================
+
+# --- 2a. Generate or reuse a cluster-wide global_id, persisted on the host so
+#         restarts keep the same DNS name (gw.dyn.<global_id>.<base_domain>). ---
+ensure_global_id() {
+    if [[ -n "${GLOBAL_ID}" ]]; then
+        log "Using provided global_id: ${GLOBAL_ID}"
+        return
+    fi
+    local id_file="${CACHE}/global_id"
+    if [[ -r "${id_file}" ]]; then
+        GLOBAL_ID="$(cat "${id_file}")"
+        log "Reusing persisted global_id: ${GLOBAL_ID} (${id_file})"
+        return
+    fi
+    # Short, DNS-safe id: 12 lowercase hex chars.
+    if command -v uuidgen &>/dev/null; then
+        GLOBAL_ID="$(uuidgen | tr -d '-' | cut -c1-12)"
+    else
+        GLOBAL_ID="$(od -An -tx1 -N6 /dev/urandom | tr -d ' \n')"
+    fi
+    echo "${GLOBAL_ID}" > "${id_file}"
+    log "Generated global_id: ${GLOBAL_ID} (persisted to ${id_file})"
+}
+
+# --- 2b. Inject top-level global_id + gateway_hostname into every provider yaml.
+#         These live at indent 0, next to other top-level keys. Idempotent:
+#         existing keys are replaced, missing ones appended. Call from inside
+#         prepare_config AFTER the awk section-rewrite, BEFORE the verifications. ---
+inject_top_level_identity() {
+    local dest="$1"
+
+    find "${dest}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 | \
+    while IFS= read -r -d '' f; do
+        local tmp; tmp="$(mktemp)"
+        awk \
+            -v gid="${GLOBAL_ID}" '
+        BEGIN { seen_gid = 0 }
+        # Replace existing top-level key in place; gateway_hostname is left as-is from template.
+        /^global_id:[ \t]*/  { print "global_id: \"" gid "\""; seen_gid = 1; next }
+        { print }
+        END {
+            if (!seen_gid) print "global_id: \"" gid "\""
+        }
+        ' "${f}" > "${tmp}" && mv "${tmp}" "${f}"
+    done
+    log "  injected top-level: global_id=${GLOBAL_ID} (gateway_hostname left unchanged from template)"
 }
 
 # ----------------------------------------------------------------------------
@@ -539,37 +555,6 @@ fetch_ca_bundle() {
 }
 
 # ----------------------------------------------------------------------------
-# 5. nftables DNAT: WAN -> bootstrap (external ingress, TLS passthrough)
-# ----------------------------------------------------------------------------
-setup_dnat() {
-    require_root
-    local wan; wan="$(detect_wan_iface)"
-    [[ -n "${wan}" ]] || die "Could not determine WAN interface."
-
-    log "Configuring DNAT ${wan} -> ${BOOTSTRAP_IP}"
-
-    nft list table ip swarm_dnat &>/dev/null && nft delete table ip swarm_dnat
-    nft add table ip swarm_dnat
-    nft add chain ip swarm_dnat prerouting  '{ type nat hook prerouting priority -100 ; }'
-
-    # TCP ports
-    for p in "${WAN_TCP_PORTS[@]}"; do
-        nft add rule ip swarm_dnat prerouting iifname "${wan}" tcp dport "${p}" dnat to "${BOOTSTRAP_IP}"
-    done
-    # UDP ports
-    for p in "${WAN_UDP_PORTS[@]}"; do
-        nft add rule ip swarm_dnat prerouting iifname "${wan}" udp dport "${p}" dnat to "${BOOTSTRAP_IP}"
-    done
-    # add tcp:53 as well (53 needs both tcp and udp)
-    for p in "${WAN_TCP_ALSO_UDP[@]}"; do
-        nft add rule ip swarm_dnat prerouting iifname "${wan}" tcp dport "${p}" dnat to "${BOOTSTRAP_IP}"
-    done
-
-    log "DNAT ready: tcp ${WAN_TCP_PORTS[*]} + tcp/udp ${WAN_TCP_ALSO_UDP[*]} -> ${BOOTSTRAP_IP}"
-    log "NOTE: PKI 9443 is exposed externally for outside consumers; join nodes fetch PKI locally (10.0.0.10), no hairpin needed."
-}
-
-# ----------------------------------------------------------------------------
 # Top-level commands
 # ----------------------------------------------------------------------------
 cmd_up() {
@@ -580,14 +565,21 @@ cmd_up() {
     command -v nc &>/dev/null   || die "nc is required (apt install netcat-openbsd)"
     command -v curl &>/dev/null || die "curl is required (apt install curl)"
     command -v tmux &>/dev/null || die "tmux is required (apt install tmux)"
-    command -v nft &>/dev/null  || die "nftables is required (apt install nftables)"
+    if ! command -v nft &>/dev/null; then
+        log "nftables not found, installing..."
+        apt-get update -qq && apt-get install -y -qq nftables
+        command -v nft &>/dev/null || die "nftables installation failed"
+    fi
     
     mkdir -p "${CACHE}" "${WORKDIR}"
 
     # Detect host resources and size the bootstrap node dynamically.
     compute_allocation
+    ensure_global_id 
 
-    ensure_network
+    "${NETWORK_SCRIPT}" bridge-only --bridge "${BRIDGE}" \
+        ${WAN_IFACE:+--wan-iface "${WAN_IFACE}"}
+
 
     # --- generate cluster-wide networkID (UUID) ---
     local network_id
@@ -629,7 +621,14 @@ cmd_up() {
         false false "${JOIN_CORES}" "${JOIN_MEM}" "${SSH_PORT_JOIN[1]}"
 
     # external ingress
-    setup_dnat
+    "${NETWORK_SCRIPT}" up \
+        --global-id "${GLOBAL_ID}" \
+        --base-domain "${BASE_DOMAIN}" \
+        --gw-backend-port "${GW_BACKEND_PORT}" \
+        --bridge "${BRIDGE}" \
+        ${WAN_IFACE:+--wan-iface "${WAN_IFACE}"}
+
+    log "Cluster started. Ingress: gw.dyn.${GLOBAL_ID}.${BASE_DOMAIN} -> 80/443"
 
     log "Cluster started. Sessions: tmux ls"
     log "  bootstrap: tmux attach -t ${TMUX_BOOTSTRAP}"
@@ -660,14 +659,14 @@ cmd_down() {
         ip link show "${tap}" &>/dev/null && { log "  del ${tap}"; ip link del "${tap}"; }
     done
 
-    # nftables tables
-    nft list table ip swarm_dnat &>/dev/null && { log "  del nft swarm_dnat"; nft delete table ip swarm_dnat; }
-    nft list table ip swarm_nat  &>/dev/null && { log "  del nft swarm_nat";  nft delete table ip swarm_nat; }
+    "${NETWORK_SCRIPT}" down --bridge "${BRIDGE}"
 
     log "Cluster stopped. bridge ${BRIDGE} left in place (remove with: ip link del ${BRIDGE})."
 }
 
 cmd_status() {
+    [[ -z "${GLOBAL_ID}" && -r "${CACHE}/global_id" ]] && GLOBAL_ID="$(cat "${CACHE}/global_id")"
+
     echo "=== resources ==="
     if [[ -n "$(command -v nproc)" ]]; then
         local _c; _c="$(nproc)"
@@ -688,9 +687,10 @@ cmd_status() {
     for p in "${GOSSIP_PORT}" "${PKI_PORT}" 80 443 53; do
         if nc -z -w2 "${BOOTSTRAP_IP}" "${p}" 2>/dev/null; then echo "  ${p}: open"; else echo "  ${p}: closed"; fi
     done
-    echo "=== nftables ==="
-    nft list table ip swarm_dnat 2>/dev/null | grep -c dnat | xargs -I{} echo "  dnat rules: {}"
-    nft list table ip swarm_nat  &>/dev/null && echo "  swarm_nat: present" || echo "  swarm_nat: absent"
+    
+    echo "=== ingress (haproxy) ==="
+    "${NETWORK_SCRIPT}" status --global-id "${GLOBAL_ID:-}" --base-domain "${BASE_DOMAIN}" 2>/dev/null \
+        | sed 's/^/  /' || echo "  network script unavailable"
 }
 
 # ----------------------------------------------------------------------------
@@ -723,8 +723,6 @@ case "${CMD}" in
     up)              cmd_up ;;
     down)            cmd_down ;;
     status)          cmd_status ;;
-    ensure-network)  ensure_network ;;
-    setup-dnat)      setup_dnat ;;
     "" )             die "Command: up | down | status | ensure-network | setup-dnat" ;;
     *)               die "Unknown command: ${CMD}" ;;
 esac
