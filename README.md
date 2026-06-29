@@ -24,7 +24,7 @@ Utilities for bootstrapping a Confidential Computing host (Intel **TDX** or AMD 
 | `scripts/bootstrap_snp.sh` | Turn an Ubuntu host into a SEV-SNP-capable hypervisor (firmware, modules, GPU passthrough). |
 | `scripts/start_super_protocol.sh` | Start a confidential VM (TDX / SEV-SNP / untrusted) from a Super Protocol release image. |
 | `scripts/swarm-cluster.sh` | Bring up a 3-node Swarm cluster on a single host. |
-| `scripts/check_configuration.sh`, `get_super_running_vms.sh`, `create_provider_offer.sh` | Auxiliary tooling. |
+| `scripts/check_configuration.sh`, `get_super_running_vms.sh` | Auxiliary tooling. |
 
 ---
 
