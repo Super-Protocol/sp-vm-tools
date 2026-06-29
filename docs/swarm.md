@@ -387,7 +387,6 @@ By default the launch script downloads the latest released VM image, so most use
 cd ~/projects
 git clone https://github.com/Super-Protocol/sp-vm
 cd sp-vm
-git checkout swarm                          # check the current Swarm branch
 git submodule update --init --recursive
 ```
 
