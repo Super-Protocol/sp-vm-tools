@@ -22,7 +22,7 @@ There are two paths to run a Swarm cluster, depending on your goals:
 ### Prerequisites
 
 - A host bootstrapped for confidential computing (TDX or SEV-SNP) — see [main README](../README.md).
-- A populated **provider config template** directory (same structure as `config.yaml` in the full deployment below). The script rewrites node-specific fields automatically; you provide the template with placeholders.
+- A populated **provider config template** directory with the same `config.yaml` structure as in the [full deployment](#3-provider-configuration) below. The script rewrites node-specific fields (`node_name`, `advertise_addr`, `join_addresses`, `networkID`, `caBundle`) automatically. You must set the **static** fields yourself in the template — most importantly `gateway_hostname`, which must resolve to the machine's public IP.
 - `tmux`, `nftables`, `curl`, and `nc` installed (`apt install tmux nftables curl netcat-openbsd`).
 
 ### Usage
@@ -239,6 +239,10 @@ base_domain: "<your-domain>"
 # Main Swarm entry point. Must resolve to this VM (DNS is managed via the PowerDNS API above).
 swarm_domain: "swarm.<your-subdomain>.<your-domain>"
 pki_domain:   "ca.swarm.<your-subdomain>.<your-domain>"
+
+# External gateway hostname. Must resolve to the host's public IP.
+# For the single-host cluster (swarm-cluster.sh), point this to your machine's IP.
+gateway_hostname: "mygw.mysite.com"
 ```
 
 > Replace `<your-domain>` with a domain you own, `<your-subdomain>` with the Swarm-specific label,
