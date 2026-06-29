@@ -139,9 +139,37 @@ To list running VMs started by this tool:
 ./scripts/get_super_running_vms.sh
 ```
 
-## Running a Swarm VM
+## Running a Swarm Cluster
 
-For the full Swarm flow — provider configuration, building the VM image with `buildx`, launching it on a bootstrapped host, and the GCP/Terraform variant — see [docs/swarm.md](docs/swarm.md).
+There are two ways to run a Super Protocol Swarm cluster:
+
+### Single-host cluster (quick start)
+
+`scripts/swarm-cluster.sh` brings up a **3-node Swarm cluster on a single host** — no multi-machine setup. It creates an isolated bridge network, launches one bootstrap + two join VMs in separate `tmux` sessions, auto-configures provider configs, and sets up ingress via HAProxy. You still need to configure `gateway_hostname` in the provider template to point to the machine's public IP.
+
+```bash
+sudo ./scripts/swarm-cluster.sh up --provider-config-template ./provider-template --release build-370
+```
+
+Prerequisites: a bootstrapped host (TDX or SEV-SNP), a populated provider config template, and `tmux` / `nftables` / `curl` installed.
+
+See `./scripts/swarm-cluster.sh --help` (or read the header comment in the script) for all flags: `--join-cores`, `--join-mem`, `--release`, `--gpu-target`, etc.
+
+Stop the cluster:
+
+```bash
+sudo ./scripts/swarm-cluster.sh down
+```
+
+Check status:
+
+```bash
+./scripts/swarm-cluster.sh status
+```
+
+### Full Swarm deployment
+
+For the full Swarm flow — provider configuration, building the VM image with `buildx`, launching individual VMs on bootstrapped hosts, and the GCP/Terraform variant — see [docs/swarm.md](docs/swarm.md).
 
 ## License
 

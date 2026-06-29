@@ -1,6 +1,81 @@
-# Running a Super Protocol Swarm VM
+# Running a Super Protocol Swarm Cluster
 
-This guide walks through the full Swarm VM lifecycle on a confidential host: preparing the environment, populating the provider configuration, building the VM image, starting and verifying the VM, and stopping it. It is written around the `gp-ws-01` build server but works on any host that satisfies the prerequisites.
+There are two paths to run a Swarm cluster, depending on your goals:
+
+| Path | Tool | When to use |
+|---|---|---|
+| **Single-host cluster** | `scripts/swarm-cluster.sh` | Quick local test — 3-node cluster on one machine, auto-networking. Requires `gateway_hostname` pointing to the machine's IP in the provider template. |
+| **Full deployment** | `scripts/start_super_protocol.sh` (manual) | Production / multi-host setup, GCP/Terraform, custom image builds. |
+
+---
+
+## Single-host cluster (quick start)
+
+`swarm-cluster.sh` brings up a complete 3-node Swarm cluster on a **single bootstrapped host**. It handles everything automatically:
+
+- Creates an isolated bridge network (`swarmbr0`, `10.0.0.0/24`).
+- Launches 3 VMs (1 bootstrap + 2 join) in separate `tmux` sessions, each with its own tap interface.
+- Generates per-node provider configs from a single template — injects `node_name`, `advertise_addr`, `join_addresses`, `networkID`, and fetches the PKI CA bundle from the bootstrap node automatically.
+- Sizes the bootstrap node dynamically from remaining host resources (cores, RAM, disk).
+- Sets up external ingress via HAProxy (ports 80/443/9443/53 DNAT to bootstrap).
+
+### Prerequisites
+
+- A host bootstrapped for confidential computing (TDX or SEV-SNP) — see [main README](../README.md).
+- A populated **provider config template** directory (same structure as `config.yaml` in the full deployment below). The script rewrites node-specific fields automatically; you provide the template with placeholders.
+- `tmux`, `nftables`, `curl`, and `nc` installed (`apt install tmux nftables curl netcat-openbsd`).
+
+### Usage
+
+```bash
+# Start the cluster
+sudo ./scripts/swarm-cluster.sh up --provider-config-template ./provider-template --release build-370
+
+# Check status
+./scripts/swarm-cluster.sh status
+
+# Stop everything
+sudo ./scripts/swarm-cluster.sh down
+```
+
+### Key flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--provider-config-template` | _(required)_ | Template directory with `config.yaml` (and optional `openresty.yaml`, `auth-service.yaml`). |
+| `--join-cores` | `4` | vCPUs per join node. |
+| `--join-mem` | `4` | RAM (GiB) per join node. |
+| `--host-reserve-cores` | `4` | Cores left for the host OS. |
+| `--host-reserve-mem` | `8` | RAM (GiB) left for the host OS. |
+| `--state-disk-size` | auto (proportional) | State disk size per node in GiB. Auto-split from 90% of free space if omitted. |
+| `--release` | latest | Pin a specific `Super-Protocol/sp-vm` release. |
+| `--mode` | auto-detect | `tdx`, `sev-snp`, or `untrusted`. |
+| `--debug` | `false` | Enable verbose boot log + SSH port forwards per node. |
+| `--gpu-target` | `bootstrap` | Where to pass the GPU: `bootstrap` or `none`. |
+
+The bootstrap node gets all remaining host resources after subtracting the host reserve and join nodes. Join nodes get the fixed minimums above.
+
+### What happens under the hood
+
+1. Detects host resources (cores, RAM, free disk) and computes allocation.
+2. Generates a cluster-wide `networkID` (UUID) and a `global_id` for DNS.
+3. Creates the bridge `swarmbr0` and NAT rules via `swarm-network.sh bridge-only`.
+4. Generates per-node provider configs:
+   - **Bootstrap**: `join_addresses: []`, `pki_authority.servers: []`.
+   - **Join nodes**: `join_addresses: ["10.0.0.10:7946"]`, `caBundle` fetched automatically from bootstrap PKI.
+5. Starts each VM in its own `tmux` session, attached to the bridge via tap interfaces.
+6. Waits for bootstrap gossip (7946) and PKI (9443) to become ready.
+7. Fetches the CA bundle from bootstrap and injects it into join-node configs.
+8. Launches join nodes.
+9. Sets up HAProxy ingress: `gw.dyn.<global_id>.superprotocol.io` → bootstrap ports 80/443.
+
+> **Tip:** Attach to any VM's console with `tmux attach -t swarm-bootstrap`, `tmux attach -t swarm-join-1`, or `tmux attach -t swarm-join-2`.
+
+---
+
+## Full deployment (manual)
+
+The rest of this guide walks through the full Swarm VM lifecycle on a confidential host: preparing the environment, populating the provider configuration, building the VM image, starting and verifying the VM, and stopping it. It is written around the `gp-ws-01` build server but works on any host that satisfies the prerequisites.
 
 It also includes a short section on launching the same image in Google Cloud via Terraform.
 
