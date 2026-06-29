@@ -146,7 +146,7 @@ sudo ./scripts/swarm-cluster.sh up --provider-config-template ./provider-templat
 sudo ./scripts/swarm-cluster.sh down
 ```
 
-Prerequisites: a bootstrapped host (TDX or SEV-SNP), a populated provider config template, and `tmux` / `nftables` / `curl` installed. See `./scripts/swarm-cluster.sh --help` (or the header comment in the script) for all flags — `--join-cores`, `--join-mem`, `--release`, `--gpu-target`, etc.
+Prerequisites: a bootstrapped host (TDX or SEV-SNP), a populated provider config template (see [config.yaml reference](docs/swarm.md#configyaml-reference) for an example), and `tmux` / `nftables` / `curl` installed. See `./scripts/swarm-cluster.sh --help` (or the header comment in the script) for all flags — `--join-cores`, `--join-mem`, `--release`, `--gpu-target`, etc.
 
 ### Full Swarm deployment
 
