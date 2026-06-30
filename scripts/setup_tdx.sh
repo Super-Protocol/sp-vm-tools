@@ -290,17 +290,17 @@ check_bios_settings() {
 # hardware without TDX (e.g. when testing the install flow on a plain VM).
 verify_tdx_hardware() {
     print_section_header "BIOS Configuration Verification"
+    if ! check_bios_settings; then
+        echo -e "${RED}ERROR: Required BIOS settings are not properly configured${NC}"
+        echo "Please configure BIOS settings according to the instructions above and try again"
+        exit 1
+    fi
     if ! tdx_active; then
         echo -e "${RED}Running kernel $(uname -r) has no active TDX support.${NC}"
         echo "The TDX kernel is installed but not booted yet."
         echo "Reboot into the TDX kernel and re-run the bootstrap to continue"
         echo "(BIOS verification, attestation and PCCS registration)."
         exit 2   # distinct code: "reboot required", not a failure
-    fi
-    if ! check_bios_settings; then
-        echo -e "${RED}ERROR: Required BIOS settings are not properly configured${NC}"
-        echo "Please configure BIOS settings according to the instructions above and try again"
-        exit 1
     fi
 }
 
