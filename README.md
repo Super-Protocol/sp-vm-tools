@@ -10,7 +10,6 @@ Utilities for bootstrapping a Confidential Computing host (Intel **TDX** or AMD 
   - [2. Bootstrap the host](#2-bootstrap-the-host)
   - [3. Reboot](#3-reboot)
   - [4. Verify the host](#4-verify-the-host)
-  - [5. Launch a confidential VM](#5-launch-a-confidential-vm)
 - [Running a Swarm cluster](#running-a-swarm-cluster)
 - [Requirements](#requirements) — OS, CPU, BIOS, GPU
 - [Roadmap](#roadmap)
