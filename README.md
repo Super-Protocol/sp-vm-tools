@@ -96,37 +96,6 @@ sudo ./scripts/check_configuration.sh
 
 This prints a hardware overview (CPU, memory, network, disks, RAID/SMART) you can compare against the [Requirements](#requirements).
 
-### 5. Launch a confidential VM
-
-Once the host is bootstrapped and reboot-clean:
-
-```bash
-sudo ./scripts/start_super_protocol.sh --mode tdx       # or --mode sev-snp
-```
-
-The script auto-detects the CPU when `--mode` is omitted. Common flags:
-
-| Flag | Description |
-|---|---|
-| `--mode {tdx\|sev-snp\|untrusted}` | Confidential mode (auto-detected by default). |
-| `--cores N` | vCPUs to assign (default: `nproc - 2`). |
-| `--mem N` | RAM in GiB (default: host RAM − 8 GiB). |
-| `--gpu <BDF>` | Pass a specific GPU; repeatable. `--gpu none` disables passthrough. |
-| `--state_disk_path PATH` | Persistent state disk (default: `<cache>/state_disk.qcow2`). |
-| `--state_disk_size SIZE` | State disk size (auto, ≥ 512 GiB). |
-| `--release NAME` | Pin a `Super-Protocol/sp-vm` release (default: latest). |
-| `--ssh_port`, `--http_port`, `--https_port`, `--wg_port` | Host port forwards. |
-
-Run `./scripts/start_super_protocol.sh --help` for the full list.
-
-To list running VMs started by this tool:
-
-```bash
-./scripts/get_super_running_vms.sh
-```
-
----
-
 ## Running a Swarm cluster
 
 There are two ways to run a Super Protocol Swarm cluster.
