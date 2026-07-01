@@ -33,24 +33,17 @@ This is the main path: take a bare Ubuntu host, turn it into a confidential hype
 
 > All scripts run as `root` and need an internet connection. A reboot is required partway through.
 
+For the exact commands to clone the repository, run the bootstrap scripts, and launch a VM, see [docs/swarm.md](docs/swarm.md).
+
 ### 1. Clone the repo
 
-On the target host:
-
-```bash
-git clone https://github.com/Super-Protocol/sp-vm-tools.git
-cd sp-vm-tools
-```
+Clone the repository onto the target host. See [docs/swarm.md](docs/swarm.md) for the exact command.
 
 ### 2. Bootstrap the host
 
-Pick the script that matches your CPU vendor.
+Pick the script that matches your CPU vendor. See [docs/swarm.md](docs/swarm.md) for how to invoke each one.
 
 #### Intel TDX
-
-```bash
-sudo ./scripts/bootstrap_tdx.sh
-```
 
 What it does:
 
@@ -61,13 +54,9 @@ What it does:
 5. Updates the Intel TDX-Module to a known-good version.
 6. Configures NVIDIA GPUs for Confidential Computing (CC mode + `vfio-pci` binding) and, on B200 systems, sets up ConnectX-7 bridges for VFIO passthrough.
 
-> **Note:** Some steps require manual action to take effect. The script may stop and ask you to do something, then re-run `bootstrap_tdx.sh` — this is expected. Follow the on-screen instructions and run the same command again to finish.
+> **Note:** Some steps require manual action to take effect. The script may stop and ask you to do something, then need to be re-run — this is expected. Follow the on-screen instructions and re-run to finish.
 
 #### AMD SEV-SNP
-
-```bash
-sudo ./scripts/bootstrap_snp.sh
-```
 
 What it does:
 
@@ -81,19 +70,11 @@ What it does:
 
 ### 3. Reboot
 
-```bash
-sudo reboot
-```
-
-After reboot, re-run the same bootstrap script if it asks you to — some steps (firmware, kernel parameters, VFIO bindings) only take effect after a reboot.
+A reboot is required partway through bootstrap. After reboot, re-run the same bootstrap script if it asks you to — some steps (firmware, kernel parameters, VFIO bindings) only take effect after a reboot. See [docs/swarm.md](docs/swarm.md) for the exact command.
 
 ### 4. Verify the host
 
-```bash
-sudo ./scripts/check_configuration.sh
-```
-
-This prints a hardware overview (CPU, memory, network, disks, RAID/SMART) you can compare against the [Requirements](#requirements).
+`scripts/check_configuration.sh` prints a hardware overview (CPU, memory, network, disks, RAID/SMART) you can compare against the [Requirements](#requirements). See [docs/swarm.md](docs/swarm.md) for how to run it.
 
 ## Running a Swarm cluster
 
@@ -103,18 +84,9 @@ There are two ways to run a Super Protocol Swarm cluster.
 
 `scripts/swarm-cluster.sh` brings up a **3-node Swarm cluster on a single host** — no multi-machine setup. It creates an isolated bridge network, launches one bootstrap + two join VMs in separate `tmux` sessions, auto-configures provider configs, and sets up ingress via HAProxy. You still need to set `gateway_hostname` in the provider template to point to the machine's public IP.
 
-```bash
-# Start
-sudo ./scripts/swarm-cluster.sh up --provider-config-template ./provider-template --release build-370
+Prerequisites: a bootstrapped host (TDX or SEV-SNP), a populated provider config template (see [config.yaml reference](docs/swarm.md#configyaml-reference) for an example), and `tmux` / `nftables` / `curl` installed.
 
-# Status
-./scripts/swarm-cluster.sh status
-
-# Stop
-sudo ./scripts/swarm-cluster.sh down
-```
-
-Prerequisites: a bootstrapped host (TDX or SEV-SNP), a populated provider config template (see [config.yaml reference](docs/swarm.md#configyaml-reference) for an example), and `tmux` / `nftables` / `curl` installed. See `./scripts/swarm-cluster.sh --help` (or the header comment in the script) for all flags — `--join-cores`, `--join-mem`, `--release`, `--gpu-target`, etc.
+For the exact commands (`up`, `status`, `down`, and all flags — `--provider-config-template`, `--release`, `--join-cores`, `--join-mem`, `--gpu-target`, etc.), see [docs/swarm.md](docs/swarm.md).
 
 ### Full Swarm deployment
 
@@ -152,6 +124,8 @@ BIOS settings:
 | `TME-MT (Multi-Tenant)` | Enabled, KeyIDs configured (non-zero key split) |
 | `SEAM Loader` | Enabled |
 | `TDX` | Enabled |
+
+> **First boot:** in `Software Guard Extension (SGX)` settings, it's recommended to set `SGX Factory Reset` and `SGX Auto MP Registration` to **Enabled** for the initial run. They can be set back to `Disabled` afterwards.
 
 ### AMD SEV-SNP host
 
