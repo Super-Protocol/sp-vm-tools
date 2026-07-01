@@ -234,6 +234,11 @@ EOF
     # One frontend+backend pair per ingress port. server-template expands the
     # single hostname into up to MAX_BACKENDS slots from its A-records; HAProxy
     # adds/removes/health-checks them live as the DNS set changes.
+    #
+    # The gateway (openresty) listens on BOTH 80 and 443: 443 is the TLS
+    # passthrough, 80 serves the ACME HTTP-01 challenge (and the HTTP->HTTPS
+    # redirect). So each WAN port maps to the SAME backend port — sending WAN:80
+    # to a :443 backend breaks HTTP-01 and certificates never issue.
     local p
     for p in "${INGRESS_PORTS[@]}"; do
         cat >> "${HAPROXY_CFG}" <<EOF
@@ -243,7 +248,7 @@ frontend ingress_${p}
 
 backend gw_${p}
     balance roundrobin
-    server-template gw ${MAX_BACKENDS} ${gw}:${GW_BACKEND_PORT} resolvers swarm_dns resolve-prefer ipv4 init-addr none check
+    server-template gw ${MAX_BACKENDS} ${gw}:${p} resolvers swarm_dns resolve-prefer ipv4 init-addr none check
 
 EOF
     done
