@@ -32,6 +32,10 @@
 #   sudo ./swarm-network.sh reload-haproxy   --global-id <id> [--base-domain <d>] [opts]
 #   sudo ./swarm-network.sh bridge-only          # just bridge + NAT, no ingress
 #
+# Missing dependencies (haproxy, nftables, dnsutils, netcat) are installed
+# automatically via apt-get when running as root. Pass --no-auto-install to
+# restore the old behaviour of failing with an "apt install <pkg>" message.
+#
 set -euo pipefail
 
 # ----------------------------------------------------------------------------
@@ -68,6 +72,10 @@ HAPROXY_CFG="/etc/haproxy/swarm-ingress.cfg"
 HAPROXY_PIDFILE="/run/swarm-haproxy.pid"
 HAPROXY_BIN="$(command -v haproxy || true)"
 
+# Set to 0 via --no-auto-install to restore old behaviour of dying instead of
+# installing missing packages.
+AUTO_INSTALL=1
+
 # ----------------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------------
@@ -85,6 +93,62 @@ detect_wan_iface() {
 gw_hostname() {
     [[ -n "${GLOBAL_ID}" ]] || die "global_id is empty (pass --global-id)."
     echo "gw.dyn.${GLOBAL_ID}.${BASE_DOMAIN}"
+}
+
+# ----------------------------------------------------------------------------
+# Package auto-install
+# ----------------------------------------------------------------------------
+# apt package name that provides a given command, when it differs from the
+# command name itself (e.g. `dig`/`nslookup` come from dnsutils, `nc` from
+# netcat-openbsd).
+_pkg_for_cmd() {
+    case "$1" in
+        haproxy)   echo "haproxy" ;;
+        nft)       echo "nftables" ;;
+        dig)       echo "dnsutils" ;;
+        nslookup)  echo "dnsutils" ;;
+        nc)        echo "netcat-openbsd" ;;
+        *)         echo "$1" ;;
+    esac
+}
+
+APT_UPDATED=0
+
+# ensure_cmd <command> [friendly-label]
+# Makes sure <command> is on PATH. If missing and AUTO_INSTALL=1 and apt-get
+# is available, installs the corresponding package via apt-get. Otherwise
+# dies with the old, explicit "apt install <pkg>" message, so behaviour on
+# non-Debian hosts (or with --no-auto-install) is unchanged.
+ensure_cmd() {
+    local cmd="$1" label="${2:-$1}" pkg
+    command -v "${cmd}" &>/dev/null && return 0
+
+    pkg="$(_pkg_for_cmd "${cmd}")"
+
+    if [[ "${AUTO_INSTALL}" -ne 1 ]]; then
+        die "${label} is required (apt install ${pkg})."
+    fi
+
+    if ! command -v apt-get &>/dev/null; then
+        die "${label} is required (apt install ${pkg}), but apt-get is not available on this host — install it manually."
+    fi
+
+    require_root
+    log "${label} not found — installing package '${pkg}' via apt-get..."
+
+    if [[ "${APT_UPDATED}" -ne 1 ]]; then
+        DEBIAN_FRONTEND=noninteractive apt-get update -y \
+            || die "apt-get update failed while trying to install ${pkg}."
+        APT_UPDATED=1
+    fi
+
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkg}" \
+        || die "apt-get install ${pkg} failed. Install it manually and re-run."
+
+    command -v "${cmd}" &>/dev/null \
+        || die "${pkg} installed but '${cmd}' still not on PATH — check the package contents."
+
+    log "${label} installed OK ($(command -v "${cmd}"))."
 }
 
 # ----------------------------------------------------------------------------
@@ -188,13 +252,16 @@ EOF
 }
 
 start_haproxy() {
+    ensure_cmd nc "netcat"
+
     # Sanity: can we reach the bootstrap DNS at all? (init-addr none means HAProxy
     # starts even if not — so check explicitly to avoid a silent no-backends state.)
     if ! nc -z -u -w2 "${BOOTSTRAP_DNS_IP}" "${DNS_PORT}" 2>/dev/null; then
         log "WARN: bootstrap DNS ${BOOTSTRAP_DNS_IP}:${DNS_PORT} not reachable yet — HAProxy will start with no backends until it answers."
     fi
 
-    [[ -n "${HAPROXY_BIN}" ]] || die "haproxy not installed (apt install haproxy)."
+    ensure_cmd haproxy "haproxy"
+    HAPROXY_BIN="$(command -v haproxy)"
     write_haproxy_cfg
 
     # validate before (re)starting
@@ -228,7 +295,7 @@ stop_haproxy() {
 # ----------------------------------------------------------------------------
 cmd_up() {
     require_root
-    command -v nft &>/dev/null || die "nftables is required (apt install nftables)."
+    ensure_cmd nft "nftables"
     ensure_bridge_nat
     start_haproxy
     log "Network ready. Ingress 80/443 -> $(gw_hostname) (dynamic, multi-backend)."
@@ -236,7 +303,7 @@ cmd_up() {
 
 cmd_bridge_only() {
     require_root
-    command -v nft &>/dev/null || die "nftables is required."
+    ensure_cmd nft "nftables"
     ensure_bridge_nat
     log "Bridge + NAT ready (no ingress)."
 }
@@ -295,6 +362,7 @@ while [[ $# -gt 0 ]]; do
         --resolver)         RESOLVER_ADDRS=("$2"); shift 2 ;;   # single override
         --max-backends)     MAX_BACKENDS="$2"; shift 2 ;;
         --haproxy-cfg)      HAPROXY_CFG="$2"; shift 2 ;;
+        --no-auto-install)  AUTO_INSTALL=0; shift ;;
         *) die "Unknown argument: $1" ;;
     esac
 done
