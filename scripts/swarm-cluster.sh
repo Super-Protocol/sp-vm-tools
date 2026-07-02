@@ -613,6 +613,19 @@ cmd_up() {
     [[ -n "${PROVIDER_TEMPLATE}" ]] || die "Specify --provider-config-template <dir>"
     [[ -d "${PROVIDER_TEMPLATE}" ]] || die "Template ${PROVIDER_TEMPLATE} not found"
     [[ -x "${START_SCRIPT}" ]] || die "start script not found/executable: ${START_SCRIPT}"
+
+    # base_domain is authoritative in the provider template (config.yaml). Read it
+    # so the host ingress (gw.dyn.<gid>.<base_domain>) and the in-cluster DNS agree,
+    # instead of relying on the hardcoded default.
+    local _tmpl_cfg="${PROVIDER_TEMPLATE}/swarm/config.yaml"
+    if [[ -r "${_tmpl_cfg}" ]]; then
+        local _bd
+        _bd="$(grep -E '^[[:space:]]*base_domain:' "${_tmpl_cfg}" | head -1 \
+               | sed -E 's/.*base_domain:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/')"
+        [[ -n "${_bd}" ]] && BASE_DOMAIN="${_bd}"
+    fi
+    log "Using base_domain: ${BASE_DOMAIN}"
+
     command -v nc &>/dev/null   || die "nc is required (apt install netcat-openbsd)"
     command -v curl &>/dev/null || die "curl is required (apt install curl)"
     command -v tmux &>/dev/null || die "tmux is required (apt install tmux)"
