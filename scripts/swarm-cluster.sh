@@ -699,35 +699,6 @@ cmd_up() {
     log "  join:      tmux attach -t ${TMUX_JOIN[0]} | ${TMUX_JOIN[1]}"
 }
 
-cmd_down() {
-    require_root
-    log "Stopping cluster..."
-
-    # tmux sessions (QEMU runs inside them — killing the session stops the VM)
-    for s in "${TMUX_BOOTSTRAP}" "${TMUX_JOIN[@]}"; do
-        if tmux has-session -t "${s}" 2>/dev/null; then
-            log "  kill tmux ${s}"
-            tmux send-keys -t "${s}" C-c 2>/dev/null || true
-            sleep 1
-            tmux kill-session -t "${s}" 2>/dev/null || true
-        fi
-    done
-
-    # also reap any qemu started by this cluster, just in case
-    pkill -f "qemu-system-x86_64.*sw-tap-" 2>/dev/null || true
-    sleep 1
-
-    # tap interfaces
-    for ip in "${BOOTSTRAP_IP}" "${JOIN_IPS[@]}"; do
-        local tap="sw-tap-${ip##*.}"
-        ip link show "${tap}" &>/dev/null && { log "  del ${tap}"; ip link del "${tap}"; }
-    done
-
-    "${NETWORK_SCRIPT}" down --bridge "${BRIDGE}"
-
-    log "Cluster stopped. bridge ${BRIDGE} left in place (remove with: ip link del ${BRIDGE})."
-}
-
 cmd_status() {
     [[ -z "${GLOBAL_ID}" && -r "${CACHE}/global_id" ]] && GLOBAL_ID="$(cat "${CACHE}/global_id")"
 
@@ -755,6 +726,70 @@ cmd_status() {
     echo "=== ingress (haproxy) ==="
     "${NETWORK_SCRIPT}" status --global-id "${GLOBAL_ID:-}" --base-domain "${BASE_DOMAIN}" 2>/dev/null \
         | sed 's/^/  /' || echo "  network script unavailable"
+}
+
+wait_qemu_gone() {
+    local timeout="${1:-90}" waited=0
+    log "Waiting for QEMU processes to exit (up to ${timeout}s)..."
+    while pgrep -f 'qemu-system-x86_64.*sw-tap-' >/dev/null 2>&1; do
+        if (( waited >= timeout )); then
+            err "QEMU still alive after ${timeout}s, sending SIGKILL"
+            pkill -9 -f 'qemu-system-x86_64.*sw-tap-' 2>/dev/null || true
+            timeout=$(( timeout + 120 ))
+        fi
+        printf '\r[%s]   qemu still running... %ss\033[K' "$(date +%H:%M:%S)" "${waited}" >&2
+        sleep 2; waited=$(( waited + 2 ))
+        (( waited >= 300 )) && { echo >&2; die "QEMU did not exit in 300s — check dmesg (stuck unpinning?)"; }
+    done
+    echo >&2
+    log "All QEMU processes gone (${waited}s)"
+}
+
+wait_vfio_free() {
+    local timeout="${1:-120}" waited=0
+    compgen -G '/dev/vfio/[0-9]*' >/dev/null || return 0
+    log "Waiting for VFIO groups to be released (up to ${timeout}s)..."
+    while (( waited < timeout )); do
+        local busy=""
+        local g
+        for g in /dev/vfio/[0-9]*; do
+            [[ -e "${g}" ]] || continue
+            if fuser -s "${g}" 2>/dev/null; then busy="${g}"; break; fi
+        done
+        if [[ -z "${busy}" ]]; then
+            log "VFIO free (${waited}s)"
+            return 0
+        fi
+        printf '\r[%s]   %s still held... %ss\033[K' "$(date +%H:%M:%S)" "${busy}" "${waited}" >&2
+        sleep 2; waited=$(( waited + 2 ))
+    done
+    echo >&2
+    err "VFIO group still busy after ${timeout}s:"
+    fuser -v /dev/vfio/* 2>&1 | sed 's/^/    /' >&2 || true
+    return 1
+}
+
+cmd_down() {
+    require_root
+    log "Stopping cluster..."
+
+    pkill -TERM -f 'qemu-system-x86_64.*sw-tap-' 2>/dev/null || true
+
+    wait_qemu_gone 90
+
+    wait_vfio_free 120 || err "GPU may still be busy — next 'up' can fail; check 'fuser -v /dev/vfio/*'"
+
+    for s in "${TMUX_BOOTSTRAP}" "${TMUX_JOIN[@]}"; do
+        tmux kill-session -t "${s}" 2>/dev/null || true
+    done
+
+    for ip in "${BOOTSTRAP_IP}" "${JOIN_IPS[@]}"; do
+        local tap="sw-tap-${ip##*.}"
+        ip link show "${tap}" &>/dev/null && { log "  del ${tap}"; ip link del "${tap}"; }
+    done
+
+    "${NETWORK_SCRIPT}" down --bridge "${BRIDGE}"
+    log "Cluster stopped."
 }
 
 # ----------------------------------------------------------------------------
