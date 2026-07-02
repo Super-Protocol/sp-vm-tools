@@ -209,6 +209,104 @@ compute_allocation() {
     log "  host kept : ${HOST_RESERVE_CORES} cores, ${HOST_RESERVE_MEM}GB + ${qemu_overhead}GB qemu overhead"
 }
 
+# ----------------------------------------------------------------------------
+# Reset all vfio-pci devices (GPU) before cluster start.
+# Fixes stale state left by a dirty QEMU exit:
+#   "error bind device fd=N to iommufd=M: Invalid argument"
+# Sequence per device: FLR -> unbind -> rebind -> FLR (covers the whole
+# IOMMU group, not just the primary function).
+# ----------------------------------------------------------------------------
+reset_vfio_devices() {
+    local drv="/sys/bus/pci/drivers/vfio-pci"
+    [[ -d "${drv}" ]] || { log "vfio-pci driver not loaded — nothing to reset"; return 0; }
+
+    # Refuse to reset devices under a live QEMU
+    if pgrep -f 'qemu-system-x86_64.*vfio' >/dev/null 2>&1; then
+        die "QEMU with VFIO still running — refusing to reset devices. Run 'down' first."
+    fi
+
+    # Collect all BDFs bound to vfio-pci, expanded to full IOMMU groups
+    # (multi-function cards: GPU + audio must be reset together).
+    local devs=() seen=" "
+    local p d g
+    for p in "${drv}"/0000:*; do
+        [[ -e "${p}" ]] || continue
+        d="$(basename "${p}")"
+        for g in "/sys/bus/pci/devices/${d}/iommu_group/devices/"*; do
+            g="$(basename "${g}")"
+            [[ "${seen}" == *" ${g} "* ]] && continue
+            devs+=("${g}"); seen="${seen}${g} "
+        done
+    done
+    if (( ${#devs[@]} == 0 )); then
+        log "No devices bound to vfio-pci — nothing to reset"
+        return 0
+    fi
+
+    for d in "${devs[@]}"; do
+        local sys="/sys/bus/pci/devices/${d}"
+        local name; name="$(lspci -s "${d}" 2>/dev/null | sed 's/^[^ ]* //')"
+        log "Resetting vfio device ${d} (${name:-unknown})"
+
+        # 1. Function-level reset (if supported)
+        if [[ -w "${sys}/reset" ]]; then
+            echo 1 > "${sys}/reset" 2>/dev/null \
+                || err "  ${d}: pre-unbind reset failed (continuing)"
+        else
+            log "  ${d}: no FLR support, skipping pre-reset"
+        fi
+
+        # 2. Unbind — destroys the vfio device node and any stale iommufd context
+        if [[ -e "${drv}/${d}" ]]; then
+            echo "${d}" > "${drv}/unbind"
+            local w=0
+            while [[ -e "${drv}/${d}" ]] && (( w < 20 )); do sleep 0.5; w=$((w+1)); done
+            [[ -e "${drv}/${d}" ]] && { err "  ${d}: unbind did not complete"; continue; }
+        fi
+
+        # 3. Rebind to vfio-pci
+        if ! echo "${d}" > "${drv}/bind" 2>/dev/null; then
+            # driver_override may have been lost — restore and re-probe
+            echo vfio-pci > "${sys}/driver_override" 2>/dev/null || true
+            echo "${d}" > /sys/bus/pci/drivers_probe 2>/dev/null || true
+        fi
+        local w=0
+        while [[ ! -e "${drv}/${d}" ]] && (( w < 20 )); do sleep 0.5; w=$((w+1)); done
+        if [[ ! -e "${drv}/${d}" ]]; then
+            err "  ${d}: failed to rebind to vfio-pci"
+            continue
+        fi
+
+        # 4. Final reset on the freshly bound device
+        if [[ -w "${sys}/reset" ]]; then
+            sleep 1
+            echo 1 > "${sys}/reset" 2>/dev/null \
+                || err "  ${d}: post-bind reset failed"
+        fi
+        log "  ${d}: reset + rebind done"
+    done
+}
+
+# ----------------------------------------------------------------------------
+# VM liveness check: the runner does `exec qemu | tee`, so if QEMU dies for
+# any reason the tmux session collapses. Detect that instead of waiting blind.
+# ----------------------------------------------------------------------------
+vm_alive() {
+    local session="$1"
+    tmux has-session -t "${session}" 2>/dev/null
+}
+
+report_vm_death() {
+    local session="$1" node_ip="$2"
+    local logf="${CACHE}/log-${node_ip##*.}.txt"
+    err "VM session '${session}' has exited — QEMU failed."
+    err "Last lines of ${logf}:"
+    tail -n 25 "${logf}" 2>/dev/null | sed 's/^/    /' >&2 || true
+    # Common failure hint
+    if grep -qs 'error bind device.*iommufd.*Invalid argument' "${logf}"; then
+        err "Hint: stale VFIO/iommufd state — reset_vfio_devices should fix it on next 'up'."
+    fi
+}
 prepare_config() {
     local role="$1"
     local node_ip="$2"
@@ -541,8 +639,8 @@ start_vm() {
 }
 
 # ----------------------------------------------------------------------------
-# 4. Healthcheck: wait until bootstrap is listening on gossip AND PKI is serving
-#    the CA certificate (not just port open — we pull the actual PEM)
+# Healthcheck: wait until bootstrap is listening on gossip AND the PKI is
+# actually serving the CA certificate. Aborts immediately if the VM dies.
 # ----------------------------------------------------------------------------
 wait_bootstrap() {
     local timeout="${1:-1000}"
@@ -552,11 +650,16 @@ wait_bootstrap() {
     log "  timeout: ${timeout}s"
 
     while (( waited < timeout )); do
+        # Fail fast: QEMU crashed (vfio bind error, OOM, bad flags, ...)
+        if ! vm_alive "${TMUX_BOOTSTRAP}"; then
+            echo >&2
+            report_vm_death "${TMUX_BOOTSTRAP}" "${BOOTSTRAP_IP}"
+            die "Bootstrap VM died while waiting — aborting cluster startup."
+        fi
+
         local gossip_ok=false pki_ok=false
-        # gossip 7946 (tcp) — swarm-db memberlist
         if nc -z -w2 "${BOOTSTRAP_IP}" "${GOSSIP_PORT}" 2>/dev/null; then gossip_ok=true; fi
 
-        # pki 9443 — must actually serve the CA certificate (not just accept TCP)
         local pki_resp
         pki_resp="$(curl -sk --connect-timeout 2 --max-time 5 "${pki_url}" 2>/dev/null || true)"
         if [[ -n "${pki_resp}" && "${pki_resp}" == *"BEGIN CERTIFICATE"* ]]; then
@@ -565,7 +668,7 @@ wait_bootstrap() {
 
         if [[ "${gossip_ok}" == true && "${pki_ok}" == true ]]; then
             echo >&2
-            log "bootstrap is ready (gossip=${gossip_ok}, PKI serving CA cert)"
+            log "Bootstrap is ready (gossip up, PKI serving CA cert)"
             return 0
         fi
 
@@ -578,7 +681,7 @@ wait_bootstrap() {
         sleep 5; waited=$(( waited + 5 ))
     done
     echo >&2
-    die "bootstrap did not come up within ${timeout}s. Check: tmux attach -t ${TMUX_BOOTSTRAP}"
+    die "Bootstrap did not come up within ${timeout}s. Check: tmux attach -t ${TMUX_BOOTSTRAP}"
 }
 
 # ----------------------------------------------------------------------------
@@ -656,6 +759,11 @@ cmd_up() {
     fi
     log "Cluster networkID: ${network_id}"
 
+    # Guard against a half-dead previous cluster + stale GPU state
+    if [[ "${GPU_TARGET}" == "bootstrap" ]]; then
+        reset_vfio_devices
+    fi
+    
     # --- bootstrap node (no CA bundle, no join addresses) ---
     local boot_dir
     boot_dir="$(prepare_config bootstrap "${BOOTSTRAP_IP}" "swarm-bootstrap" "" "" "${network_id}")"
@@ -697,6 +805,17 @@ cmd_up() {
     log "Cluster started. Sessions: tmux ls"
     log "  bootstrap: tmux attach -t ${TMUX_BOOTSTRAP}"
     log "  join:      tmux attach -t ${TMUX_JOIN[0]} | ${TMUX_JOIN[1]}"
+
+    # Verify join VMs survived startup (they can hit the same vfio error
+    # if GPU_TARGET is ever changed, or die on bad config / OOM).
+    sleep 10
+    local i
+    for i in 0 1; do
+        if ! vm_alive "${TMUX_JOIN[$i]}"; then
+            report_vm_death "${TMUX_JOIN[$i]}" "${JOIN_IPS[$i]}"
+            die "Join node ${JOIN_IPS[$i]} died right after start — aborting."
+        fi
+    done
 }
 
 cmd_status() {
