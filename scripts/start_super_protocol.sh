@@ -28,6 +28,7 @@ DEFAULT_SSH_PORT=2222
 DEFAULT_WG_PORT=51820
 DEFAULT_SWARM_DB_GOSSIP_PORT=7946
 DEFAULT_DNS_PORT=53
+DEFAULT_PKI_VM_MEASURE_PORT=9180
 DEFAULT_GUEST_CID=3
 DEFAULT_SWARM_INIT=false
 DEFAULT_ALLOW_UNTRUSTED=false
@@ -93,6 +94,7 @@ usage() {
     echo "  --http_port <port>             HTTP port (default: no port forward)"
     echo "  --https_port <port>            HTTPS port (default: no port forward)"
     echo "  --pki_port <port>              PKI port (default: no port forward)"
+    echo "  --pki_vm_measure_port <port>   PKI VM measure port (default: no port forward; guest port: ${DEFAULT_PKI_VM_MEASURE_PORT})"
     echo "  --swarm_db_gossip_port <port>  Swarm DB Gossip Port (default: ${DEFAULT_SWARM_DB_GOSSIP_PORT})"
     echo "  --dns_port <port>              DNS port (default: ${DEFAULT_DNS_PORT})"
     echo "  --log_file <file>              Log file (default: no)"
@@ -133,6 +135,7 @@ WG_PORT=${DEFAULT_WG_PORT}
 HTTP_PORT=""
 HTTPS_PORT=""
 PKI_PORT=""
+PKI_VM_MEASURE_PORT=""
 SWARM_DB_GOSSIP_PORT=${DEFAULT_SWARM_DB_GOSSIP_PORT}
 DNS_PORT=${DEFAULT_DNS_PORT}
 BASE_CID=$(get_next_available_id 2 guest-cid)
@@ -166,6 +169,7 @@ parse_args() {
             --http_port) HTTP_PORT=$2; shift ;;
             --https_port) HTTPS_PORT=$2; shift ;;
             --pki_port) PKI_PORT=$2; shift ;;
+            --pki_vm_measure_port) PKI_VM_MEASURE_PORT=$2; shift ;;
             --swarm_db_gossip_port) SWARM_DB_GOSSIP_PORT=$2; shift;;
             --dns_port) DNS_PORT=$2; shift ;;
             --log_file) LOG_FILE=$2; shift ;;
@@ -749,6 +753,13 @@ check_params() {
             exit 1
         fi
     fi
+    if [[ -n "$PKI_VM_MEASURE_PORT" ]]; then
+        echo "Checking pki vm measure port aviability..."
+        if nc -z "$IP_ADDRESS" "$PKI_VM_MEASURE_PORT"; then
+            echo "pki vm measure port $PKI_VM_MEASURE_PORT already bound!"
+            exit 1
+        fi
+    fi
 
 
     echo "Checking mount point..."
@@ -837,6 +848,9 @@ check_params() {
         fi
         if [[ -n "$PKI_PORT" ]]; then
             echo "   PKI Port: $PKI_PORT"
+        fi
+        if [[ -n "$PKI_VM_MEASURE_PORT" ]]; then
+            echo "   PKI VM Measure Port: $PKI_VM_MEASURE_PORT"
         fi
 
         if [[ -z "${LOG_FILE}" ]]; then
@@ -1034,6 +1048,9 @@ if [[ "${NETDEV_MODE}" == "tap" ]]; then
         fi
         if [[ -n "$PKI_PORT" ]]; then
             NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$PKI_PORT-:9443"
+        fi
+        if [[ -n "$PKI_VM_MEASURE_PORT" ]]; then
+            NETWORK_SETTINGS+=",hostfwd=tcp:$IP_ADDRESS:$PKI_VM_MEASURE_PORT-:${DEFAULT_PKI_VM_MEASURE_PORT}"
         fi
         NETWORK_SETTINGS+=",hostfwd=udp:$IP_ADDRESS:$WG_PORT-:51820"
         NETWORK_SETTINGS+=",hostfwd=udp:$IP_ADDRESS:$SWARM_DB_GOSSIP_PORT-:7946"
