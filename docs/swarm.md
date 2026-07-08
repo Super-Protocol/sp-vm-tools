@@ -345,7 +345,6 @@ The first run downloads the VM image (~11 GB), so it takes a while — that's wh
 | `--gpu` | `<id>` / `none` | all available | GPU(s) to pass through. |
 | `--mode` | `tdx` | auto-detected | `tdx`, `sev-snp`, or `untrusted`. |
 | `--swarm-init` | `true` | `false` | Bootstrap a new cluster (see table above). |
-| `--allow-untrusted` | `true` | `false` | Only combined with `--swarm-init true`. |
 
 </details>
 

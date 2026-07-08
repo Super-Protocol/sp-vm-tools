@@ -31,7 +31,6 @@ DEFAULT_DNS_PORT=53
 DEFAULT_PKI_VM_MEASURE_PORT=9180
 DEFAULT_GUEST_CID=3
 DEFAULT_SWARM_INIT=false
-DEFAULT_ALLOW_UNTRUSTED=false
 
 DEFAULT_NETDEV_MODE="user"       # user | tap
 DEFAULT_BRIDGE="swarmbr0"
@@ -104,7 +103,6 @@ usage() {
     echo "  --guest-cid <id>               Guest CID for vsock (default: ${DEFAULT_GUEST_CID})"
     echo "  --build_dir <path>             Path to the local builded kata container (default: no)"
     echo "  --swarm-init <true|false>      Enable swarm-init mode (default: ${DEFAULT_SWARM_INIT})"
-    echo "  --allow-untrusted <true|false> Allow untrusted mode (default: ${DEFAULT_ALLOW_UNTRUSTED})"
     echo "  --netdev_mode <user|tap>       QEMU netdev backend (default: ${DEFAULT_NETDEV_MODE})"
     echo "  --bridge <name>                Bridge to attach tap to in tap mode (default: ${DEFAULT_BRIDGE})"
     echo "  --tap_iface <name>             Explicit tap interface name (default: sw-tap<nic_id>)"
@@ -124,7 +122,6 @@ MAC_ADDRESS=${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX}
 PROVIDER_CONFIG=""
 DEBUG_MODE=${DEFAULT_DEBUG}
 SWARM_INIT=${DEFAULT_SWARM_INIT}
-ALLOW_UNTRUSTED=${DEFAULT_ALLOW_UNTRUSTED}
 VM_IP=""
 RELEASE=""
 RELEASE_FILEPATH=""
@@ -179,7 +176,6 @@ parse_args() {
             --guest-cid) GUEST_CID=$2; shift ;;
             --build_dir) LOCAL_BUILD_DIR=$2; shift ;;
             --swarm-init) SWARM_INIT=$2; shift ;;
-            --allow-untrusted) ALLOW_UNTRUSTED=$2; shift ;;
             --netdev_mode) NETDEV_MODE=$2; shift ;;
             --bridge) BRIDGE=$2; shift ;;
             --tap_iface) TAP_IFACE=$2; shift ;;
@@ -873,19 +869,6 @@ check_params() {
         echo "Error: <swarm-init> option must be true or false"
         exit 1
     fi
-
-    if [[ "${ALLOW_UNTRUSTED}" == "true" || "${ALLOW_UNTRUSTED}" == "false" ]]; then
-        echo "• Allow untrusted: ${ALLOW_UNTRUSTED}"
-    else
-        echo "Error: <allow-untrusted> option must be true or false"
-        exit 1
-    fi
-
-    # Validate allow-untrusted requires swarm-init=true
-    if [[ "${ALLOW_UNTRUSTED}" == "true" ]] && [[ "${SWARM_INIT}" == "false" ]]; then
-        echo "Error: --allow-untrusted can only be used with --swarm-init"
-        exit 1
-    fi
 }
 
 main() {
@@ -1090,10 +1073,6 @@ if [[ "${NETDEV_MODE}" == "tap" ]]; then
 
     if [[ ${SWARM_INIT} == true ]]; then
         KERNEL_CMD_LINE+=" vm_mode=swarm-init"
-    fi
-    
-    if [[ ${ALLOW_UNTRUSTED} == true ]]; then
-        KERNEL_CMD_LINE+=" allow_untrusted=true"
     fi
 
     # Tap mode: pass MAC-bound network config to the guest via custom spnet.*
