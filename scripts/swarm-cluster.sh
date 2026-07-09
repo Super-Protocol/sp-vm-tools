@@ -537,12 +537,11 @@ start_vm() {
     local node_ip="$2"
     local cid="$3"
     local provider_dir="$4"
-    local swarm_init="$5"    # true | false
-    local with_gpu="$6"      # true | false
-    local node_cores="$7"    # vCPU count for this node
-    local node_mem="$8"      # RAM (GB) for this node
-    local node_disk="$9"     # state disk (GB) for this node
-    local ssh_port="${10:-}" # host SSH port (debug mode only)
+    local with_gpu="$5"     # true | false
+    local node_cores="$6"   # vCPU count for this node
+    local node_mem="$7"     # RAM (GB) for this node
+    local node_disk="$8"    # state disk (GB) for this node
+    local ssh_port="${9:-}" # host SSH port (debug mode only)
     local tap_iface="sw-tap-${node_ip##*.}"
     local mac; mac="$(mac_for_ip "${node_ip}")"
 
@@ -595,10 +594,9 @@ start_vm() {
         "${release_args[@]}"
         "${gpu_args[@]}"
         "${debug_args[@]}"
-        --swarm-init "${swarm_init}"
     )
 
-    log "Starting ${session}: ip=${node_ip} cid=${cid} tap=${tap_iface} swarm-init=${swarm_init} gpu=${with_gpu} cores=${node_cores} mem=${node_mem}GB disk=${node_disk}GB debug=${DEBUG_MODE}"
+    log "Starting ${session}: ip=${node_ip} cid=${cid} tap=${tap_iface} gpu=${with_gpu} cores=${node_cores} mem=${node_mem}GB disk=${node_disk}GB debug=${DEBUG_MODE}"
 
     # Safety net: drop any empty array elements before building the runner.
     # An empty positional arg would shift the start-script's two-step arg parser
@@ -771,7 +769,7 @@ cmd_up() {
     local boot_gpu=false
     [[ "${GPU_TARGET}" == "bootstrap" ]] && boot_gpu=true
     start_vm "${TMUX_BOOTSTRAP}" "${BOOTSTRAP_IP}" "${CID_BOOTSTRAP}" "${boot_dir}" \
-        true "${boot_gpu}" "${BOOTSTRAP_CORES}" "${BOOTSTRAP_MEM}" "${BOOTSTRAP_DISK}" "${SSH_PORT_BOOTSTRAP}"
+        "${boot_gpu}" "${BOOTSTRAP_CORES}" "${BOOTSTRAP_MEM}" "${BOOTSTRAP_DISK}" "${SSH_PORT_BOOTSTRAP}"
 
     wait_bootstrap 1000
 
@@ -788,9 +786,9 @@ cmd_up() {
     join2_dir="$(prepare_config join2 "${JOIN_IPS[1]}" "swarm-join-2" "${BOOTSTRAP_IP}:${GOSSIP_PORT}" "${ca_bundle}" "${network_id}")"
 
     start_vm "${TMUX_JOIN[0]}" "${JOIN_IPS[0]}" "${CID_JOIN[0]}" "${join1_dir}" \
-        false false "${JOIN_CORES}" "${JOIN_MEM}" "${JOIN_DISK}" "${SSH_PORT_JOIN[0]}"
+        false "${JOIN_CORES}" "${JOIN_MEM}" "${JOIN_DISK}" "${SSH_PORT_JOIN[0]}"
     start_vm "${TMUX_JOIN[1]}" "${JOIN_IPS[1]}" "${CID_JOIN[1]}" "${join2_dir}" \
-        false false "${JOIN_CORES}" "${JOIN_MEM}" "${JOIN_DISK}" "${SSH_PORT_JOIN[1]}"
+        false "${JOIN_CORES}" "${JOIN_MEM}" "${JOIN_DISK}" "${SSH_PORT_JOIN[1]}"
 
     # external ingress
     "${NETWORK_SCRIPT}" up \

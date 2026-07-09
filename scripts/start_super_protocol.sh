@@ -30,7 +30,6 @@ DEFAULT_SWARM_DB_GOSSIP_PORT=7946
 DEFAULT_DNS_PORT=53
 DEFAULT_PKI_VM_MEASURE_PORT=9180
 DEFAULT_GUEST_CID=3
-DEFAULT_SWARM_INIT=false
 
 DEFAULT_NETDEV_MODE="user"       # user | tap
 DEFAULT_BRIDGE="swarmbr0"
@@ -102,7 +101,6 @@ usage() {
     echo "  --mode <mode>                  VM mode: untrusted, tdx, sev-snp (default: ${DEFAULT_VM_MODE})"
     echo "  --guest-cid <id>               Guest CID for vsock (default: ${DEFAULT_GUEST_CID})"
     echo "  --build_dir <path>             Path to the local builded kata container (default: no)"
-    echo "  --swarm-init <true|false>      Enable swarm-init mode (default: ${DEFAULT_SWARM_INIT})"
     echo "  --netdev_mode <user|tap>       QEMU netdev backend (default: ${DEFAULT_NETDEV_MODE})"
     echo "  --bridge <name>                Bridge to attach tap to in tap mode (default: ${DEFAULT_BRIDGE})"
     echo "  --tap_iface <name>             Explicit tap interface name (default: sw-tap<nic_id>)"
@@ -121,7 +119,6 @@ STATE_DISK_SIZE=0
 MAC_ADDRESS=${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX}
 PROVIDER_CONFIG=""
 DEBUG_MODE=${DEFAULT_DEBUG}
-SWARM_INIT=${DEFAULT_SWARM_INIT}
 VM_IP=""
 RELEASE=""
 RELEASE_FILEPATH=""
@@ -175,7 +172,6 @@ parse_args() {
             --mode) VM_MODE=$2; shift ;;
             --guest-cid) GUEST_CID=$2; shift ;;
             --build_dir) LOCAL_BUILD_DIR=$2; shift ;;
-            --swarm-init) SWARM_INIT=$2; shift ;;
             --netdev_mode) NETDEV_MODE=$2; shift ;;
             --bridge) BRIDGE=$2; shift ;;
             --tap_iface) TAP_IFACE=$2; shift ;;
@@ -862,13 +858,6 @@ check_params() {
     fi
     echo "• Superprotocol release: ${RELEASE:-latest}"
     echo "• VM Mode: ${VM_MODE}"
-    
-    if [[ "${SWARM_INIT}" == "true" || "${SWARM_INIT}" == "false" ]]; then
-        echo "• Swarm init: ${SWARM_INIT}"
-    else
-        echo "Error: <swarm-init> option must be true or false"
-        exit 1
-    fi
 }
 
 main() {
@@ -1069,10 +1058,6 @@ if [[ "${NETDEV_MODE}" == "tap" ]]; then
             sp-debug=true${SNP_ADDITIONAL_PARAMS}"
     else
         KERNEL_CMD_LINE="root=LABEL=rootfs${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH}${SNP_ADDITIONAL_PARAMS}"
-    fi
-
-    if [[ ${SWARM_INIT} == true ]]; then
-        KERNEL_CMD_LINE+=" vm_mode=swarm-init"
     fi
 
     # Tap mode: pass MAC-bound network config to the guest via custom spnet.*
