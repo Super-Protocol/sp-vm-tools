@@ -336,6 +336,7 @@ The first run downloads the VM image (~11 GB), so it takes a while — that's wh
 | `--wg_port` | `51821` | `51820` | Host WireGuard port. |
 | `--swarm_db_gossip_port` | `7946` | `7946` | Swarm DB gossip port. |
 | `--pki_port` | `9443` | _(not forwarded)_ | Needed so joining nodes can fetch the `caBundle`. |
+| `--pki_vm_measure_port` | `9180` | _(not forwarded)_ | Exposes the VM measurement endpoint on the host. |
 | `--dns_port` | `53` | `53` | DNS port. |
 | `--http_port` | `80` | _(not forwarded)_ | HTTP port. |
 | `--https_port` | `443` | _(not forwarded)_ | HTTPS port. |
@@ -344,6 +345,32 @@ The first run downloads the VM image (~11 GB), so it takes a while — that's wh
 | `--mode` | `tdx` | auto-detected | `tdx`, `sev-snp`, or `untrusted`. |
 
 </details>
+
+#### VM measurement endpoint
+
+Use `--pki_vm_measure_port <port>` when the VM measurement data must be available from the host or from outside the host. The script forwards the selected host port to guest port `9180`.
+
+After launch, the measurement endpoint is available at:
+
+```bash
+curl -k <host-ip>:<pki_vm_measure_port>/api/v1/getMeasure
+```
+
+For example:
+
+```bash
+curl -k 203.0.113.10:9180/api/v1/getMeasure
+```
+
+The endpoint returns JSON with the VM attestation measurement data:
+
+```json
+{
+  "type": "tdx",
+  "evidence": "...",
+  "mrenclaveHex": "..."
+}
+```
 
 ### 4. Check it's running
 

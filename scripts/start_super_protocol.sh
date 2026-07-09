@@ -92,7 +92,7 @@ usage() {
     echo "  --http_port <port>             HTTP port (default: no port forward)"
     echo "  --https_port <port>            HTTPS port (default: no port forward)"
     echo "  --pki_port <port>              PKI port (default: no port forward)"
-    echo "  --pki_vm_measure_port <port>   PKI VM measure port (default: no port forward; guest port: ${DEFAULT_PKI_VM_MEASURE_PORT})"
+    echo "  --pki_vm_measure_port <port>   Forward VM measurement endpoint /api/v1/getMeasure (default: no port forward; guest port: ${DEFAULT_PKI_VM_MEASURE_PORT})"
     echo "  --swarm_db_gossip_port <port>  Swarm DB Gossip Port (default: ${DEFAULT_SWARM_DB_GOSSIP_PORT})"
     echo "  --dns_port <port>              DNS port (default: ${DEFAULT_DNS_PORT})"
     echo "  --log_file <file>              Log file (default: no)"
