@@ -75,6 +75,7 @@ HOST_AVAIL_DISK=""
 
 VM_MODE=""                     # empty = auto-detect (tdx/sev-snp) in start script
 RELEASE=""                     # empty = latest; pin a working build, e.g. build-358
+LOCAL_BUILD_DIR=""             # empty = use release; otherwise pass local build dir to start script
 CACHE="/data/sp-vm/cache"
 START_SCRIPT="${SCRIPT_DIR}/start_super_protocol.sh"
 PROVIDER_TEMPLATE=""           # provider config template dir (--provider-config-template)
@@ -617,6 +618,9 @@ start_vm() {
     local release_args=()
     [[ -n "${RELEASE}" ]] && release_args=(--release "${RELEASE}")
 
+    local build_args=()
+    [[ -n "${LOCAL_BUILD_DIR}" ]] && build_args=(--build_dir "${LOCAL_BUILD_DIR}")
+
     # Debug mode: verbose boot log + per-node SSH port. start_super_protocol.sh
     # requires --log_file when --debug true. NOTE: the script forwards SSH via
     # hostfwd (user-mode) only; in tap mode that hostfwd is inactive, so SSH must
@@ -645,6 +649,7 @@ start_vm() {
         --guest-cid "${cid}"
         "${mode_args[@]}"
         "${release_args[@]}"
+        "${build_args[@]}"
         "${gpu_args[@]}"
         "${debug_args[@]}"
     )
@@ -783,6 +788,12 @@ cmd_up() {
     command -v nc &>/dev/null   || die "nc is required (apt install netcat-openbsd)"
     command -v curl &>/dev/null || die "curl is required (apt install curl)"
     command -v tmux &>/dev/null || die "tmux is required (apt install tmux)"
+    if [[ -n "${RELEASE}" && -n "${LOCAL_BUILD_DIR}" ]]; then
+        die "Use either --release or --build-dir, not both."
+    fi
+    if [[ -n "${LOCAL_BUILD_DIR}" && ! -d "${LOCAL_BUILD_DIR}" ]]; then
+        die "Local build dir not found: ${LOCAL_BUILD_DIR}"
+    fi
     if ! command -v nft &>/dev/null; then
         log "nftables not found, installing..."
         apt-get update -qq && apt-get install -y -qq nftables
@@ -980,6 +991,7 @@ while [[ $# -gt 0 ]]; do
         --state-disk-size) STATE_DISK_SIZE="$2"; shift 2 ;;
         --mode)           VM_MODE="$2"; shift 2 ;;
         --release)        RELEASE="$2"; shift 2 ;;
+        --build-dir|--build_dir) LOCAL_BUILD_DIR="$2"; shift 2 ;;
         --debug)          DEBUG_MODE="$2"; shift 2 ;;
         --gpu-target)     GPU_TARGET="$2"; shift 2 ;;   # bootstrap | none
         --bootstrap-ip)   BOOTSTRAP_IP="$2"; shift 2 ;;
