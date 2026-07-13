@@ -5,7 +5,7 @@
 # Topology:
 #   - isolated bridge swarmbr0 (10.0.0.1/24), host = gateway 10.0.0.1
 #   - 3 VMs with tap interfaces in the bridge: 10.0.0.10 (bootstrap) + .11/.12 (join)
-#   - each VM gets its address statically via cloud-init/netplan inside the image
+#   - each VM gets its address from provider_config/swarm/config.yaml spnet
 #   - external ingress (host WAN) DNAT only to bootstrap: 80/443/9443 tcp, 53 tcp+udp
 #   - join nodes fetch PKI (9443) from bootstrap over the LOCAL address 10.0.0.10 (no hairpin)
 #   - each VM runs in its own tmux session
@@ -20,6 +20,8 @@
 #   sudo ./swarm-cluster.sh status
 #
 set -euo pipefail
+
+SCRIPT_DIR=$( cd "$( dirname "$0" )" && pwd )
 
 # ----------------------------------------------------------------------------
 # Configuration (override via flags or edit here)
@@ -74,13 +76,13 @@ HOST_AVAIL_DISK=""
 VM_MODE=""                     # empty = auto-detect (tdx/sev-snp) in start script
 RELEASE=""                     # empty = latest; pin a working build, e.g. build-358
 CACHE="/data/sp-vm/cache"
-START_SCRIPT="${PWD}/start_super_protocol.sh"
+START_SCRIPT="${SCRIPT_DIR}/start_super_protocol.sh"
 PROVIDER_TEMPLATE=""           # provider config template dir (--provider-config-template)
 WORKDIR="/data/sp-vm/cluster"  # per-node provider configs are generated here
 WAN_IFACE=""                   # empty = auto-detect from ip route
 GPU_TARGET="bootstrap"         # bootstrap | none — where to pass the GPU (single-GPU host)
 
-NETWORK_SCRIPT="${PWD}/swarm-network.sh"
+NETWORK_SCRIPT="${SCRIPT_DIR}/swarm-network.sh"
 GLOBAL_ID=""                   # empty = generate a fresh one on `up`
 BASE_DOMAIN="superprotocol.io" # gw hostname = gw.dyn.<global_id>.<base_domain>
 GW_BACKEND_PORT=443
@@ -456,6 +458,7 @@ prepare_config() {
     [[ -n "${ca_file}" ]] && rm -f "${ca_file}"
 
     inject_top_level_identity "${dest}" 
+    inject_spnet_config "${dest}" "${node_ip}"
 
     # Verify networkID landed in a real pki_authority section (indent 0 → child indent 2)
     if ! grep -Rqs "^  networkID:.*${network_id}" \
@@ -529,6 +532,57 @@ inject_top_level_identity() {
     log "  injected top-level: global_id=${GLOBAL_ID} (gateway_hostname left unchanged from template)"
 }
 
+inject_spnet_config() {
+    local dest="$1"
+    local node_ip="$2"
+    local config_file="${dest}/swarm/config.yaml"
+    local mac ip gw tmp
+
+    [[ -f "${config_file}" ]] || die "provider config missing ${config_file}"
+
+    mac="$(mac_for_ip "${node_ip}")"
+    ip="${node_ip}/24"
+    gw="${HOST_GW_IP}"
+    tmp="$(mktemp)"
+
+    awk \
+        -v mac="${mac}" \
+        -v ip="${ip}" \
+        -v gw="${gw}" '
+    function emit_spnet() {
+        print "spnet:"
+        print "  mac: \"" mac "\""
+        print "  ip: \"" ip "\""
+        print "  gw: \"" gw "\""
+    }
+    function is_top_level_key(line) {
+        return line !~ /^[ \t]/ && line !~ /^[ \t]*#/ && line ~ /^[A-Za-z0-9_]+:/
+    }
+    BEGIN { seen = 0; skip = 0 }
+    {
+        if (skip) {
+            if (is_top_level_key($0)) {
+                skip = 0
+            } else {
+                next
+            }
+        }
+        if ($0 ~ /^spnet:[ \t]*/) {
+            emit_spnet()
+            seen = 1
+            skip = 1
+            next
+        }
+        print
+    }
+    END {
+        if (!seen) emit_spnet()
+    }
+    ' "${config_file}" > "${tmp}" && mv "${tmp}" "${config_file}"
+
+    log "  injected spnet: mac=${mac}, ip=${ip}, gw=${gw}"
+}
+
 # ----------------------------------------------------------------------------
 # 3. Start a single VM in tmux
 # ----------------------------------------------------------------------------
@@ -584,7 +638,6 @@ start_vm() {
         --mem "${node_mem}"
         --provider_config "${provider_dir}"
         --mac_address "${mac}"
-        --vm_ip "${node_ip}/24"
         --state_disk_size "${node_disk}"
         --state_disk_path "${CACHE}/state-${node_ip##*.}.qcow2"
         --provider_config_disk_path "${CACHE}/pcfg-${node_ip##*.}.img"
@@ -916,7 +969,6 @@ CMD="${1:-}"; shift || true
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --provider-config-template) PROVIDER_TEMPLATE="$2"; shift 2 ;;
-        --start-script)   START_SCRIPT="$2"; shift 2 ;;
         --bridge)         BRIDGE="$2"; shift 2 ;;
         --wan-iface)      WAN_IFACE="$2"; shift 2 ;;
         --cache)          CACHE="$2"; shift 2 ;;

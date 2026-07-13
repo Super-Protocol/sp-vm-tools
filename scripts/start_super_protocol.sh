@@ -104,7 +104,6 @@ usage() {
     echo "  --netdev_mode <user|tap>       QEMU netdev backend (default: ${DEFAULT_NETDEV_MODE})"
     echo "  --bridge <name>                Bridge to attach tap to in tap mode (default: ${DEFAULT_BRIDGE})"
     echo "  --tap_iface <name>             Explicit tap interface name (default: sw-tap<nic_id>)"
-    echo "  --vm_ip <ip/prefix>            VM IP address in tap mode (e.g. 10.0.0.10/24), passed via kernel ip= param"
     echo ""
 }
 
@@ -120,6 +119,8 @@ MAC_ADDRESS=${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX}
 PROVIDER_CONFIG=""
 DEBUG_MODE=${DEFAULT_DEBUG}
 VM_IP=""
+SPNET_GW=""
+SPNET_MAC=""
 RELEASE=""
 RELEASE_FILEPATH=""
 
@@ -175,7 +176,6 @@ parse_args() {
             --netdev_mode) NETDEV_MODE=$2; shift ;;
             --bridge) BRIDGE=$2; shift ;;
             --tap_iface) TAP_IFACE=$2; shift ;;
-            --vm_ip) VM_IP=$2; shift ;;
             --help) usage; exit 0;;
             *) echo "Unknown parameter: $1"; usage ; exit 1 ;;
         esac
@@ -672,6 +672,50 @@ EOF
     return 0
 }
 
+load_spnet_from_provider_config() {
+    local config_file="${PROVIDER_CONFIG}/swarm/config.yaml"
+
+    if [[ ! -f "${config_file}" ]]; then
+        echo "Error: tap mode requires ${config_file} with spnet.mac/spnet.ip/spnet.gw"
+        exit 1
+    fi
+
+    local spnet_values
+    if ! spnet_values="$(python3 - "${config_file}" <<'EOF'
+import sys
+import yaml
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    data = yaml.safe_load(f) or {}
+
+spnet = data.get("spnet") or {}
+missing = [key for key in ("mac", "ip", "gw") if not spnet.get(key)]
+if missing:
+    print("missing:" + ",".join(missing), file=sys.stderr)
+    sys.exit(2)
+
+print(str(spnet["mac"]))
+print(str(spnet["ip"]))
+print(str(spnet["gw"]))
+EOF
+    )"; then
+        echo "Error: failed to read spnet.mac/spnet.ip/spnet.gw from ${config_file}"
+        exit 1
+    fi
+
+    SPNET_MAC="$(printf '%s\n' "${spnet_values}" | sed -n '1p')"
+    VM_IP="$(printf '%s\n' "${spnet_values}" | sed -n '2p')"
+    SPNET_GW="$(printf '%s\n' "${spnet_values}" | sed -n '3p')"
+
+    local cli_mac="${MAC_ADDRESS,,}"
+    local config_mac="${SPNET_MAC,,}"
+    if [[ "${cli_mac}" != "${config_mac}" ]]; then
+        echo "Error: --mac_address (${MAC_ADDRESS}) does not match provider_config spnet.mac (${SPNET_MAC})"
+        exit 1
+    fi
+}
+
 check_params() {
     # Collect system info
     TOTAL_CPUS=$(nproc)
@@ -796,6 +840,10 @@ check_params() {
         # Validate all yamls
         validate_yaml_files "${PROVIDER_CONFIG}"
 
+        if [[ "${NETDEV_MODE}" == "tap" ]]; then
+            load_spnet_from_provider_config
+        fi
+
         # Check if authorized_keys doesn't exist in provider_config
         if [[ ! -f "${PROVIDER_CONFIG}/authorized_keys" ]]; then
             if [[ -f "${HOME}/.ssh/authorized_keys" ]]; then
@@ -818,6 +866,9 @@ check_params() {
     else
         echo "Error: MAC-address $MAC_ADDRESS has invalid format"
         exit 1
+    fi
+    if [[ "${NETDEV_MODE}" == "tap" ]]; then
+        echo "• Tap network config: ${VM_IP} via ${SPNET_GW} (from provider_config spnet)"
     fi
 
     if [[ "${DEBUG_MODE}" == "true" || "${DEBUG_MODE}" == "false" ]]; then
@@ -1003,12 +1054,6 @@ if [[ "${NETDEV_MODE}" == "tap" ]]; then
         NETWORK_SETTINGS=" -device virtio-net-pci,netdev=nic_id$BASE_NIC,mac=$MAC_ADDRESS"
         NETWORK_SETTINGS+=" -netdev tap,id=nic_id$BASE_NIC,ifname=${TAP_IFACE},script=no,downscript=no"
 
-        if [[ "${DEBUG_MODE}" == "true" ]]; then
-            local dbg_nic=$(( BASE_NIC + 100 ))
-            NETWORK_SETTINGS+=" -device virtio-net-pci,netdev=nic_dbg${dbg_nic}"
-            NETWORK_SETTINGS+=" -netdev user,id=nic_dbg${dbg_nic},hostfwd=tcp:127.0.0.1:${SSH_PORT}-:22"
-            echo "DEBUG: SSH forwarded on 127.0.0.1:${SSH_PORT} via secondary user-mode NIC"
-        fi
     else
         NETWORK_SETTINGS=" -device virtio-net-pci,netdev=nic_id$BASE_NIC,mac=$MAC_ADDRESS"
         NETWORK_SETTINGS+=" -netdev user,id=nic_id$BASE_NIC"
@@ -1048,35 +1093,18 @@ if [[ "${NETDEV_MODE}" == "tap" ]]; then
         SNP_ADDITIONAL_PARAMS=" build=$RELEASE pci=realloc,nocrs"
     fi
 
+    KERNEL_CMD_LINE="root=LABEL=rootfs${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH}${SNP_ADDITIONAL_PARAMS}"
+
     if [[ ${DEBUG_MODE} == true ]]; then
-        if [[ "${NETDEV_MODE}" != "tap" ]]; then
+        if [[ "${NETDEV_MODE}" == "tap" ]]; then
+            local dbg_nic=$(( BASE_NIC + 100 ))
+            NETWORK_SETTINGS+=" -device virtio-net-pci,netdev=nic_dbg${dbg_nic}"
+            NETWORK_SETTINGS+=" -netdev user,id=nic_dbg${dbg_nic},hostfwd=tcp:127.0.0.1:${SSH_PORT}-:22"
+            echo "DEBUG: SSH forwarded on 127.0.0.1:${SSH_PORT} via secondary user-mode NIC"
+        else
             NETWORK_SETTINGS+=",hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
         fi
-        KERNEL_CMD_LINE="root=LABEL=rootfs console=ttyS0${CLEARCPUID_PARAM}\
-            systemd.log_level=trace systemd.log_target=log \
-            rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH} \
-            sp-debug=true${SNP_ADDITIONAL_PARAMS}"
-    else
-        KERNEL_CMD_LINE="root=LABEL=rootfs${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH}${SNP_ADDITIONAL_PARAMS}"
-    fi
-
-    # Tap mode: pass MAC-bound network config to the guest via custom spnet.*
-    # kernel params. The guest's sp-tap-network.service reads these from
-    # /proc/cmdline and matches the interface BY MAC (not by name), so the
-    # config is immune to PCI-slot reordering (e.g. the GPU node enumerating
-    # the NIC as enp0s2 instead of enp0s1).
-    #
-    # We deliberately do NOT use the kernel's built-in ip= here: ip= can only
-    # target an interface by NAME, which is exactly the fragile coupling we are
-    # removing. spnet.* are ignored by the kernel and parsed only by the guest.
-    if [[ "${NETDEV_MODE}" == "tap" ]] && [[ -n "${VM_IP}" ]]; then
-        local _vm_ip_addr="${VM_IP%/*}"
-        local _vm_ip_prefix="${VM_IP#*/}"
-        local _vm_ip_gw="${_vm_ip_addr%.*}.1"
-        # MAC_ADDRESS is already validated above and passed to virtio-net-pci.
-        # Lower-case it for a stable, predictable match in the guest.
-        local _vm_mac="${MAC_ADDRESS,,}"
-        KERNEL_CMD_LINE+=" spnet.mac=${_vm_mac} spnet.ip=${_vm_ip_addr}/${_vm_ip_prefix} spnet.gw=${_vm_ip_gw}"
+        KERNEL_CMD_LINE+=" console=ttyS0 systemd.log_level=trace systemd.log_target=log"
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
