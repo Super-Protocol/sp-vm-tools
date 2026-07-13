@@ -328,6 +328,11 @@ prepare_config() {
     local is_bootstrap="no"
     [[ "${role}" == "bootstrap" ]] && is_bootstrap="yes"
 
+    local pki_domain=""
+    if [[ -r "${dest}/swarm/config.yaml" ]]; then
+        pki_domain="$(sed -nE 's/^[[:space:]]*pki_domain:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' "${dest}/swarm/config.yaml" | head -1)"
+    fi
+
     # caBundle written to a temp file so awk reads it line-by-line (join nodes only)
     local ca_file=""
     if [[ "${is_bootstrap}" == "no" && -n "${ca_bundle}" ]]; then
@@ -338,11 +343,31 @@ prepare_config() {
     find "${dest}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 | \
     while IFS= read -r -d '' f; do
         local tmp; tmp="$(mktemp)"
+        local pki_servers_in_template="no"
+        if awk '
+            function indent(s,   i) { i = match(s, /[^ ]/); return (i ? i - 1 : 0) }
+            {
+                ind = indent($0)
+                line = $0
+                if (ind == 0 && line !~ /^[ \t]*#/ && line ~ /^[A-Za-z0-9_]+:/) {
+                    key = line; sub(/:.*/, "", key)
+                    sec = (key == "pki_authority" ? "pki" : "")
+                } else if (sec == "pki" && line ~ /^[ \t]+servers:/) {
+                    found = 1
+                    exit
+                }
+            }
+            END { exit(found ? 0 : 1) }
+        ' "${f}"; then
+            pki_servers_in_template="yes"
+        fi
         awk \
             -v node_name="${node_name}" \
             -v advertise_ip="${node_ip}" \
             -v join_yaml="${join_yaml}" \
             -v network_id="${network_id}" \
+            -v pki_domain="${pki_domain}" \
+            -v has_pki_servers="${pki_servers_in_template}" \
             -v is_bootstrap="${is_bootstrap}" \
             -v ca_file="${ca_file}" '
         function indent(s,   i) { i = match(s, /[^ ]/); return (i ? i - 1 : 0) }
@@ -362,6 +387,10 @@ prepare_config() {
             }
             if (is_bootstrap == "yes" && !pki_srv_done) {
                 print "  servers: []"
+                pki_srv_done = 1
+            } else if (is_bootstrap == "no" && has_pki_servers != "yes" && pki_domain != "" && !pki_srv_done) {
+                print "  servers:"
+                print "    - \"" pki_domain "\""
                 pki_srv_done = 1
             }
         }
@@ -442,6 +471,11 @@ prepare_config() {
                         print line
                         break
                     }
+                    next
+                }
+                if (line ~ /^[ \t]+servers:/) {
+                    pki_srv_done = 1
+                    print line
                     next
                 }
                 print line; next
