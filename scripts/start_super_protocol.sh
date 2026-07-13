@@ -30,8 +30,6 @@ DEFAULT_SWARM_DB_GOSSIP_PORT=7946
 DEFAULT_DNS_PORT=53
 DEFAULT_PKI_VM_MEASURE_PORT=9180
 DEFAULT_GUEST_CID=3
-DEFAULT_SWARM_INIT=false
-DEFAULT_ALLOW_UNTRUSTED=false
 
 DEFAULT_NETDEV_MODE="user"       # user | tap
 DEFAULT_BRIDGE="swarmbr0"
@@ -94,7 +92,7 @@ usage() {
     echo "  --http_port <port>             HTTP port (default: no port forward)"
     echo "  --https_port <port>            HTTPS port (default: no port forward)"
     echo "  --pki_port <port>              PKI port (default: no port forward)"
-    echo "  --pki_vm_measure_port <port>   PKI VM measure port (default: no port forward; guest port: ${DEFAULT_PKI_VM_MEASURE_PORT})"
+    echo "  --pki_vm_measure_port <port>   Forward VM measurement endpoint /api/v1/getMeasure (default: no port forward; guest port: ${DEFAULT_PKI_VM_MEASURE_PORT})"
     echo "  --swarm_db_gossip_port <port>  Swarm DB Gossip Port (default: ${DEFAULT_SWARM_DB_GOSSIP_PORT})"
     echo "  --dns_port <port>              DNS port (default: ${DEFAULT_DNS_PORT})"
     echo "  --log_file <file>              Log file (default: no)"
@@ -103,8 +101,6 @@ usage() {
     echo "  --mode <mode>                  VM mode: untrusted, tdx, sev-snp (default: ${DEFAULT_VM_MODE})"
     echo "  --guest-cid <id>               Guest CID for vsock (default: ${DEFAULT_GUEST_CID})"
     echo "  --build_dir <path>             Path to the local builded kata container (default: no)"
-    echo "  --swarm-init <true|false>      Enable swarm-init mode (default: ${DEFAULT_SWARM_INIT})"
-    echo "  --allow-untrusted <true|false> Allow untrusted mode (default: ${DEFAULT_ALLOW_UNTRUSTED})"
     echo "  --netdev_mode <user|tap>       QEMU netdev backend (default: ${DEFAULT_NETDEV_MODE})"
     echo "  --bridge <name>                Bridge to attach tap to in tap mode (default: ${DEFAULT_BRIDGE})"
     echo "  --tap_iface <name>             Explicit tap interface name (default: sw-tap<nic_id>)"
@@ -123,8 +119,6 @@ STATE_DISK_SIZE=0
 MAC_ADDRESS=${DEFAULT_MAC_PREFIX}:${DEFAULT_MAC_SUFFIX}
 PROVIDER_CONFIG=""
 DEBUG_MODE=${DEFAULT_DEBUG}
-SWARM_INIT=${DEFAULT_SWARM_INIT}
-ALLOW_UNTRUSTED=${DEFAULT_ALLOW_UNTRUSTED}
 VM_IP=""
 RELEASE=""
 RELEASE_FILEPATH=""
@@ -178,8 +172,6 @@ parse_args() {
             --mode) VM_MODE=$2; shift ;;
             --guest-cid) GUEST_CID=$2; shift ;;
             --build_dir) LOCAL_BUILD_DIR=$2; shift ;;
-            --swarm-init) SWARM_INIT=$2; shift ;;
-            --allow-untrusted) ALLOW_UNTRUSTED=$2; shift ;;
             --netdev_mode) NETDEV_MODE=$2; shift ;;
             --bridge) BRIDGE=$2; shift ;;
             --tap_iface) TAP_IFACE=$2; shift ;;
@@ -866,26 +858,6 @@ check_params() {
     fi
     echo "• Superprotocol release: ${RELEASE:-latest}"
     echo "• VM Mode: ${VM_MODE}"
-    
-    if [[ "${SWARM_INIT}" == "true" || "${SWARM_INIT}" == "false" ]]; then
-        echo "• Swarm init: ${SWARM_INIT}"
-    else
-        echo "Error: <swarm-init> option must be true or false"
-        exit 1
-    fi
-
-    if [[ "${ALLOW_UNTRUSTED}" == "true" || "${ALLOW_UNTRUSTED}" == "false" ]]; then
-        echo "• Allow untrusted: ${ALLOW_UNTRUSTED}"
-    else
-        echo "Error: <allow-untrusted> option must be true or false"
-        exit 1
-    fi
-
-    # Validate allow-untrusted requires swarm-init=true
-    if [[ "${ALLOW_UNTRUSTED}" == "true" ]] && [[ "${SWARM_INIT}" == "false" ]]; then
-        echo "Error: --allow-untrusted can only be used with --swarm-init"
-        exit 1
-    fi
 }
 
 main() {
@@ -1086,14 +1058,6 @@ if [[ "${NETDEV_MODE}" == "tap" ]]; then
             sp-debug=true${SNP_ADDITIONAL_PARAMS}"
     else
         KERNEL_CMD_LINE="root=LABEL=rootfs${CLEARCPUID_PARAM}rootfs_verity.scheme=dm-verity rootfs_verity.hash=${ROOTFS_HASH}${SNP_ADDITIONAL_PARAMS}"
-    fi
-
-    if [[ ${SWARM_INIT} == true ]]; then
-        KERNEL_CMD_LINE+=" vm_mode=swarm-init"
-    fi
-    
-    if [[ ${ALLOW_UNTRUSTED} == true ]]; then
-        KERNEL_CMD_LINE+=" allow_untrusted=true"
     fi
 
     # Tap mode: pass MAC-bound network config to the guest via custom spnet.*
