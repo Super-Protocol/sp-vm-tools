@@ -992,7 +992,15 @@ while [[ $# -gt 0 ]]; do
         --mode)           VM_MODE="$2"; shift 2 ;;
         --release)        RELEASE="$2"; shift 2 ;;
         --build-dir|--build_dir) LOCAL_BUILD_DIR="$2"; shift 2 ;;
-        --debug)          DEBUG_MODE="$2"; shift 2 ;;
+        --debug)
+            if [[ "${2:-}" == "true" || "${2:-}" == "false" ]]; then
+                DEBUG_MODE="$2"
+                shift 2
+            else
+                DEBUG_MODE="true"
+                shift
+            fi
+            ;;
         --gpu-target)     GPU_TARGET="$2"; shift 2 ;;   # bootstrap | none
         --bootstrap-ip)   BOOTSTRAP_IP="$2"; shift 2 ;;
         *) die "Unknown argument: $1" ;;
