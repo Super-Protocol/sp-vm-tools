@@ -986,6 +986,23 @@ wait_vfio_free() {
 
 cmd_down() {
     require_root
+
+    local answer
+    while true; do
+        read -r -p "Stop the swarm cluster and remove its network interfaces? [yes/no] " answer || {
+            log "Cluster shutdown cancelled."
+            return 0
+        }
+        case "${answer}" in
+            yes) break ;;
+            no|"")
+                log "Cluster shutdown cancelled."
+                return 0
+                ;;
+            *) echo "Please answer yes or no." >&2 ;;
+        esac
+    done
+
     log "Stopping cluster..."
 
     pkill -TERM -f 'qemu-system-x86_64.*sw-tap-' 2>/dev/null || true
