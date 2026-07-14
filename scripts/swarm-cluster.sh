@@ -5,7 +5,7 @@
 # Topology:
 #   - isolated bridge swarmbr0 (10.0.0.1/24), host = gateway 10.0.0.1
 #   - 3 VMs with tap interfaces in the bridge: 10.0.0.10 (bootstrap) + .11/.12 (join)
-#   - each VM gets its address statically via cloud-init/netplan inside the image
+#   - each VM gets its address from provider_config/swarm/config.yaml spnet
 #   - external ingress (host WAN) DNAT only to bootstrap: 80/443/9443 tcp, 53 tcp+udp
 #   - join nodes fetch PKI (9443) from bootstrap over the LOCAL address 10.0.0.10 (no hairpin)
 #   - each VM runs in its own tmux session
@@ -20,6 +20,8 @@
 #   sudo ./swarm-cluster.sh status
 #
 set -euo pipefail
+
+SCRIPT_DIR=$( cd "$( dirname "$0" )" && pwd )
 
 # ----------------------------------------------------------------------------
 # Configuration (override via flags or edit here)
@@ -73,14 +75,15 @@ HOST_AVAIL_DISK=""
 
 VM_MODE=""                     # empty = auto-detect (tdx/sev-snp) in start script
 RELEASE=""                     # empty = latest; pin a working build, e.g. build-358
+LOCAL_BUILD_DIR=""             # empty = use release; otherwise pass local build dir to start script
 CACHE="/data/sp-vm/cache"
-START_SCRIPT="${PWD}/start_super_protocol.sh"
+START_SCRIPT="${SCRIPT_DIR}/start_super_protocol.sh"
 PROVIDER_TEMPLATE=""           # provider config template dir (--provider-config-template)
 WORKDIR="/data/sp-vm/cluster"  # per-node provider configs are generated here
 WAN_IFACE=""                   # empty = auto-detect from ip route
 GPU_TARGET="bootstrap"         # bootstrap | none — where to pass the GPU (single-GPU host)
 
-NETWORK_SCRIPT="${PWD}/swarm-network.sh"
+NETWORK_SCRIPT="${SCRIPT_DIR}/swarm-network.sh"
 GLOBAL_ID=""                   # empty = generate a fresh one on `up`
 BASE_DOMAIN="superprotocol.io" # gw hostname = gw.dyn.<global_id>.<base_domain>
 GW_BACKEND_PORT=443
@@ -325,6 +328,11 @@ prepare_config() {
     local is_bootstrap="no"
     [[ "${role}" == "bootstrap" ]] && is_bootstrap="yes"
 
+    local pki_domain=""
+    if [[ -r "${dest}/swarm/config.yaml" ]]; then
+        pki_domain="$(sed -nE 's/^[[:space:]]*pki_domain:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' "${dest}/swarm/config.yaml" | head -1)"
+    fi
+
     # caBundle written to a temp file so awk reads it line-by-line (join nodes only)
     local ca_file=""
     if [[ "${is_bootstrap}" == "no" && -n "${ca_bundle}" ]]; then
@@ -335,11 +343,31 @@ prepare_config() {
     find "${dest}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 | \
     while IFS= read -r -d '' f; do
         local tmp; tmp="$(mktemp)"
+        local pki_servers_in_template="no"
+        if awk '
+            function indent(s,   i) { i = match(s, /[^ ]/); return (i ? i - 1 : 0) }
+            {
+                ind = indent($0)
+                line = $0
+                if (ind == 0 && line !~ /^[ \t]*#/ && line ~ /^[A-Za-z0-9_]+:/) {
+                    key = line; sub(/:.*/, "", key)
+                    sec = (key == "pki_authority" ? "pki" : "")
+                } else if (sec == "pki" && line ~ /^[ \t]+servers:/) {
+                    found = 1
+                    exit
+                }
+            }
+            END { exit(found ? 0 : 1) }
+        ' "${f}"; then
+            pki_servers_in_template="yes"
+        fi
         awk \
             -v node_name="${node_name}" \
             -v advertise_ip="${node_ip}" \
             -v join_yaml="${join_yaml}" \
             -v network_id="${network_id}" \
+            -v pki_domain="${pki_domain}" \
+            -v has_pki_servers="${pki_servers_in_template}" \
             -v is_bootstrap="${is_bootstrap}" \
             -v ca_file="${ca_file}" '
         function indent(s,   i) { i = match(s, /[^ ]/); return (i ? i - 1 : 0) }
@@ -359,6 +387,10 @@ prepare_config() {
             }
             if (is_bootstrap == "yes" && !pki_srv_done) {
                 print "  servers: []"
+                pki_srv_done = 1
+            } else if (is_bootstrap == "no" && has_pki_servers != "yes" && pki_domain != "" && !pki_srv_done) {
+                print "  servers:"
+                print "    - \"" pki_domain "\""
                 pki_srv_done = 1
             }
         }
@@ -441,6 +473,11 @@ prepare_config() {
                     }
                     next
                 }
+                if (line ~ /^[ \t]+servers:/) {
+                    pki_srv_done = 1
+                    print line
+                    next
+                }
                 print line; next
             }
 
@@ -456,6 +493,7 @@ prepare_config() {
     [[ -n "${ca_file}" ]] && rm -f "${ca_file}"
 
     inject_top_level_identity "${dest}" 
+    inject_spnet_config "${dest}" "${node_ip}"
 
     # Verify networkID landed in a real pki_authority section (indent 0 → child indent 2)
     if ! grep -Rqs "^  networkID:.*${network_id}" \
@@ -529,6 +567,57 @@ inject_top_level_identity() {
     log "  injected top-level: global_id=${GLOBAL_ID} (gateway_hostname left unchanged from template)"
 }
 
+inject_spnet_config() {
+    local dest="$1"
+    local node_ip="$2"
+    local config_file="${dest}/swarm/config.yaml"
+    local mac ip gw tmp
+
+    [[ -f "${config_file}" ]] || die "provider config missing ${config_file}"
+
+    mac="$(mac_for_ip "${node_ip}")"
+    ip="${node_ip}/24"
+    gw="${HOST_GW_IP}"
+    tmp="$(mktemp)"
+
+    awk \
+        -v mac="${mac}" \
+        -v ip="${ip}" \
+        -v gw="${gw}" '
+    function emit_spnet() {
+        print "spnet:"
+        print "  mac: \"" mac "\""
+        print "  ip: \"" ip "\""
+        print "  gw: \"" gw "\""
+    }
+    function is_top_level_key(line) {
+        return line !~ /^[ \t]/ && line !~ /^[ \t]*#/ && line ~ /^[A-Za-z0-9_]+:/
+    }
+    BEGIN { seen = 0; skip = 0 }
+    {
+        if (skip) {
+            if (is_top_level_key($0)) {
+                skip = 0
+            } else {
+                next
+            }
+        }
+        if ($0 ~ /^spnet:[ \t]*/) {
+            emit_spnet()
+            seen = 1
+            skip = 1
+            next
+        }
+        print
+    }
+    END {
+        if (!seen) emit_spnet()
+    }
+    ' "${config_file}" > "${tmp}" && mv "${tmp}" "${config_file}"
+
+    log "  injected spnet: mac=${mac}, ip=${ip}, gw=${gw}"
+}
+
 # ----------------------------------------------------------------------------
 # 3. Start a single VM in tmux
 # ----------------------------------------------------------------------------
@@ -563,6 +652,9 @@ start_vm() {
     local release_args=()
     [[ -n "${RELEASE}" ]] && release_args=(--release "${RELEASE}")
 
+    local build_args=()
+    [[ -n "${LOCAL_BUILD_DIR}" ]] && build_args=(--build_dir "${LOCAL_BUILD_DIR}")
+
     # Debug mode: verbose boot log + per-node SSH port. start_super_protocol.sh
     # requires --log_file when --debug true. NOTE: the script forwards SSH via
     # hostfwd (user-mode) only; in tap mode that hostfwd is inactive, so SSH must
@@ -584,7 +676,6 @@ start_vm() {
         --mem "${node_mem}"
         --provider_config "${provider_dir}"
         --mac_address "${mac}"
-        --vm_ip "${node_ip}/24"
         --state_disk_size "${node_disk}"
         --state_disk_path "${CACHE}/state-${node_ip##*.}.qcow2"
         --provider_config_disk_path "${CACHE}/pcfg-${node_ip##*.}.img"
@@ -592,6 +683,7 @@ start_vm() {
         --guest-cid "${cid}"
         "${mode_args[@]}"
         "${release_args[@]}"
+        "${build_args[@]}"
         "${gpu_args[@]}"
         "${debug_args[@]}"
     )
@@ -730,6 +822,12 @@ cmd_up() {
     command -v nc &>/dev/null   || die "nc is required (apt install netcat-openbsd)"
     command -v curl &>/dev/null || die "curl is required (apt install curl)"
     command -v tmux &>/dev/null || die "tmux is required (apt install tmux)"
+    if [[ -n "${RELEASE}" && -n "${LOCAL_BUILD_DIR}" ]]; then
+        die "Use either --release or --build-dir, not both."
+    fi
+    if [[ -n "${LOCAL_BUILD_DIR}" && ! -d "${LOCAL_BUILD_DIR}" ]]; then
+        die "Local build dir not found: ${LOCAL_BUILD_DIR}"
+    fi
     if ! command -v nft &>/dev/null; then
         log "nftables not found, installing..."
         apt-get update -qq && apt-get install -y -qq nftables
@@ -888,6 +986,23 @@ wait_vfio_free() {
 
 cmd_down() {
     require_root
+
+    local answer
+    while true; do
+        read -r -p "Stop the swarm cluster and remove its network interfaces? [yes/no] " answer || {
+            log "Cluster shutdown cancelled."
+            return 0
+        }
+        case "${answer}" in
+            yes) break ;;
+            no|"")
+                log "Cluster shutdown cancelled."
+                return 0
+                ;;
+            *) echo "Please answer yes or no." >&2 ;;
+        esac
+    done
+
     log "Stopping cluster..."
 
     pkill -TERM -f 'qemu-system-x86_64.*sw-tap-' 2>/dev/null || true
@@ -916,7 +1031,6 @@ CMD="${1:-}"; shift || true
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --provider-config-template) PROVIDER_TEMPLATE="$2"; shift 2 ;;
-        --start-script)   START_SCRIPT="$2"; shift 2 ;;
         --bridge)         BRIDGE="$2"; shift 2 ;;
         --wan-iface)      WAN_IFACE="$2"; shift 2 ;;
         --cache)          CACHE="$2"; shift 2 ;;
@@ -928,7 +1042,16 @@ while [[ $# -gt 0 ]]; do
         --state-disk-size) STATE_DISK_SIZE="$2"; shift 2 ;;
         --mode)           VM_MODE="$2"; shift 2 ;;
         --release)        RELEASE="$2"; shift 2 ;;
-        --debug)          DEBUG_MODE="$2"; shift 2 ;;
+        --build-dir|--build_dir) LOCAL_BUILD_DIR="$2"; shift 2 ;;
+        --debug)
+            if [[ "${2:-}" == "true" || "${2:-}" == "false" ]]; then
+                DEBUG_MODE="$2"
+                shift 2
+            else
+                DEBUG_MODE="true"
+                shift
+            fi
+            ;;
         --gpu-target)     GPU_TARGET="$2"; shift 2 ;;   # bootstrap | none
         --bootstrap-ip)   BOOTSTRAP_IP="$2"; shift 2 ;;
         *) die "Unknown argument: $1" ;;
