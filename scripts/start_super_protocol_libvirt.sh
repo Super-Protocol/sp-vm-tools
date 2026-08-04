@@ -184,11 +184,10 @@ preflight_libvirt() {
             break
         fi
     done
-    # With no explicit --gpu option, the base launcher selects all GPUs later.
-    if [[ ${#USED_GPUS[@]} -eq 0 ]]; then
-        if lspci -nnk -d 10de: 2>/dev/null | grep -qE '3D controller'; then
-            require_iommufd=true
-        fi
+    # With no --gpu option, check_params will select all available GPUs.
+    if [[ ${#USED_GPUS[@]} -eq 0 ]] && \
+        lspci -nnk -d 10de: 2>/dev/null | grep -qE '3D controller'; then
+        require_iommufd=true
     fi
 
     local args=(preflight --emulator "${QEMU_PATH}" --name "${LIBVIRT_DOMAIN_NAME}")
@@ -458,9 +457,9 @@ main_libvirt() {
     check_passt_apparmor_profile
     find_qemu_path
     check_qemu_version
+    preflight_libvirt
     check_params
     check_passt_privileged_ports
-    preflight_libvirt
     prepare_selected_host_devices
     prepare_mode_parameters
 
