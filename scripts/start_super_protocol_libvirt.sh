@@ -76,6 +76,8 @@ check_libvirt_dependencies() {
     local missing=()
     command -v python3 >/dev/null 2>&1 || missing+=(python3)
     command -v virsh >/dev/null 2>&1 || missing+=(libvirt-clients)
+    command -v setfacl >/dev/null 2>&1 || missing+=(acl)
+    command -v runuser >/dev/null 2>&1 || missing+=(util-linux)
     if ! python3 -c 'import libvirt' >/dev/null 2>&1; then
         missing+=(python3-libvirt)
     fi
@@ -84,7 +86,7 @@ check_libvirt_dependencies() {
     fi
     if [[ ${#missing[@]} -gt 0 ]]; then
         echo "Error: missing libvirt runtime dependencies: ${missing[*]}" >&2
-        echo "Install them with: apt-get install libvirt-daemon-system libvirt-clients python3-libvirt passt" >&2
+        echo "Install them with: apt-get install libvirt-daemon-system libvirt-clients python3-libvirt passt acl" >&2
         echo "GPU passthrough additionally requires libvirt >= 12.1.0." >&2
         exit 1
     fi
@@ -112,6 +114,63 @@ check_passt_apparmor_profile() {
         echo "Ubuntu AppArmor 5 will kill passt with fatal signal 11." >&2
         echo "Update the rule inside 'profile passt' from '/usr/bin/passt r,' to '/usr/bin/passt rm,'" >&2
         echo "in ${profile}, reload AppArmor, and retry." >&2
+        exit 1
+    fi
+}
+
+check_passt_privileged_ports() {
+    local ports=()
+    local port port_number minimum=65536
+
+    if [[ "${NETDEV_MODE}" == "user" ]]; then
+        ports+=(
+            "${HTTP_PORT}" "${HTTPS_PORT}" "${PKI_PORT}"
+            "${PKI_VM_MEASURE_PORT}" "${WG_PORT}"
+            "${SWARM_DB_GOSSIP_PORT}" "${DNS_PORT}"
+        )
+    fi
+    if [[ "${DEBUG_MODE}" == "true" ]]; then
+        ports+=("${SSH_PORT}")
+    fi
+
+    for port in "${ports[@]}"; do
+        [[ -n "${port}" ]] || continue
+        port_number=$((10#${port}))
+        if ((port_number < minimum)); then
+            minimum=${port_number}
+        fi
+    done
+
+    if ((minimum >= 1024)); then
+        return
+    fi
+
+    local sysctl_path=/proc/sys/net/ipv4/ip_unprivileged_port_start
+    [[ -r "${sysctl_path}" ]] || return
+    local current
+    current=$(<"${sysctl_path}")
+    if ((current > minimum)); then
+        local capability_ok=true found_passt=false binary path capabilities
+        if ! command -v getcap >/dev/null 2>&1; then
+            capability_ok=false
+        else
+            for binary in passt passt.avx2; do
+                path=$(command -v "${binary}" 2>/dev/null || true)
+                [[ -n "${path}" ]] || continue
+                found_passt=true
+                capabilities=$(getcap "${path}" 2>/dev/null || true)
+                if [[ "${capabilities}" != *cap_net_bind_service* ]]; then
+                    capability_ok=false
+                fi
+            done
+        fi
+        if [[ "${found_passt}" == "true" && "${capability_ok}" == "true" ]]; then
+            return
+        fi
+
+        echo "Error: passt must bind host port ${minimum}, but unprivileged ports currently start at ${current}." >&2
+        echo "Lower net.ipv4.ip_unprivileged_port_start to ${minimum}, or grant CAP_NET_BIND_SERVICE" >&2
+        echo "to every installed passt binary, then retry." >&2
         exit 1
     fi
 }
@@ -246,6 +305,63 @@ build_kernel_cmdline() {
     fi
 }
 
+grant_libvirt_file_access() {
+    local label=$1 requested_path=$2 permissions=$3
+    local qemu_user=libvirt-qemu
+    if ! id "${qemu_user}" >/dev/null 2>&1; then
+        echo "Error: the expected Ubuntu libvirt QEMU user '${qemu_user}' does not exist." >&2
+        exit 1
+    fi
+
+    local path
+    if ! path=$(realpath -e -- "${requested_path}"); then
+        echo "Error: cannot resolve ${label} path: ${requested_path}" >&2
+        exit 1
+    fi
+
+    local directory
+    directory=$(dirname -- "${path}")
+    local directories=()
+    while [[ "${directory}" != "/" ]]; do
+        directories+=("${directory}")
+        directory=$(dirname -- "${directory}")
+    done
+
+    local index
+    for ((index = ${#directories[@]} - 1; index >= 0; index--)); do
+        directory=${directories[${index}]}
+        if ! runuser -u "${qemu_user}" -- test -x "${directory}"; then
+            if ! setfacl -m "u:${qemu_user}:--x" -- "${directory}"; then
+                echo "Error: failed to grant ${qemu_user} traversal access to ${directory}" >&2
+                exit 1
+            fi
+        fi
+    done
+
+    if ! setfacl -m "u:${qemu_user}:${permissions}" -- "${path}"; then
+        echo "Error: failed to grant ${qemu_user} access to ${label}: ${path}" >&2
+        exit 1
+    fi
+
+    if ! runuser -u "${qemu_user}" -- test -r "${path}"; then
+        echo "Error: ${qemu_user} still cannot read ${label}: ${path}" >&2
+        exit 1
+    fi
+    if [[ "${permissions}" == "rw-" ]] && \
+        ! runuser -u "${qemu_user}" -- test -w "${path}"; then
+        echo "Error: ${qemu_user} still cannot write ${label}: ${path}" >&2
+        exit 1
+    fi
+
+    echo "Granted ${qemu_user} ${permissions} access to ${label}: ${path}"
+}
+
+grant_static_libvirt_resource_access() {
+    grant_libvirt_file_access rootfs "${IMAGE_PATH}" r--
+    grant_libvirt_file_access kernel "${KERNEL_PATH}" r--
+    grant_libvirt_file_access firmware "${BIOS_PATH}" r--
+}
+
 create_vm_disks() {
     local provider_loop provider_mount
 
@@ -278,6 +394,9 @@ create_vm_disks() {
     provider_loop=""
     rmdir "${provider_mount}"
     trap - RETURN
+
+    grant_libvirt_file_access state-disk "${STATE_DISK_PATH}" rw-
+    grant_libvirt_file_access provider-config-disk "${PROVIDER_CONFIG_DISK_PATH}" r--
 }
 
 append_optional_arg() {
@@ -339,14 +458,16 @@ main_libvirt() {
     check_passt_apparmor_profile
     find_qemu_path
     check_qemu_version
-    preflight_libvirt
     check_params
+    check_passt_privileged_ports
+    preflight_libvirt
     prepare_selected_host_devices
     prepare_mode_parameters
 
     mkdir -p "${CACHE}"
     download_release "${RELEASE}" "${RELEASE_ASSET}" "${CACHE}" "${RELEASE_REPO}"
     parse_and_download_release_files "${RELEASE_FILEPATH}"
+    grant_static_libvirt_resource_access
     prepare_tap_network
     build_kernel_cmdline
     create_vm_disks

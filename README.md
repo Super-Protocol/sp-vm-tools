@@ -49,8 +49,6 @@ sudo ./scripts/start_super_protocol_libvirt.sh \
   --mode tdx
 ```
 
-The default cache is `/var/lib/libvirt/images/superprotocol`, so the non-root QEMU process used by `qemu:///system` can access the images. A custom `--cache` or `--build_dir` must likewise be traversable by the configured libvirt QEMU user.
-
 With `--debug false` the command returns after the domain starts. With `--debug true --log_file /path/to/boot.log`, it attaches a bidirectional serial console and copies console output to the log; `Ctrl-C` or `Ctrl-]` detaches without stopping the VM. Use `virsh -c qemu:///system list`, `console`, `shutdown`, or `destroy` to manage it. `--gpu none` disables GPU, NVSwitch, and CX7 passthrough for diagnostics.
 
 #### Ubuntu 26.04 AppArmor and `passt`
@@ -89,6 +87,33 @@ sudo systemctl reload apparmor
 ```
 
 Do not disable AppArmor globally. The launcher detects the incompatible read-only `passt` rule before binding VFIO devices or recreating VM disks.
+
+`passt` runs as the unprivileged libvirt QEMU user. Forwarding a host port below 1024 therefore also requires lowering the host's unprivileged-port boundary to the lowest forwarded port. For the default DNS port, configure it persistently with:
+
+```bash
+printf '%s\n' 'net.ipv4.ip_unprivileged_port_start = 53' | \
+  sudo tee /etc/sysctl.d/90-sp-vm-passt.conf >/dev/null
+
+sudo sysctl --system
+```
+
+The launcher checks this value before preparing the VM. This sysctl and the AppArmor adjustment are temporary host-preparation steps that should be moved into the Ubuntu 26.04 bootstrap in the future.
+
+As a narrower alternative to changing the system-wide sysctl, grant `CAP_NET_BIND_SERVICE` only to the installed `passt` binaries:
+
+```bash
+sudo apt-get install libcap2-bin
+
+for binary in /usr/bin/passt /usr/bin/passt.avx2; do
+  if [[ -x "${binary}" ]]; then
+    sudo setcap 'cap_net_bind_service=+ep' "${binary}"
+  fi
+done
+
+getcap /usr/bin/passt /usr/bin/passt.avx2 2>/dev/null
+```
+
+The AppArmor profile above already allows this capability, and the launcher recognizes it during preflight. Package upgrades can replace the binaries and remove their file capabilities, in which case the `setcap` step must be repeated. The `passt` project recommends the sysctl method in general, but documents file capabilities as an option on hosts sufficiently constrained by an LSM such as AppArmor.
 
 ### 1. Clone the repo
 
