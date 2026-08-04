@@ -337,9 +337,18 @@ grant_libvirt_file_access() {
         fi
     done
 
-    if ! setfacl -m "u:${qemu_user}:${permissions}" -- "${path}"; then
-        echo "Error: failed to grant ${qemu_user} access to ${label}: ${path}" >&2
-        exit 1
+    if [[ "${permissions}" == "rw-" ]]; then
+        # The launcher creates mutable disks itself. Giving the QEMU process
+        # ownership is more reliable than a named ACL on mounted data volumes.
+        if ! chown -- "${qemu_user}" "${path}" || ! chmod -- u+rw "${path}"; then
+            echo "Error: failed to assign writable ${label} to ${qemu_user}: ${path}" >&2
+            exit 1
+        fi
+    else
+        if ! setfacl -m "u:${qemu_user}:${permissions}" -- "${path}"; then
+            echo "Error: failed to grant ${qemu_user} access to ${label}: ${path}" >&2
+            exit 1
+        fi
     fi
 
     if ! runuser -u "${qemu_user}" -- test -r "${path}"; then
