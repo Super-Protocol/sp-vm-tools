@@ -22,6 +22,7 @@ Utilities for bootstrapping a Confidential Computing host (Intel **TDX** or AMD 
 | `scripts/bootstrap_tdx.sh` | Turn an Ubuntu host into a TDX-capable hypervisor (kernel, QEMU, OVMF, attestation, GPU passthrough). |
 | `scripts/bootstrap_snp.sh` | Turn an Ubuntu host into a SEV-SNP-capable hypervisor (firmware, modules, GPU passthrough). |
 | `scripts/start_super_protocol.sh` | Start a confidential VM (TDX / SEV-SNP / untrusted) from a Super Protocol release image. |
+| `scripts/start_super_protocol_libvirt.sh` | Start the same VM as a transient `qemu:///system` domain through libvirt-python (Ubuntu 26.04+). |
 | `scripts/swarm-cluster.sh` | Bring up a 3-node Swarm cluster on a single host. |
 | `scripts/check_configuration.sh`, `get_super_running_vms.sh` | Auxiliary tooling. |
 
@@ -34,6 +35,23 @@ This is the main path: take a bare Ubuntu host, turn it into a confidential hype
 > All scripts run as `root` and need an internet connection. A reboot is required partway through.
 
 For the exact commands to clone the repository, run the bootstrap scripts, and launch a VM, see [docs/swarm.md](docs/swarm.md).
+
+### Libvirt launcher (Ubuntu 26.04+)
+
+`scripts/start_super_protocol_libvirt.sh` reuses the release, disk, provider-config, and VFIO preparation from the direct QEMU launcher, then builds domain XML and starts a transient domain through `libvirt-python`. It requires `libvirt-daemon-system`, `libvirt-clients`, `python3-libvirt`, and `passt`. GPU passthrough uses IOMMUFD and therefore requires libvirt **12.1.0 or newer**; the launcher checks the daemon and domain capabilities before binding devices or recreating disks.
+
+The command line is the same as for `start_super_protocol.sh`, with an optional domain name:
+
+```bash
+sudo ./scripts/start_super_protocol_libvirt.sh \
+  --name super-protocol-3 \
+  --provider_config /path/to/provider-configs \
+  --mode tdx
+```
+
+The default cache is `/var/lib/libvirt/images/superprotocol`, so the non-root QEMU process used by `qemu:///system` can access the images. A custom `--cache` or `--build_dir` must likewise be traversable by the configured libvirt QEMU user.
+
+With `--debug false` the command returns after the domain starts. With `--debug true --log_file /path/to/boot.log`, it attaches a bidirectional serial console and copies console output to the log; `Ctrl-C` or `Ctrl-]` detaches without stopping the VM. Use `virsh -c qemu:///system list`, `console`, `shutdown`, or `destroy` to manage it. `--gpu none` disables GPU, NVSwitch, and CX7 passthrough for diagnostics.
 
 ### 1. Clone the repo
 
