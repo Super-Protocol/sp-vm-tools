@@ -53,6 +53,43 @@ The default cache is `/var/lib/libvirt/images/superprotocol`, so the non-root QE
 
 With `--debug false` the command returns after the domain starts. With `--debug true --log_file /path/to/boot.log`, it attaches a bidirectional serial console and copies console output to the log; `Ctrl-C` or `Ctrl-]` detaches without stopping the VM. Use `virsh -c qemu:///system list`, `console`, `shutdown`, or `destroy` to manage it. `--gpu none` disables GPU, NVSwitch, and CX7 passthrough for diagnostics.
 
+#### Ubuntu 26.04 AppArmor and `passt`
+
+The Ubuntu 26.04 libvirt AppArmor profile may allow `/usr/bin/passt` to be read but not memory-mapped. In that case libvirt reports `passt ... unexpected fatal signal 11`, while the kernel audit log contains a denial similar to:
+
+```text
+apparmor="DENIED" operation="file_mmap" name="/usr/bin/passt" requested_mask="rm"
+```
+
+Confirm the cause with:
+
+```bash
+sudo journalctl -k --since '-10 min' --no-pager |
+  grep -E 'apparmor="DENIED".*(passt|libvirt)|comm="passt"'
+```
+
+Until this host configuration is incorporated into the bootstrap scripts, back up and adjust the nested `passt` profile, then add a local rule allowing QEMU to connect to the libvirt-managed socket:
+
+```bash
+sudo cp -a --update=none \
+  /etc/apparmor.d/abstractions/libvirt-qemu \
+  /etc/apparmor.d/abstractions/libvirt-qemu.sp-vm-tools.bak
+
+sudo sed -i \
+  '/^[[:space:]]*profile passt[[:space:]]*{/,/^[[:space:]]*}/ s|/usr/bin/passt r,|/usr/bin/passt rm,|' \
+  /etc/apparmor.d/abstractions/libvirt-qemu
+
+sudo install -d -m 0755 \
+  /etc/apparmor.d/abstractions/libvirt-qemu.d
+
+printf '%s\n' 'owner @{run}/libvirt/qemu/passt/* rw,' | \
+  sudo tee /etc/apparmor.d/abstractions/libvirt-qemu.d/99-passt-local >/dev/null
+
+sudo systemctl reload apparmor
+```
+
+Do not disable AppArmor globally. The launcher detects the incompatible read-only `passt` rule before binding VFIO devices or recreating VM disks.
+
 ### 1. Clone the repo
 
 Clone the repository onto the target host. See [docs/swarm.md](docs/swarm.md) for the exact command.

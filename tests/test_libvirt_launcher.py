@@ -218,12 +218,29 @@ class CapabilityTests(unittest.TestCase):
 
     def test_existing_domain_name_is_rejected(self):
         conn = mock.Mock()
-        conn.lookupByName.return_value = object()
+        existing = mock.Mock()
+        existing.name.return_value = "super-protocol-3"
+        conn.listAllDomains.return_value = [existing]
         libvirt_module = mock.Mock()
         with self.assertRaisesRegex(RuntimeError, "already exists"):
             launcher.ensure_domain_name_available(
                 conn, libvirt_module, "super-protocol-3"
             )
+
+    def test_available_domain_name_does_not_trigger_libvirt_lookup_error(self):
+        conn = mock.Mock()
+        other = mock.Mock()
+        other.name.return_value = "another-domain"
+        conn.listAllDomains.return_value = [other]
+        launcher.ensure_domain_name_available(conn, mock.Mock(), "super-protocol-3")
+        conn.lookupByName.assert_not_called()
+
+    def test_passt_sigsegv_error_points_to_apparmor_audit_log(self):
+        message = launcher._format_launch_error(
+            RuntimeError("Child process (passt --one-off) unexpected fatal signal 11")
+        )
+        self.assertIn("AppArmor", message)
+        self.assertIn("journalctl -k", message)
 
     def test_preflight_subcommand_dispatches_without_building_domain(self):
         with mock.patch.object(launcher, "preflight_connection") as preflight:

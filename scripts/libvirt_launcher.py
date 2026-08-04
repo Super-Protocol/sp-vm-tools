@@ -461,14 +461,26 @@ def check_connection_capabilities(conn: Any, config: Any) -> None:
 
 def ensure_domain_name_available(conn: Any, libvirt_module: Any, name: str) -> None:
     try:
-        conn.lookupByName(name)
+        domains = conn.listAllDomains(0)
     except libvirt_module.libvirtError as exc:
-        if exc.get_error_code() == libvirt_module.VIR_ERR_NO_DOMAIN:
-            return
         raise RuntimeError(f"failed to check domain name {name!r}: {exc}") from exc
-    raise RuntimeError(
-        f"a libvirt domain named {name!r} already exists; stop it or choose --name"
-    )
+    if any(domain.name() == name for domain in domains):
+        raise RuntimeError(
+            f"a libvirt domain named {name!r} already exists; stop it or choose --name"
+        )
+
+
+def _format_launch_error(exc: BaseException) -> str:
+    message = str(exc)
+    if "passt" in message and "fatal signal 11" in message:
+        return (
+            f"libvirt failed to start the domain: {message}\n"
+            "passt was killed by SIGSEGV. On Ubuntu this commonly means that "
+            "AppArmor denied passt or its libvirt socket. Check the kernel audit "
+            "log with: journalctl -k --since '-5 min' --no-pager | "
+            "grep -E 'apparmor=\"DENIED\".*(passt|libvirt)'"
+        )
+    return f"libvirt failed to start the domain: {message}"
 
 
 def preflight_connection(emulator: str, name: str, require_iommufd: bool) -> None:
@@ -611,7 +623,7 @@ def launch(config: DomainConfig) -> None:
             if config.debug:
                 attach_serial_console(conn, domain, libvirt, str(config.log_file))
         except libvirt.libvirtError as exc:
-            raise RuntimeError(f"libvirt failed to start the domain: {exc}") from exc
+            raise RuntimeError(_format_launch_error(exc)) from exc
     finally:
         conn.close()
 

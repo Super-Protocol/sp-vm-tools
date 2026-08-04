@@ -94,6 +94,28 @@ check_libvirt_dependencies() {
     fi
 }
 
+check_passt_apparmor_profile() {
+    if [[ "${NETDEV_MODE}" != "user" && "${DEBUG_MODE}" != "true" ]]; then
+        return
+    fi
+
+    local profile=/etc/apparmor.d/abstractions/libvirt-qemu
+    [[ -r "${profile}" ]] || return
+
+    if awk '
+        /^[[:space:]]*profile passt[[:space:]]*\{/ { in_passt = 1 }
+        in_passt && /\/usr\/bin\/passt[[:space:]]+r,/ { incompatible = 1 }
+        in_passt && /^[[:space:]]*}/ { exit }
+        END { exit incompatible ? 0 : 1 }
+    ' "${profile}"; then
+        echo "Error: the libvirt AppArmor profile permits reading /usr/bin/passt but not mmap." >&2
+        echo "Ubuntu AppArmor 5 will kill passt with fatal signal 11." >&2
+        echo "Update the rule inside 'profile passt' from '/usr/bin/passt r,' to '/usr/bin/passt rm,'" >&2
+        echo "in ${profile}, reload AppArmor, and retry." >&2
+        exit 1
+    fi
+}
+
 preflight_libvirt() {
     local require_iommufd=false
     local gpu
@@ -314,6 +336,7 @@ main_libvirt() {
     check_target_os
     check_packages
     check_libvirt_dependencies
+    check_passt_apparmor_profile
     find_qemu_path
     check_qemu_version
     preflight_libvirt
