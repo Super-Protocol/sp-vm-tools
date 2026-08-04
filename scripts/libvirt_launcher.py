@@ -303,9 +303,29 @@ def _add_cpu_and_features(domain: ET.Element, config: DomainConfig) -> None:
     )
 
 
-def _add_tdx_qemu_args(domain: ET.Element, config: DomainConfig) -> None:
+def _qemu_commandline(domain: ET.Element) -> ET.Element:
     ET.register_namespace("qemu", QEMU_NS)
-    commandline = _sub(domain, f"{{{QEMU_NS}}}commandline")
+    commandline = domain.find(f"{{{QEMU_NS}}}commandline")
+    if commandline is None:
+        commandline = _sub(domain, f"{{{QEMU_NS}}}commandline")
+    return commandline
+
+
+def _add_fw_cfg_qemu_args(domain: ET.Element) -> None:
+    # Libvirt deliberately rejects opt/ovmf/* through native fwcfg XML because
+    # that namespace is reserved for OVMF.  The direct launcher needs this
+    # existing OVMF knob, so pass it through QEMU's command line namespace.
+    commandline = _qemu_commandline(domain)
+    _sub(commandline, f"{{{QEMU_NS}}}arg", value="-fw_cfg")
+    _sub(
+        commandline,
+        f"{{{QEMU_NS}}}arg",
+        value="name=opt/ovmf/X-PciMmio64,string=262144",
+    )
+
+
+def _add_tdx_qemu_args(domain: ET.Element, config: DomainConfig) -> None:
+    commandline = _qemu_commandline(domain)
     _sub(commandline, f"{{{QEMU_NS}}}arg", value="-object")
     _sub(
         commandline,
@@ -357,9 +377,6 @@ def build_domain_xml(config: DomainConfig) -> str:
     _sub(domain, "on_reboot", "restart")
     _sub(domain, "on_crash", "destroy")
 
-    sysinfo = _sub(domain, "sysinfo", type="fwcfg")
-    _sub(sysinfo, "entry", "262144", name="opt/ovmf/X-PciMmio64")
-
     devices = _sub(domain, "devices")
     _sub(devices, "emulator", config.emulator)
     _add_disk(devices, config.rootfs, "vda", "raw", True)
@@ -380,6 +397,7 @@ def build_domain_xml(config: DomainConfig) -> str:
     vsock = _sub(devices, "vsock", model="virtio")
     _sub(vsock, "cid", auto="no", address=config.guest_cid)
     _add_host_devices(devices, config)
+    _add_fw_cfg_qemu_args(domain)
 
     if config.mode == "sev-snp":
         launch_security = _sub(
