@@ -68,6 +68,7 @@ ACME_URL: https://acme.zerossl.com/v2/DV90
 **You also need:**
 - A host already bootstrapped for confidential computing (TDX or SEV-SNP) — see the [main README](../README.md).
 - `tmux`, `nftables`, `curl`, `nc` installed: `apt install tmux nftables curl netcat-openbsd`
+- Ubuntu 26.04+ with `qemu:///system`, libvirt 12.1+, `python3-libvirt`, `passt`, and `acl` configured as described in the [libvirt launcher section](../README.md#libvirt-launcher-ubuntu-2604).
 
 > Keep `provider-template/` in its own folder — not inside `sp-vm-tools` and not inside any cache folder.
 
@@ -78,7 +79,7 @@ ACME_URL: https://acme.zerossl.com/v2/DV90
 sudo ./scripts/swarm-cluster.sh up --provider-config-template ./provider-template
 
 # Check status
-./scripts/swarm-cluster.sh status
+sudo ./scripts/swarm-cluster.sh status
 
 # Stop everything
 sudo ./scripts/swarm-cluster.sh down
@@ -114,13 +115,13 @@ The bootstrap node gets all remaining host resources after subtracting the host 
 4. Generates per-node provider configs:
    - **Bootstrap**: `join_addresses: []`, `pki_authority.servers: []`.
    - **Join nodes**: `join_addresses: ["10.0.0.10:7946"]`, `caBundle` fetched automatically from bootstrap PKI.
-5. Starts each VM in its own `tmux` session (`swarm-bootstrap`, `swarm-join-1`, `swarm-join-2`), attached to the bridge via tap interfaces.
+5. Starts transient libvirt domains named `swarm-bootstrap`, `swarm-join-1`, and `swarm-join-2`, attached to the bridge via tap interfaces. In debug mode their attached serial consoles run in matching `tmux` sessions.
 6. Waits for bootstrap gossip (7946) and PKI (9443) to become ready.
 7. Fetches the CA bundle from bootstrap and injects it into join-node configs.
 8. Launches join nodes.
 9. Sets up HAProxy ingress: `gw.dyn.<global_id>.superprotocol.io` → bootstrap ports 80/443.
 
-Attach to any VM's console with `tmux attach -t swarm-bootstrap` (or `swarm-join-1` / `swarm-join-2`).
+Attach to a VM with `virsh -c qemu:///system console swarm-bootstrap` (or `swarm-join-1` / `swarm-join-2`). In debug mode, use the matching `tmux attach -t <domain>` session instead.
 
 </details>
 
