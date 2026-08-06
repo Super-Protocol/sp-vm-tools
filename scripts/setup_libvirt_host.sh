@@ -25,6 +25,7 @@ LIBVIRT_BASE_PACKAGES=(
     libvirt-daemon-lock
     libvirt-daemon-plugin-lockd
     libvirt-daemon-system
+    libvirt-daemon-system-systemd
 )
 
 LIBVIRT_PACKAGE_PATHS=()
@@ -354,6 +355,10 @@ configure_libvirt_apparmor() {
     tmp=$(mktemp)
     printf '%s\n' \
         '# Managed by sp-vm-tools bootstrap.' \
+        '/usr/local/bin/qemu-system-x86_64 rmix,' \
+        '/usr/local/share/qemu/** rk,' \
+        '/usr/local/lib{,64}/qemu/*.so mr,' \
+        '/usr/local/lib/@{multiarch}/qemu/*.so mr,' \
         'owner @{run}/libvirt/qemu/passt/* rw,' \
         'network vsock stream,' > "${tmp}"
     install -m 0644 "${tmp}" "${dropin}"
@@ -433,6 +438,34 @@ find_bootstrap_qemu() {
     return 1
 }
 
+configure_qemu_binary_permissions() {
+    local qemu real parent
+    qemu=$(find_bootstrap_qemu) || {
+        libvirt_host_error "qemu-system-x86_64 was not found"
+        return 1
+    }
+    real=$(readlink -f -- "${qemu}")
+    [[ -n "${real}" && -f "${real}" ]] || {
+        libvirt_host_error "cannot resolve QEMU binary ${qemu}"
+        return 1
+    }
+
+    if [[ "${real}" == /usr/local/* ]]; then
+        chmod a+rx "${real}"
+        parent=$(dirname "${real}")
+        while [[ "${parent}" == /usr/local/* ]]; do
+            chmod a+x "${parent}"
+            parent=$(dirname "${parent}")
+        done
+        chmod a+x /usr/local
+    fi
+
+    if ! runuser -u libvirt-qemu -- test -x "${qemu}"; then
+        libvirt_host_error "libvirt-qemu cannot execute ${qemu}; check directory permissions and noexec mounts"
+        return 1
+    fi
+}
+
 verify_libvirt_host() {
     local mode=$1 installed_version daemon_version qemu version_line qemu_major capabilities dropin
     installed_version=$(installed_libvirt_version)
@@ -459,7 +492,11 @@ verify_libvirt_host() {
         libvirt_host_error "QEMU 9 or newer is required (found ${version_line:-unknown})"
         return 1
     fi
-    capabilities=$(virsh -c "${LIBVIRT_URI}" domcapabilities --emulatorbin "${qemu}")
+    if ! capabilities=$(virsh -c "${LIBVIRT_URI}" domcapabilities --emulatorbin "${qemu}" 2>&1); then
+        libvirt_host_error "libvirt cannot probe ${qemu}: ${capabilities}"
+        echo "Check recent access denials with: journalctl -k --since '-5 min' --no-pager | grep -E 'apparmor=\"DENIED\"|qemu-system'" >&2
+        return 1
+    fi
     if ! grep -Eq "<enum[[:space:]][^>]*name=['\"]iommufd['\"]" <<< "${capabilities}"; then
         libvirt_host_error "libvirt domain capabilities do not advertise IOMMUFD for ${qemu}"
         return 1
@@ -523,7 +560,12 @@ setup_libvirt_host() {
         echo "Installed libvirt ${installed_version} is ${LIBVIRT_REQUIRED_VERSION} or newer; keeping it."
     fi
 
+    if dpkg-query -W -f='${db:Status-Status}' libvirt-daemon-system-systemd 2>/dev/null | grep -qx installed; then
+        apt-mark manual libvirt-daemon-system-systemd >/dev/null
+    fi
+
     configure_libvirt_apparmor
+    configure_qemu_binary_permissions
     # shellcheck disable=SC2119
     configure_passt_capabilities
     systemctl daemon-reload
