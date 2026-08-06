@@ -23,6 +23,7 @@ DEFAULT_CACHE="/var/lib/libvirt/images/superprotocol"
 CACHE=${DEFAULT_CACHE}
 
 LIBVIRT_DOMAIN_NAME=""
+LIBVIRT_QEMU_USER=""
 BASE_ARGS=()
 
 usage_libvirt() {
@@ -334,13 +335,55 @@ build_kernel_cmdline() {
     fi
 }
 
-grant_libvirt_file_access() {
-    local label=$1 requested_path=$2 permissions=$3
-    local qemu_user=libvirt-qemu
-    if ! id "${qemu_user}" >/dev/null 2>&1; then
-        echo "Error: the expected Ubuntu libvirt QEMU user '${qemu_user}' does not exist." >&2
+resolve_libvirt_qemu_user() {
+    if [[ -n "${LIBVIRT_QEMU_USER}" ]]; then
+        return
+    fi
+
+    local qemu_config=/etc/libvirt/qemu.conf
+    local configured_user=""
+    if [[ -r "${qemu_config}" ]]; then
+        configured_user=$(awk '
+            /^[[:space:]]*#/ { next }
+            /^[[:space:]]*user[[:space:]]*=/ {
+                value = $0
+                sub(/^[^=]*=[[:space:]]*/, "", value)
+                sub(/[[:space:]]*#.*/, "", value)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+                if (value ~ /^"[^"]*"$/) {
+                    sub(/^"/, "", value)
+                    sub(/"$/, "", value)
+                }
+                configured = value
+            }
+            END { print configured }
+        ' "${qemu_config}")
+    fi
+    configured_user=${configured_user:-libvirt-qemu}
+
+    local passwd_entry=""
+    if [[ "${configured_user}" =~ ^\+([0-9]+)$ ]]; then
+        local configured_uid=${BASH_REMATCH[1]}
+        passwd_entry=$(getent passwd | awk -F: -v uid="${configured_uid}" '
+            $3 == uid { print; exit }
+        ')
+    else
+        passwd_entry=$(getent passwd "${configured_user}" || true)
+    fi
+    if [[ -z "${passwd_entry}" ]]; then
+        echo "Error: libvirt QEMU runtime user '${configured_user}' does not exist." >&2
+        echo "Check the user setting in ${qemu_config}." >&2
         exit 1
     fi
+
+    LIBVIRT_QEMU_USER=${passwd_entry%%:*}
+    echo "Libvirt QEMU runtime user: ${LIBVIRT_QEMU_USER}"
+}
+
+grant_libvirt_file_access() {
+    local label=$1 requested_path=$2 permissions=$3
+    resolve_libvirt_qemu_user
+    local qemu_user=${LIBVIRT_QEMU_USER}
 
     local path
     if ! path=$(realpath -e -- "${requested_path}"); then

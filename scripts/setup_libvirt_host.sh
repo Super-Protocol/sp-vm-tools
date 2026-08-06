@@ -30,6 +30,7 @@ LIBVIRT_BASE_PACKAGES=(
 
 LIBVIRT_PACKAGE_PATHS=()
 PASST_REAL_BINARIES=()
+LIBVIRT_QEMU_CONFIG_CHANGED=0
 
 libvirt_host_error() {
     echo "ERROR: $*" >&2
@@ -392,6 +393,75 @@ configure_libvirt_apparmor() {
     fi
 }
 
+configure_libvirt_qemu_runtime() {
+    local config backup tmp
+    config=$(libvirt_host_path /etc/libvirt/qemu.conf)
+    backup="${config}.sp-vm-tools.bak"
+    [[ -r "${config}" ]] || {
+        libvirt_host_error "libvirt QEMU configuration is missing: ${config}"
+        return 1
+    }
+    tmp=$(mktemp)
+    awk '
+        BEGIN {
+            user_written = 0
+            group_written = 0
+            ownership_written = 0
+        }
+        /^[[:space:]]*user[[:space:]]*=/ {
+            if (!user_written) {
+                print "user = \"libvirt-qemu\""
+                user_written = 1
+            }
+            next
+        }
+        /^[[:space:]]*group[[:space:]]*=/ {
+            if (!group_written) {
+                print "group = \"libvirt-qemu\""
+                group_written = 1
+            }
+            next
+        }
+        /^[[:space:]]*dynamic_ownership[[:space:]]*=/ {
+            if (!ownership_written) {
+                print "dynamic_ownership = 1"
+                ownership_written = 1
+            }
+            next
+        }
+        { print }
+        END {
+            if (!user_written)
+                print "user = \"libvirt-qemu\""
+            if (!group_written)
+                print "group = \"libvirt-qemu\""
+            if (!ownership_written)
+                print "dynamic_ownership = 1"
+        }
+    ' "${config}" > "${tmp}"
+
+    if cmp -s "${tmp}" "${config}"; then
+        rm -f "${tmp}"
+        echo "Libvirt QEMU runtime already uses libvirt-qemu."
+        return
+    fi
+
+    if [[ -z "${SPVM_TEST_ROOT:-}" ]]; then
+        if ! assert_no_running_libvirt_domains; then
+            rm -f "${tmp}"
+            return 1
+        fi
+    fi
+    if [[ ! -e "${backup}" ]]; then
+        cp -a "${config}" "${backup}"
+    fi
+    cat "${tmp}" > "${config}"
+    chmod 0600 "${config}"
+    rm -f "${tmp}"
+    LIBVIRT_QEMU_CONFIG_CHANGED=1
+    echo "Configured libvirt QEMU runtime user/group as libvirt-qemu with dynamic ownership."
+}
+
 collect_passt_binaries() {
     local candidate real
     local -A seen=()
@@ -582,6 +652,7 @@ setup_libvirt_host() {
         apt-mark manual libvirt-daemon-system-systemd >/dev/null
     fi
 
+    configure_libvirt_qemu_runtime
     configure_libvirt_apparmor
     configure_qemu_binary_permissions
     # shellcheck disable=SC2119
@@ -592,7 +663,8 @@ setup_libvirt_host() {
 
     local daemon_version
     daemon_version=$(running_libvirt_version || true)
-    if [[ -z "${daemon_version}" ]] || \
+    if [[ "${LIBVIRT_QEMU_CONFIG_CHANGED}" -eq 1 ]] || \
+        [[ -z "${daemon_version}" ]] || \
         ! dpkg --compare-versions "${daemon_version}" ge "${LIBVIRT_REQUIRED_VERSION}"; then
         assert_no_running_libvirt_domains
         echo "Restarting libvirtd to activate the installed ${LIBVIRT_REQUIRED_VERSION} runtime"
