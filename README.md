@@ -162,7 +162,7 @@ There are two ways to run a Super Protocol Swarm cluster.
 
 ### Single-host cluster (quick start)
 
-`scripts/swarm-cluster.sh` brings up a **3-node Swarm cluster on a single host** — no multi-machine setup. It creates an isolated bridge network, launches one bootstrap + two join VMs in separate `tmux` sessions, auto-configures provider configs, and sets up ingress via HAProxy. You still need to set `gateway_hostname` in the provider template to point to the machine's public IP.
+`scripts/swarm-cluster.sh` brings up a **3-node Swarm cluster on a single host** — no multi-machine setup. It creates an isolated bridge network, launches one bootstrap + two join VMs as transient libvirt domains, auto-configures provider configs, and sets up ingress via HAProxy. In debug mode their serial consoles remain attached in separate `tmux` sessions. You still need to set `gateway_hostname` in the provider template to point to the machine's public IP.
 
 Prerequisites: a bootstrapped host (TDX or SEV-SNP), a populated provider config template (see [config.yaml reference](docs/swarm.md#configyaml-reference) for an example), and `tmux` / `nftables` / `curl` installed.
 
