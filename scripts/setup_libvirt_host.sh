@@ -340,11 +340,13 @@ patch_libvirt_apparmor_profile() {
 }
 
 configure_libvirt_apparmor() {
-    local profile dropin_dir dropin template tmp
+    local profile dropin_dir dropin template daemon_profile daemon_local tmp
     profile=$(libvirt_host_path /etc/apparmor.d/abstractions/libvirt-qemu)
     dropin_dir=$(libvirt_host_path /etc/apparmor.d/abstractions/libvirt-qemu.d)
     dropin="${dropin_dir}/99-sp-vm-tools-local"
     template=$(libvirt_host_path /etc/apparmor.d/libvirt/TEMPLATE.qemu)
+    daemon_profile=$(libvirt_host_path /etc/apparmor.d/usr.sbin.libvirtd)
+    daemon_local=$(libvirt_host_path /etc/apparmor.d/local/usr.sbin.libvirtd)
 
     [[ -r "${profile}" ]] || {
         libvirt_host_error "libvirt AppArmor profile is missing: ${profile}"
@@ -363,6 +365,22 @@ configure_libvirt_apparmor() {
         'network vsock stream,' > "${tmp}"
     install -m 0644 "${tmp}" "${dropin}"
     rm -f "${tmp}"
+
+    if [[ -r "${daemon_profile}" ]]; then
+        if ! grep -qF 'include if exists <local/usr.sbin.libvirtd>' "${daemon_profile}"; then
+            libvirt_host_error "${daemon_profile} does not include its standard local override; refusing to modify AppArmor"
+            return 1
+        fi
+        install -d -m 0755 "$(dirname "${daemon_local}")"
+        touch "${daemon_local}"
+        chmod 0644 "${daemon_local}"
+        if ! grep -qF '/usr/local/bin/qemu-system-x86_64 PUx,' "${daemon_local}"; then
+            printf '%s\n' \
+                '# Managed by sp-vm-tools: allow libvirtd capabilities probing.' \
+                '/usr/local/bin/qemu-system-x86_64 PUx,' >> "${daemon_local}"
+        fi
+        apparmor_parser -Q -r "${daemon_profile}"
+    fi
 
     [[ -r "${template}" ]] || {
         libvirt_host_error "libvirt AppArmor template is missing: ${template}"
