@@ -18,8 +18,8 @@ bootstrap() {
         exit 1
     fi
 
-    # Download and setup official Canonical TDX
-    print_section_header "Official TDX Setup"
+    # Install the project TDX kernel/QEMU stack and host attestation runtime.
+    print_section_header "TDX Host Setup"
     TMP_DIR=$(mktemp -d)
 
     echo "Installing required tools..."
@@ -66,9 +66,9 @@ bootstrap() {
     rm -rf "${TMP_DIR}"
 
     print_section_header "Installation Status"
-    echo "Official TDX installation complete."
+    echo "TDX host installation complete."
     echo "System reboot required to activate TDX."
-    echo "After reboot, use official tools to create and run TDs."
+    echo "After reboot, re-run this bootstrap to finish validation."
 }
 
 source_common

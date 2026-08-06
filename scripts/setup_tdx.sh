@@ -368,7 +368,7 @@ EOL
     # package was installed with DEBIAN_FRONTEND=noninteractive, so its interactive
     # install.sh was skipped. Reproduce here what install.sh would have done:
     # install the Node.js dependencies and generate the HTTPS SSL keys. The
-    # Canonical PPA path (< 25.10) does this via setup-attestation-host.sh.
+    # Ubuntu 24.04 receives the same setting from its attestation packages.
     if [ "$USE_INTEL_REPO" -eq 1 ]; then
         # Install PCCS Node.js dependencies. Without node_modules pccs_server.js
         # fails to start with "Cannot find package 'config'".
@@ -527,7 +527,6 @@ install_tdx_release_packages() {
 }
 
 TMP_DIR=$1
-TDX_REF="3.3"
 
 check_tdx_os_version() {
     local min_version="24.04"
@@ -561,7 +560,20 @@ check_tdx_os_version() {
     fi
 }
 
+cleanup_legacy_canonical_apt_policy() {
+    # Older bootstrap revisions ran canonical/tdx helpers, which left a global
+    # priority-4000 pin and enabled unattended package downgrades. Remove those
+    # settings before any package operation. Repository entries may remain at
+    # normal APT priority for the attestation packages used below.
+    rm -f \
+        /etc/apt/preferences.d/kobuk-tdx-kobuk-team-tdx-release-pin-4000 \
+        /etc/apt/preferences.d/kobuk-tdx-kobuk-team-tdx-attestation-release-pin-4000 \
+        /etc/apt/apt.conf.d/99unattended-upgrades-kobuk-tdx-release \
+        /etc/apt/apt.conf.d/99unattended-upgrades-kobuk-tdx-attestation-release
+}
+
 check_tdx_os_version
+cleanup_legacy_canonical_apt_policy
 
 # Determine package source based on Ubuntu version
 UBUNTU_VERSION=$(. /etc/os-release && echo "$VERSION_ID")
@@ -573,7 +585,7 @@ if [ "$UBUNTU_NUM" -ge 2510 ]; then
     echo "Ubuntu ${UBUNTU_VERSION}: using Intel SGX repository"
 else
     USE_INTEL_REPO=0
-    echo "Ubuntu ${UBUNTU_VERSION}: using Canonical kobuk-team PPA"
+    echo "Ubuntu ${UBUNTU_VERSION}: using project TDX kernel/QEMU and the Canonical attestation PPA"
 fi
 
 if [ "$USE_INTEL_REPO" -eq 1 ]; then
@@ -589,34 +601,10 @@ if [ "$USE_INTEL_REPO" -eq 1 ]; then
     DEBIAN_FRONTEND=noninteractive apt-get install -y qemu-system-x86 qemu-utils
     check_error "Failed to install QEMU"
 else
-    # Ubuntu < 25.10: TDX host support is not in the stock kernel, so use the
-    # canonical/tdx host setup (kobuk PPA + -intel kernel). The clone is also
-    # reused below for attestation (setup-attestation-host.sh).
-    if [ -d "${TMP_DIR}/tdx-cannonical" ]; then
-        echo -e "${YELLOW}Directory ${TMP_DIR}/tdx-cannonical already exists${NC}"
-        echo -e "Removing existing directory..."
-        rm -rf "${TMP_DIR}/tdx-cannonical"
-    fi
-
-    git clone https://github.com/canonical/tdx.git "${TMP_DIR}/tdx-cannonical"
-    if [ $? -ne 0 ]; then
-        echo "Failed to download the canonical/tdx repository."
-        exit 1
-    fi
-    SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/setup-tdx-host.sh
-
-    git -C "${TMP_DIR}/tdx-cannonical" checkout --detach "${TDX_REF}"
-    if [ $? -ne 0 ]; then
-        echo "Failed to checkout tdx ref ${TDX_REF}."
-        exit 1
-    fi
-
-    print_section_header "Installing hypervisor and kernel..."
-    echo "Running setup-tdx-host.sh..."
-    chmod +x "${SCRIPT_PATH}"
-    "${SCRIPT_PATH}"
-
-    # On 24.04 install our matched custom kernel + sp-qemu-tdx bundle on top.
+    # Ubuntu 24.04 uses the matched project kernel/QEMU bundle directly. Do not
+    # run Canonical's setup-tdx-host.sh: it globally pins its PPA at priority
+    # 4000 and explicitly permits downgrades of QEMU and libvirt.
+    print_section_header "Installing TDX kernel and QEMU..."
     install_tdx_release_packages "${TMP_DIR}"
 fi
 
@@ -647,10 +635,15 @@ if [ "$USE_INTEL_REPO" -eq 1 ]; then
 deb [signed-by=/etc/apt/keyrings/intel-sgx-keyring.asc arch=amd64] https://download.01.org/intel-sgx/sgx_repo/ubuntu ${CODENAME} main
 EOF
 else
-    # Ensure kobuk-team PPA is present
-    if ! grep -rq "kobuk-team" /etc/apt/sources.list.d/ 2>/dev/null; then
-        add-apt-repository -y ppa:kobuk-team/tdx-release
-        check_error "Failed to add kobuk-team PPA"
+    apt-get install -y software-properties-common
+    if grep -Rqs 'kobuk-team/tdx-release' /etc/apt/sources.list.d/; then
+        echo "Removing obsolete kobuk-team/tdx-release PPA"
+        add-apt-repository -y --remove ppa:kobuk-team/tdx-release
+        check_error "Failed to remove the obsolete TDX host PPA"
+    fi
+    if ! grep -Rqs 'kobuk-team/tdx-attestation-release' /etc/apt/sources.list.d/; then
+        add-apt-repository -y ppa:kobuk-team/tdx-attestation-release
+        check_error "Failed to add the TDX attestation PPA"
     fi
 fi
 
@@ -873,15 +866,14 @@ if [ "$USE_INTEL_REPO" -eq 1 ]; then
         sgx-pck-id-retrieval-tool
     check_error "Failed to install packages"
 else
-    # Canonical PPA: install attestation packages via the official script
-    # from canonical/tdx.
-    ATTEST_SCRIPT="${TMP_DIR}/tdx-cannonical/attestation/setup-attestation-host.sh"
-    if [ ! -f "$ATTEST_SCRIPT" ]; then
-        echo -e "${RED}ERROR: attestation setup script not found at ${ATTEST_SCRIPT}${NC}"
-        exit 1
-    fi
-    chmod +x "$ATTEST_SCRIPT"
-    "$ATTEST_SCRIPT"
+    # Install the same host attestation components used by Canonical, but do it
+    # directly and without their global PPA pin or --allow-downgrades.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-remove \
+        sgx-dcap-pccs \
+        tdx-qgs \
+        libsgx-dcap-default-qpl \
+        sgx-ra-service \
+        sgx-pck-id-retrieval-tool
     check_error "Failed to install attestation packages"
 fi
 
