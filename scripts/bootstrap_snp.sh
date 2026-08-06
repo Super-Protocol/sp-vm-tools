@@ -4,6 +4,7 @@ set -e
 source_common() {
     local script_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
     source "${script_dir}/common.sh"
+    source "${script_dir}/setup_libvirt_host.sh"
 }
 
 get_kernel_log() {
@@ -361,6 +362,7 @@ update_snp_firmware() {
 
 bootstrap() {
     check_os_version "24.04"
+    get_supported_ubuntu_version
 
     CPU_MODEL=$(lscpu | grep "^Model name:" | sed 's/Model name: *//')
 
@@ -437,6 +439,8 @@ bootstrap() {
             exit 1
         fi
     fi
+
+    setup_libvirt_host sev-snp
 
     print_section_header "Hardware Configuration"
     if command -v lspci >/dev/null; then

@@ -4,10 +4,12 @@ set -e
 source_common() {
     local script_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
     source "${script_dir}/common.sh"
+    source "${script_dir}/setup_libvirt_host.sh"
 }
 
 bootstrap() {
     check_os_version "24.04"
+    get_supported_ubuntu_version
 
     # Check if the script is running as root
     print_section_header "Privilege Check"
@@ -45,6 +47,8 @@ bootstrap() {
         echo -e "${RED}ERROR: setup_tdx.sh not found${NC}"
         exit 1
     fi
+
+    setup_libvirt_host tdx
 
     print_section_header "Hardware Configuration"
     if command -v lspci >/dev/null; then

@@ -63,12 +63,22 @@ check_target_os() {
     os_id=$(sed -n 's/^ID=//p' /etc/os-release | tr -d '"')
     os_version=$(sed -n 's/^VERSION_ID=//p' /etc/os-release | tr -d '"')
     if [[ "${os_id}" != "ubuntu" ]]; then
-        echo "Error: this launcher supports Ubuntu 26.04 or newer (found ${os_id:-unknown})." >&2
+        echo "Error: this launcher supports Ubuntu 24.04 and 26.04 (found ${os_id:-unknown})." >&2
         exit 1
     fi
-    if ! dpkg --compare-versions "${os_version}" ge "26.04"; then
-        echo "Error: this launcher requires Ubuntu 26.04 or newer (found ${os_version:-unknown})." >&2
+    if [[ "${os_version}" != "24.04" && "${os_version}" != "26.04" ]]; then
+        echo "Error: this launcher supports Ubuntu 24.04 and 26.04 (found ${os_version:-unknown})." >&2
         exit 1
+    fi
+}
+
+bootstrap_hint() {
+    if [[ "${VM_MODE}" == "tdx" ]]; then
+        echo "Re-run scripts/bootstrap_tdx.sh to restore the libvirt host configuration." >&2
+    elif [[ "${VM_MODE}" == "sev-snp" ]]; then
+        echo "Re-run scripts/bootstrap_snp.sh to restore the libvirt host configuration." >&2
+    else
+        echo "Re-run the host bootstrap to restore the libvirt host configuration." >&2
     fi
 }
 
@@ -112,8 +122,29 @@ check_passt_apparmor_profile() {
     ' "${profile}"; then
         echo "Error: the libvirt AppArmor profile permits reading /usr/bin/passt but not mmap." >&2
         echo "Ubuntu AppArmor 5 will kill passt with fatal signal 11." >&2
-        echo "Update the rule inside 'profile passt' from '/usr/bin/passt r,' to '/usr/bin/passt rm,'" >&2
-        echo "in ${profile}, reload AppArmor, and retry." >&2
+        bootstrap_hint
+        exit 1
+    fi
+
+    if ! awk '
+        /^[[:space:]]*profile passt[[:space:]]*\{/ { in_passt = 1 }
+        in_passt && /^[[:space:]]*capability[[:space:]]+net_bind_service,/ { found = 1 }
+        in_passt && /^[[:space:]]*}/ { exit }
+        END { exit found ? 0 : 1 }
+    ' "${profile}"; then
+        echo "Error: the nested passt AppArmor profile does not allow CAP_NET_BIND_SERVICE." >&2
+        bootstrap_hint
+        exit 1
+    fi
+}
+
+check_tdx_vsock_apparmor_profile() {
+    [[ "${VM_MODE}" == "tdx" ]] || return
+    local dropin=/etc/apparmor.d/abstractions/libvirt-qemu.d/99-sp-vm-tools-local
+    if [[ ! -r "${dropin}" ]] || ! grep -qF 'network vsock stream,' "${dropin}"; then
+        echo "Error: TDX QGS requires the AppArmor rule 'network vsock stream,'." >&2
+        echo "Expected it in ${dropin}." >&2
+        bootstrap_hint
         exit 1
     fi
 }
@@ -145,32 +176,31 @@ check_passt_privileged_ports() {
         return
     fi
 
-    local sysctl_path=/proc/sys/net/ipv4/ip_unprivileged_port_start
-    [[ -r "${sysctl_path}" ]] || return
-    local current
-    current=$(<"${sysctl_path}")
-    if ((current > minimum)); then
-        local capability_ok=true found_passt=false binary path capabilities
-        if ! command -v getcap >/dev/null 2>&1; then
-            capability_ok=false
-        else
-            for binary in passt passt.avx2; do
-                path=$(command -v "${binary}" 2>/dev/null || true)
-                [[ -n "${path}" ]] || continue
-                found_passt=true
-                capabilities=$(getcap "${path}" 2>/dev/null || true)
-                if [[ "${capabilities}" != *cap_net_bind_service* ]]; then
-                    capability_ok=false
-                fi
-            done
-        fi
-        if [[ "${found_passt}" == "true" && "${capability_ok}" == "true" ]]; then
-            return
-        fi
+    command -v getcap >/dev/null 2>&1 || {
+        echo "Error: getcap is required to verify privileged passt port ${minimum}." >&2
+        bootstrap_hint
+        exit 1
+    }
 
-        echo "Error: passt must bind host port ${minimum}, but unprivileged ports currently start at ${current}." >&2
-        echo "Lower net.ipv4.ip_unprivileged_port_start to ${minimum}, or grant CAP_NET_BIND_SERVICE" >&2
-        echo "to every installed passt binary, then retry." >&2
+    local binary path real capabilities found_passt=false
+    local -A checked=()
+    for binary in passt passt.avx2; do
+        path=$(command -v "${binary}" 2>/dev/null || true)
+        [[ -n "${path}" ]] || continue
+        real=$(readlink -f -- "${path}")
+        [[ -n "${real}" && -z "${checked[${real}]:-}" ]] || continue
+        checked["${real}"]=1
+        found_passt=true
+        capabilities=$(getcap "${real}" 2>/dev/null || true)
+        if [[ "${capabilities}" != *cap_net_bind_service* ]]; then
+            echo "Error: passt must bind host port ${minimum}, but ${real} lacks CAP_NET_BIND_SERVICE." >&2
+            bootstrap_hint
+            exit 1
+        fi
+    done
+    if [[ "${found_passt}" != "true" ]]; then
+        echo "Error: no passt binary was found for privileged host port ${minimum}." >&2
+        bootstrap_hint
         exit 1
     fi
 }
@@ -464,6 +494,7 @@ main_libvirt() {
     check_packages
     check_libvirt_dependencies
     check_passt_apparmor_profile
+    check_tdx_vsock_apparmor_profile
     find_qemu_path
     check_qemu_version
     preflight_libvirt

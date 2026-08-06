@@ -22,7 +22,7 @@ Utilities for bootstrapping a Confidential Computing host (Intel **TDX** or AMD 
 | `scripts/bootstrap_tdx.sh` | Turn an Ubuntu host into a TDX-capable hypervisor (kernel, QEMU, OVMF, attestation, GPU passthrough). |
 | `scripts/bootstrap_snp.sh` | Turn an Ubuntu host into a SEV-SNP-capable hypervisor (firmware, modules, GPU passthrough). |
 | `scripts/start_super_protocol.sh` | Start a confidential VM (TDX / SEV-SNP / untrusted) from a Super Protocol release image. |
-| `scripts/start_super_protocol_libvirt.sh` | Start the same VM as a transient `qemu:///system` domain through libvirt-python (Ubuntu 26.04+). |
+| `scripts/start_super_protocol_libvirt.sh` | Start the same VM as a transient `qemu:///system` domain through libvirt-python (Ubuntu 24.04 or 26.04). |
 | `scripts/swarm-cluster.sh` | Bring up a 3-node Swarm cluster on a single host. |
 | `scripts/check_configuration.sh`, `get_super_running_vms.sh` | Auxiliary tooling. |
 
@@ -36,9 +36,9 @@ This is the main path: take a bare Ubuntu host, turn it into a confidential hype
 
 For the exact commands to clone the repository, run the bootstrap scripts, and launch a VM, see [docs/swarm.md](docs/swarm.md).
 
-### Libvirt launcher (Ubuntu 26.04+)
+### Libvirt launcher (Ubuntu 24.04 and 26.04)
 
-`scripts/start_super_protocol_libvirt.sh` reuses the release, disk, provider-config, and VFIO preparation from the direct QEMU launcher, then builds domain XML and starts a transient domain through `libvirt-python`. It requires `libvirt-daemon-system`, `libvirt-clients`, `python3-libvirt`, and `passt`. GPU passthrough uses IOMMUFD and therefore requires libvirt **12.1.0 or newer**; the launcher checks the daemon and domain capabilities before binding devices or recreating disks.
+`scripts/start_super_protocol_libvirt.sh` reuses the release, disk, provider-config, and VFIO preparation from the direct QEMU launcher, then builds domain XML and starts a transient domain through `libvirt-python`. GPU passthrough uses IOMMUFD. The TDX and SEV-SNP bootstrap scripts install libvirt **12.5.0** when the system version is older, configure AppArmor, grant `passt` the capability required for privileged ports, and validate the daemon and domain capabilities before VFIO devices are bound.
 
 The command line is the same as for `start_super_protocol.sh`, with an optional domain name:
 
@@ -51,69 +51,33 @@ sudo ./scripts/start_super_protocol_libvirt.sh \
 
 With `--debug false` the command returns after the domain starts. With `--debug true --log_file /path/to/boot.log`, it attaches a bidirectional serial console and copies console output to the log; `Ctrl-C` or `Ctrl-]` detaches without stopping the VM. Use `virsh -c qemu:///system list`, `console`, `shutdown`, or `destroy` to manage it. `--gpu none` disables GPU, NVSwitch, and CX7 passthrough for diagnostics.
 
-#### Ubuntu 26.04 AppArmor and `passt`
+#### Libvirt host configuration
 
-The Ubuntu 26.04 libvirt AppArmor profile may allow `/usr/bin/passt` to be read but not memory-mapped. In that case libvirt reports `passt ... unexpected fatal signal 11`, while the kernel audit log contains a denial similar to:
-
-```text
-apparmor="DENIED" operation="file_mmap" name="/usr/bin/passt" requested_mask="rm"
-```
-
-Confirm the cause with:
+Run the bootstrap matching the host CPU before using the libvirt launcher:
 
 ```bash
-sudo journalctl -k --since '-10 min' --no-pager |
-  grep -E 'apparmor="DENIED".*(passt|libvirt)|comm="passt"'
+sudo ./scripts/bootstrap_tdx.sh
+# or
+sudo ./scripts/bootstrap_snp.sh
 ```
 
-Until this host configuration is incorporated into the bootstrap scripts, back up and adjust the nested `passt` profile, then add a local rule allowing QEMU to connect to the libvirt-managed socket:
+The bootstrap performs the host-wide work that previously required manual fixes:
 
-```bash
-sudo cp -a --update=none \
-  /etc/apparmor.d/abstractions/libvirt-qemu \
-  /etc/apparmor.d/abstractions/libvirt-qemu.sp-vm-tools.bak
+- installs the project libvirt 12.5 packages when the installed version is older;
+- preserves already installed libvirt split drivers during the package transaction;
+- enables executable mmap and the libvirt socket in the nested AppArmor `passt` profile;
+- permits QEMU to contact TDX QGS through VSOCK;
+- applies `CAP_NET_BIND_SERVICE` to every installed `passt` binary;
+- prepares `/var/lib/libvirt/images/superprotocol` and validates `qemu:///system`.
 
-sudo sed -i \
-  '/^[[:space:]]*profile passt[[:space:]]*{/,/^[[:space:]]*}/ s|/usr/bin/passt r,|/usr/bin/passt rm,|' \
-  /etc/apparmor.d/abstractions/libvirt-qemu
+The bootstrap deliberately does not change `net.ipv4.ip_unprivileged_port_start`. File capabilities can be removed when the administrator upgrades or reinstalls `passt`; re-run the same bootstrap to restore them. The launcher detects missing AppArmor rules or capabilities before preparing VM disks and prints the appropriate bootstrap command.
 
-sudo install -d -m 0755 \
-  /etc/apparmor.d/abstractions/libvirt-qemu.d
+On Ubuntu 24.04, the bootstrap adapts only the verified temporary copy of the
+project `libvirt-daemon-driver-qemu` package to the `systemd-sysusers` syntax
+supported by that release. The downloaded release archive itself is not
+modified.
 
-printf '%s\n' 'owner @{run}/libvirt/qemu/passt/* rw,' | \
-  sudo tee /etc/apparmor.d/abstractions/libvirt-qemu.d/99-passt-local >/dev/null
-
-sudo systemctl reload apparmor
-```
-
-Do not disable AppArmor globally. The launcher detects the incompatible read-only `passt` rule before binding VFIO devices or recreating VM disks.
-
-`passt` runs as the unprivileged libvirt QEMU user. Forwarding a host port below 1024 therefore also requires lowering the host's unprivileged-port boundary to the lowest forwarded port. For the default DNS port, configure it persistently with:
-
-```bash
-printf '%s\n' 'net.ipv4.ip_unprivileged_port_start = 53' | \
-  sudo tee /etc/sysctl.d/90-sp-vm-passt.conf >/dev/null
-
-sudo sysctl --system
-```
-
-The launcher checks this value before preparing the VM. This sysctl and the AppArmor adjustment are temporary host-preparation steps that should be moved into the Ubuntu 26.04 bootstrap in the future.
-
-As a narrower alternative to changing the system-wide sysctl, grant `CAP_NET_BIND_SERVICE` only to the installed `passt` binaries:
-
-```bash
-sudo apt-get install libcap2-bin
-
-for binary in /usr/bin/passt /usr/bin/passt.avx2; do
-  if [[ -x "${binary}" ]]; then
-    sudo setcap 'cap_net_bind_service=+ep' "${binary}"
-  fi
-done
-
-getcap /usr/bin/passt /usr/bin/passt.avx2 2>/dev/null
-```
-
-The AppArmor profile above already allows this capability, and the launcher recognizes it during preflight. Package upgrades can replace the binaries and remove their file capabilities, in which case the `setcap` step must be repeated. The `passt` project recommends the sysctl method in general, but documents file capabilities as an option on hosts sufficiently constrained by an LSM such as AppArmor.
+Do not disable AppArmor globally. For diagnostics, inspect recent denials with `journalctl -k --since '-10 min' --no-pager`.
 
 ### 1. Clone the repo
 
@@ -133,6 +97,7 @@ What it does:
 4. Runs the official `setup-tdx-host.sh` from `canonical/tdx`.
 5. Updates the Intel TDX-Module to a known-good version.
 6. Configures NVIDIA GPUs for Confidential Computing (CC mode + `vfio-pci` binding) and, on B200 systems, sets up ConnectX-7 bridges for VFIO passthrough.
+7. Installs and validates libvirt 12.5, AppArmor policy, VSOCK access, and `passt` capabilities before binding devices to the VM stack.
 
 > **Note:** Some steps require manual action to take effect. The script may stop and ask you to do something, then need to be re-run — this is expected. Follow the on-screen instructions and re-run to finish.
 
@@ -145,6 +110,7 @@ What it does:
 3. Downloads and installs the matching AMD SEV firmware blob to `/lib/firmware/amd/` and reloads `ccp` / `kvm_amd`.
 4. Runs SNP status checks (RMP table, SEV / SEV-SNP API versions, ASID allocation, IOMMU groups, hugepages, CPU governor).
 5. Configures NVIDIA GPUs for CC mode and binds them to `vfio-pci`.
+6. Installs and validates libvirt 12.5, AppArmor policy, and `passt` capabilities before binding devices to the VM stack.
 
 > **Ubuntu 24.04 note:** the SNP bootstrap installs a bundled Linux **6.16** kernel. On some systems, network interfaces may be renamed after reboot, which can affect networking and remote SSH access. Make sure you have iKVM or other interactive console access before rebooting, so you can reconfigure networking for the new interface names if needed.
 
@@ -155,6 +121,15 @@ A reboot is required partway through bootstrap. After reboot, re-run the same bo
 ### 4. Verify the host
 
 `scripts/check_configuration.sh` prints a hardware overview (CPU, memory, network, disks, RAID/SMART) you can compare against the [Requirements](#requirements). See [docs/swarm.md](docs/swarm.md) for how to run it.
+
+Hardware acceptance remains a manual step because containers cannot validate KVM, IOMMUFD, QGS, VSOCK, or physical GPU assignment. On each prepared host verify:
+
+- a transient VM starts in release and debug modes;
+- TCP/UDP forwarding works on host ports 53, 80, and 443;
+- TDX measurement returns a non-empty quote and PKI/gossip become ready;
+- SEV-SNP launch security is active;
+- `--gpu none` works and an enabled GPU is attached through IOMMUFD;
+- the kernel audit log contains no new `passt`, libvirt, or VSOCK AppArmor denial.
 
 ## Running a Swarm cluster
 
