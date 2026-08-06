@@ -85,6 +85,25 @@ installed_libvirt_version() {
     dpkg-query -W -f='${Version}\n' libvirt-daemon 2>/dev/null || true
 }
 
+running_libvirt_version() {
+    local numeric
+    numeric=$(python3 -c '
+import libvirt
+conn = libvirt.openReadOnly("qemu:///system")
+try:
+    print(conn.getLibVersion())
+finally:
+    conn.close()
+' 2>/dev/null || true)
+    if [[ ! "${numeric}" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    printf '%d.%d.%d\n' \
+        "$((numeric / 1000000))" \
+        "$(((numeric / 1000) % 1000))" \
+        "$((numeric % 1000))"
+}
+
 libvirt_upgrade_required() {
     local installed_version=${1:-}
     [[ -z "${installed_version}" ]] || \
@@ -425,7 +444,7 @@ verify_libvirt_host() {
     id libvirt-qemu >/dev/null
     aa-status --enabled >/dev/null
     virsh -c "${LIBVIRT_URI}" uri >/dev/null
-    daemon_version=$(virsh -c "${LIBVIRT_URI}" version --daemon 2>/dev/null | sed -nE 's/.*daemon:[[:space:]]*([0-9.]+).*/\1/p' | tail -n 1)
+    daemon_version=$(running_libvirt_version || true)
     if [[ -z "${daemon_version}" ]] || ! dpkg --compare-versions "${daemon_version}" ge "${LIBVIRT_REQUIRED_VERSION}"; then
         libvirt_host_error "running libvirt daemon is older than ${LIBVIRT_REQUIRED_VERSION} (${daemon_version:-unknown})"
         return 1
@@ -510,6 +529,16 @@ setup_libvirt_host() {
     systemctl daemon-reload
     systemctl enable --now libvirtd.service
     systemctl start virtlogd.socket virtlockd.socket
+
+    local daemon_version
+    daemon_version=$(running_libvirt_version || true)
+    if [[ -z "${daemon_version}" ]] || \
+        ! dpkg --compare-versions "${daemon_version}" ge "${LIBVIRT_REQUIRED_VERSION}"; then
+        assert_no_running_libvirt_domains
+        echo "Restarting libvirtd to activate the installed ${LIBVIRT_REQUIRED_VERSION} runtime"
+        systemctl restart libvirtd.service
+    fi
+
     install -d -o libvirt-qemu -g libvirt-qemu -m 0750 \
         /var/lib/libvirt/images/superprotocol
     verify_libvirt_host "${mode}"
