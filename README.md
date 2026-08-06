@@ -92,9 +92,9 @@ Pick the script that matches your CPU vendor. See [docs/swarm.md](docs/swarm.md)
 What it does:
 
 1. Verifies Ubuntu version and root privileges.
-2. Runs `setup_tdx.sh` to install the Canonical TDX 3.3 stack and PCCS attestation host components.
+2. Runs `setup_tdx.sh` to install the project-matched TDX kernel/QEMU bundle and PCCS attestation host components.
 3. Verifies BIOS/CPU TDX settings (TME, TME-MT, SEAM, TXT, SGX, …).
-4. Runs the official `setup-tdx-host.sh` from `canonical/tdx`.
+4. Installs the required QGS/PCCS attestation packages directly, without running Canonical's host-setup script or enabling global package downgrades.
 5. Updates the Intel TDX-Module to a known-good version.
 6. Configures NVIDIA GPUs for Confidential Computing (CC mode + `vfio-pci` binding) and, on B200 systems, sets up ConnectX-7 bridges for VFIO passthrough.
 7. Installs and validates libvirt 12.5, AppArmor policy, VSOCK access, and `passt` capabilities before binding devices to the VM stack.
