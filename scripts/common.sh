@@ -557,6 +557,17 @@ ensure_cmdline_param() {
 setup_grub() {
     local new_kernel="$1"
     local type=$2
+    local grub_entry="Advanced options for Ubuntu>Ubuntu, with Linux ${new_kernel}"
+    local ubuntu_version=""
+
+    if [ -r /etc/os-release ]; then
+        ubuntu_version=$(. /etc/os-release && printf '%s' "${VERSION_ID:-}")
+    fi
+
+    if [ -z "$ubuntu_version" ]; then
+        echo "Unable to determine the Ubuntu version for GRUB setup" >&2
+        return 1
+    fi
 
     if [[ "$type" != "tdx" && "$type" != "snp" ]]; then
         echo "Invalid type: $type. Must be 'tdx' or 'snp'." >&2
@@ -573,7 +584,8 @@ setup_grub() {
         cp /etc/default/grub "/etc/default/grub.backup.$(date +%Y%m%d_%H%M%S)"
     fi
 
-    # Directly set the first menuentry as default since it's our new kernel
+    # Keep the base default release-neutral. The drop-in below selects the
+    # requested custom kernel only while this Ubuntu release is installed.
     sed -i '/^GRUB_DEFAULT=/d' /etc/default/grub
     echo 'GRUB_DEFAULT=0' > /etc/default/grub.new
     cat /etc/default/grub >> /etc/default/grub.new
@@ -603,14 +615,26 @@ setup_grub() {
         echo 'GRUB_RECORDFAIL_TIMEOUT=5' >> /etc/default/grub
     fi
 
-    # Create a custom configuration file to ensure our kernel is first
+    # Select the exact kernel instead of assuming it sorts as menu entry zero.
+    # Limit the override to this Ubuntu release so a future release upgrade
+    # automatically returns to its newer distro kernel.
     mkdir -p /etc/default/grub.d
-    echo "# Custom kernel order configuration" > "/etc/default/grub.d/99-${type}-kernel.cfg"
-    echo "GRUB_DEFAULT=0" >> "/etc/default/grub.d/99-${type}-kernel.cfg"
+    {
+        echo "# Custom kernel selection for Ubuntu ${ubuntu_version}"
+        echo '[ -r /etc/os-release ] && . /etc/os-release'
+        echo "if [ \"\${VERSION_ID:-}\" = \"${ubuntu_version}\" ]; then"
+        echo "    GRUB_DEFAULT=\"${grub_entry}\""
+        echo 'fi'
+    } > "/etc/default/grub.d/99-${type}-kernel.cfg"
     
     # Force regeneration of grub.cfg and initramfs
     update-initramfs -u -k "${new_kernel}"
     update-grub2 || update-grub
+
+    if ! grep -Fq "menuentry 'Ubuntu, with Linux ${new_kernel}'" /boot/grub/grub.cfg; then
+        echo "Failed to find the requested kernel in GRUB: ${new_kernel}" >&2
+        return 1
+    fi
 
     # For UEFI systems, ensure the boot entry is updated
     if [ -d /sys/firmware/efi ]; then
@@ -631,14 +655,14 @@ setup_grub() {
         fi
     fi
 
-    # Use both grub-set-default and grub-reboot for maximum reliability
+    # Use the exact submenu entry for both persistent and one-shot selection.
     if command -v grub-set-default >/dev/null 2>&1; then
-        grub-set-default 0
+        grub-set-default "${grub_entry}"
         echo "Set default boot entry using grub-set-default"
     fi
 
     if command -v grub-reboot >/dev/null 2>&1; then
-        grub-reboot 0
+        grub-reboot "${grub_entry}"
         echo "Set next boot entry using grub-reboot"
     fi
 
