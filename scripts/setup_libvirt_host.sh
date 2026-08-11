@@ -258,31 +258,31 @@ assert_safe_apt_simulation() {
 
 install_project_libvirt() {
     local work_dir archive simulation
-    assert_no_running_libvirt_domains
-    work_dir=$(mktemp -d /var/tmp/sp-vm-libvirt.XXXXXX)
-    chmod 0755 "${work_dir}"
+    assert_no_running_libvirt_domains || return 1
+    work_dir=$(mktemp -d /var/tmp/sp-vm-libvirt.XXXXXX) || return 1
+    chmod 0755 "${work_dir}" || return 1
     archive="${work_dir}/${LIBVIRT_RELEASE_ASSET}"
 
     echo "Downloading libvirt ${LIBVIRT_REQUIRED_VERSION} from ${LIBVIRT_RELEASE_URL}"
-    wget --https-only --tries=3 -O "${archive}" "${LIBVIRT_RELEASE_URL}"
-    chmod 0644 "${archive}"
-    verify_and_extract_libvirt_archive "${archive}" "${work_dir}"
-    prepare_libvirt_package_compatibility "${LIBVIRT_PACKAGE_DIR}" "${UBUNTU_VERSION}"
-    find "${work_dir}" -type d -exec chmod a+rx {} +
-    find "${work_dir}" -type f \( -name '*.deb' -o -name '*.ddeb' \) -exec chmod a+r {} +
-    build_libvirt_package_plan "${LIBVIRT_PACKAGE_DIR}"
+    wget --https-only --tries=3 -O "${archive}" "${LIBVIRT_RELEASE_URL}" || return 1
+    chmod 0644 "${archive}" || return 1
+    verify_and_extract_libvirt_archive "${archive}" "${work_dir}" || return 1
+    prepare_libvirt_package_compatibility "${LIBVIRT_PACKAGE_DIR}" "${UBUNTU_VERSION}" || return 1
+    find "${work_dir}" -type d -exec chmod a+rx {} + || return 1
+    find "${work_dir}" -type f \( -name '*.deb' -o -name '*.ddeb' \) -exec chmod a+r {} + || return 1
+    build_libvirt_package_plan "${LIBVIRT_PACKAGE_DIR}" || return 1
 
     echo "APT simulation for the libvirt upgrade:"
-    simulation=$(apt-get --simulate --no-install-recommends --no-remove install "${LIBVIRT_PACKAGE_PATHS[@]}")
+    simulation=$(LC_ALL=C apt-get --simulate --no-install-recommends --no-remove install "${LIBVIRT_PACKAGE_PATHS[@]}") || return 1
     printf '%s\n' "${simulation}"
-    assert_safe_apt_simulation "${simulation}"
+    assert_safe_apt_simulation "${simulation}" || return 1
 
     DEBIAN_FRONTEND=noninteractive apt-get \
         --no-install-recommends \
         --no-remove \
         -o Dpkg::Options::=--force-confold \
-        install -y "${LIBVIRT_PACKAGE_PATHS[@]}"
-    rm -rf "${work_dir}"
+        install -y "${LIBVIRT_PACKAGE_PATHS[@]}" || return 1
+    rm -rf "${work_dir}" || return 1
 }
 
 passthrough_profile_state() {
@@ -353,7 +353,7 @@ configure_libvirt_apparmor() {
         libvirt_host_error "libvirt AppArmor profile is missing: ${profile}"
         return 1
     }
-    patch_libvirt_apparmor_profile "${profile}"
+    patch_libvirt_apparmor_profile "${profile}" || return 1
     install -d -m 0755 "${dropin_dir}"
     tmp=$(mktemp)
     printf '%s\n' \
@@ -583,10 +583,22 @@ verify_libvirt_host() {
         libvirt_host_error "libvirt ${LIBVIRT_REQUIRED_VERSION} or newer is required; installed package is ${installed_version:-missing}"
         return 1
     fi
-    python3 -c 'import libvirt'
-    id libvirt-qemu >/dev/null
-    aa-status --enabled >/dev/null
-    virsh -c "${LIBVIRT_URI}" uri >/dev/null
+    python3 -c 'import libvirt' || {
+        libvirt_host_error "python3-libvirt is not importable"
+        return 1
+    }
+    id libvirt-qemu >/dev/null || {
+        libvirt_host_error "the libvirt-qemu user is missing"
+        return 1
+    }
+    aa-status --enabled >/dev/null || {
+        libvirt_host_error "AppArmor is not enabled"
+        return 1
+    }
+    virsh -c "${LIBVIRT_URI}" uri >/dev/null || {
+        libvirt_host_error "cannot connect to ${LIBVIRT_URI}"
+        return 1
+    }
     daemon_version=$(running_libvirt_version || true)
     if [[ -z "${daemon_version}" ]] || ! dpkg --compare-versions "${daemon_version}" ge "${LIBVIRT_REQUIRED_VERSION}"; then
         libvirt_host_error "running libvirt daemon is older than ${LIBVIRT_REQUIRED_VERSION} (${daemon_version:-unknown})"
@@ -612,7 +624,7 @@ verify_libvirt_host() {
         return 1
     fi
     # shellcheck disable=SC2119
-    verify_passt_capabilities
+    verify_passt_capabilities || return 1
 
     dropin=$(libvirt_host_path /etc/apparmor.d/abstractions/libvirt-qemu.d/99-sp-vm-tools-local)
     grep -qF 'network vsock stream,' "${dropin}" || {
@@ -628,7 +640,10 @@ verify_libvirt_host() {
             libvirt_host_error "QGS is not configured for VSOCK port 4050"
             return 1
         }
-        systemctl is-active --quiet qgsd
+        systemctl is-active --quiet qgsd || {
+            libvirt_host_error "qgsd is not active"
+            return 1
+        }
     elif [[ "${mode}" == "sev-snp" ]]; then
         grep -qi 'sev-snp' <<< "${capabilities}" || {
             libvirt_host_error "domain capabilities do not advertise SEV-SNP launch security"
@@ -650,22 +665,22 @@ setup_libvirt_host() {
         libvirt_host_error "libvirt host setup must run as root"
         return 1
     fi
-    get_supported_ubuntu_version
+    get_supported_ubuntu_version || return 1
 
     print_section_header "Libvirt Host Setup"
     installed_version=$(installed_libvirt_version)
     if libvirt_upgrade_required "${installed_version}"; then
-        assert_no_running_libvirt_domains
+        assert_no_running_libvirt_domains || return 1
     fi
-    apt-get update
+    apt-get update || return 1
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         acl apparmor-utils ca-certificates libcap2-bin passt python3-libvirt \
-        qemu-system-x86 qemu-utils wget
+        qemu-system-x86 qemu-utils wget || return 1
 
     installed_version=$(installed_libvirt_version)
     if libvirt_upgrade_required "${installed_version}"; then
         echo "Installed libvirt ${installed_version:-none} is older than ${LIBVIRT_REQUIRED_VERSION}."
-        install_project_libvirt
+        install_project_libvirt || return 1
     else
         echo "Installed libvirt ${installed_version} is ${LIBVIRT_REQUIRED_VERSION} or newer; keeping it."
     fi
@@ -674,29 +689,29 @@ setup_libvirt_host() {
         apt-mark manual libvirt-daemon-system-systemd >/dev/null
     fi
 
-    configure_libvirt_qemu_runtime
-    configure_libvirt_apparmor
-    configure_qemu_binary_permissions
-    configure_iommufd
+    configure_libvirt_qemu_runtime || return 1
+    configure_libvirt_apparmor || return 1
+    configure_qemu_binary_permissions || return 1
+    configure_iommufd || return 1
     # shellcheck disable=SC2119
-    configure_passt_capabilities
-    systemctl daemon-reload
-    systemctl enable --now libvirtd.service
-    systemctl start virtlogd.socket virtlockd.socket
+    configure_passt_capabilities || return 1
+    systemctl daemon-reload || return 1
+    systemctl enable --now libvirtd.service || return 1
+    systemctl start virtlogd.socket virtlockd.socket || return 1
 
     local daemon_version
     daemon_version=$(running_libvirt_version || true)
     if [[ "${LIBVIRT_QEMU_CONFIG_CHANGED}" -eq 1 ]] || \
         [[ -z "${daemon_version}" ]] || \
         ! dpkg --compare-versions "${daemon_version}" ge "${LIBVIRT_REQUIRED_VERSION}"; then
-        assert_no_running_libvirt_domains
+        assert_no_running_libvirt_domains || return 1
         echo "Restarting libvirtd to activate the installed ${LIBVIRT_REQUIRED_VERSION} runtime"
-        systemctl restart libvirtd.service
+        systemctl restart libvirtd.service || return 1
     fi
 
     install -d -o libvirt-qemu -g libvirt-qemu -m 0750 \
-        /var/lib/libvirt/images/superprotocol
-    verify_libvirt_host "${mode}"
+        /var/lib/libvirt/images/superprotocol || return 1
+    verify_libvirt_host "${mode}" || return 1
     echo "Libvirt host setup complete."
 }
 

@@ -7,6 +7,7 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 LIBVIRT_VERSION=12.5.0
 DEBIAN_REVISION=1
 SPVM_REVISION=1
+PACKAGING_COMMIT=a8f73eb070c24b72f9d6dfbeffc28a334f29e076
 OUTPUT_ROOT="${SCRIPT_DIR}/out"
 DOCKER_PLATFORM=linux/amd64
 SKIP_TESTS=false
@@ -25,6 +26,7 @@ Options:
   --libvirt-version VERSION   Upstream libvirt version (default: 12.5.0)
   --debian-revision NUMBER    Debian packaging revision (default: 1)
   --spvm-revision NUMBER      Local package revision (default: 1)
+  --packaging-commit SHA      Immutable Debian packaging commit
   --output DIR                Artifact root (default: build/libvirt/out)
   --platform PLATFORM         Docker platform (default: linux/amd64)
   --skip-tests                Set DEB_BUILD_OPTIONS=nocheck
@@ -64,6 +66,11 @@ while [[ $# -gt 0 ]]; do
         --spvm-revision)
             [[ $# -ge 2 ]] || { echo "Error: --spvm-revision requires a value" >&2; exit 2; }
             SPVM_REVISION=$2
+            shift 2
+            ;;
+        --packaging-commit)
+            [[ $# -ge 2 ]] || { echo "Error: --packaging-commit requires a value" >&2; exit 2; }
+            PACKAGING_COMMIT=$2
             shift 2
             ;;
         --output)
@@ -129,6 +136,10 @@ if ! [[ "${SPVM_REVISION}" =~ ^[1-9][0-9]*$ ]]; then
     echo "Error: SPVM revision must be a positive integer" >&2
     exit 2
 fi
+if ! [[ "${PACKAGING_COMMIT}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Error: packaging commit must be a full lowercase Git SHA" >&2
+    exit 2
+fi
 if ! command -v docker >/dev/null 2>&1; then
     echo "Error: docker is not installed" >&2
     exit 1
@@ -142,31 +153,32 @@ mkdir -p "${OUTPUT_ROOT}"
 OUTPUT_ROOT=$(realpath "${OUTPUT_ROOT}")
 
 build_target() {
-    local target=$1 ubuntu_version dockerfile image_name output_dir package_version
+    local target=$1 ubuntu_version image_name output_dir package_version
     local -a build_args
     case "${target}" in
         ubuntu24)
             ubuntu_version=24.04
-            dockerfile=Dockerfile.ubuntu24
             ;;
         ubuntu26)
             ubuntu_version=26.04
-            dockerfile=Dockerfile.ubuntu26
             ;;
     esac
 
     image_name="sp-vm-libvirt-builder:ubuntu${ubuntu_version}-${LIBVIRT_VERSION}-${DEBIAN_REVISION}"
     package_version="${LIBVIRT_VERSION}-${DEBIAN_REVISION}spvm${SPVM_REVISION}~ubuntu${ubuntu_version}.1"
     output_dir="${OUTPUT_ROOT}/ubuntu-${ubuntu_version}/${package_version}"
+    rm -rf -- "${output_dir}"
     mkdir -p "${output_dir}"
 
     build_args=(
         build
         --platform "${DOCKER_PLATFORM}"
-        --file "${SCRIPT_DIR}/${dockerfile}"
+        --file "${SCRIPT_DIR}/Dockerfile.ubuntu"
         --tag "${image_name}"
+        --build-arg "UBUNTU_VERSION=${ubuntu_version}"
         --build-arg "LIBVIRT_VERSION=${LIBVIRT_VERSION}"
         --build-arg "DEBIAN_REVISION=${DEBIAN_REVISION}"
+        --build-arg "PACKAGING_COMMIT=${PACKAGING_COMMIT}"
     )
     if [[ "${NO_CACHE}" == "true" ]]; then
         build_args+=(--no-cache)

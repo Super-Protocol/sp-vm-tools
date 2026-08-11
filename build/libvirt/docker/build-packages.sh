@@ -16,7 +16,7 @@ readonly OUTPUT_GID=${OUTPUT_GID:-0}
 # Provided by every Ubuntu builder image.
 # shellcheck disable=SC1091
 source /etc/os-release
-if [[ "${ID}" != "ubuntu" || "${VERSION_ID}" != "${TARGET_UBUNTU_VERSION}" ]]; then
+if [[ "${ID:-}" != "ubuntu" || "${VERSION_ID:-}" != "${TARGET_UBUNTU_VERSION}" ]]; then
     echo "Error: builder is Ubuntu ${VERSION_ID:-unknown}, target is ${TARGET_UBUNTU_VERSION}" >&2
     exit 1
 fi
@@ -34,8 +34,8 @@ case "${TARGET_UBUNTU_VERSION}" in
         ;;
 esac
 
-if [[ "${VERSION_CODENAME}" != "${expected_codename}" ]]; then
-    echo "Error: Ubuntu ${TARGET_UBUNTU_VERSION} has unexpected codename ${VERSION_CODENAME}" >&2
+if [[ "${VERSION_CODENAME:-}" != "${expected_codename}" ]]; then
+    echo "Error: Ubuntu ${TARGET_UBUNTU_VERSION} has unexpected codename ${VERSION_CODENAME:-unknown}" >&2
     exit 1
 fi
 
@@ -63,9 +63,9 @@ dch \
     --force-distribution \
     "Local rebuild for Ubuntu ${TARGET_UBUNTU_VERSION}."
 
-build_options="parallel=$(nproc)"
+build_options=""
 if [[ "${SKIP_TESTS}" == "true" ]]; then
-    build_options="${build_options} nocheck"
+    build_options="nocheck"
 elif [[ "${SKIP_TESTS}" != "false" ]]; then
     echo "Error: SKIP_TESTS must be true or false" >&2
     exit 1
@@ -95,10 +95,14 @@ done
 (
     cd "${OUTPUT_DIR}"
     debs=( ./*.deb ./*.ddeb )
+    if [[ ${#debs[@]} -eq 0 ]]; then
+        echo "Error: no .deb or .ddeb packages were produced" >&2
+        exit 1
+    fi
     sha256sum "${debs[@]}" > SHA256SUMS
 )
 
-chown "${OUTPUT_UID}:${OUTPUT_GID}" "${OUTPUT_DIR}"/*
+chown -R "${OUTPUT_UID}:${OUTPUT_GID}" "${OUTPUT_DIR}"
 
 echo "Built ${#artifacts[@]} artifacts in ${OUTPUT_DIR}"
 echo "Package version: ${PACKAGE_VERSION}"

@@ -1157,6 +1157,8 @@ if [[ "${NETDEV_MODE}" == "tap" ]]; then
     eval $QEMU_COMMAND
 }
 
-parse_args $@
-detect_cpu_type
-main
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    parse_args "$@"
+    detect_cpu_type
+    main
+fi

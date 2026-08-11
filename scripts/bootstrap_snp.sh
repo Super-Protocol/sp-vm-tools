@@ -362,7 +362,7 @@ update_snp_firmware() {
 
 bootstrap() {
     check_os_version "24.04"
-    get_supported_ubuntu_version
+    get_supported_ubuntu_version || return 1
 
     CPU_MODEL=$(lscpu | grep "^Model name:" | sed 's/Model name: *//')
 
@@ -440,7 +440,10 @@ bootstrap() {
         fi
     fi
 
-    setup_libvirt_host sev-snp
+    setup_libvirt_host sev-snp || {
+        echo -e "${RED}ERROR: libvirt host setup failed${NC}"
+        return 1
+    }
 
     print_section_header "Hardware Configuration"
     if command -v lspci >/dev/null; then

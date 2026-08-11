@@ -68,7 +68,7 @@ ACME_URL: https://acme.zerossl.com/v2/DV90
 **You also need:**
 - A host already bootstrapped for confidential computing (TDX or SEV-SNP) — see the [main README](../README.md).
 - `tmux`, `nftables`, `curl`, `nc` installed: `apt install tmux nftables curl netcat-openbsd`
-- Ubuntu 26.04+ with `qemu:///system`, libvirt 12.1+, `python3-libvirt`, `passt`, and `acl` configured as described in the [libvirt launcher section](../README.md#libvirt-launcher-ubuntu-2604).
+- Ubuntu 24.04 or 26.04 with `qemu:///system`, libvirt 12.1+, `python3-libvirt`, `passt`, and `acl` configured as described in the [libvirt launcher section](../README.md#libvirt-launcher-ubuntu-2404-and-2604).
 
 > Keep `provider-template/` in its own folder — not inside `sp-vm-tools` and not inside any cache folder.
 

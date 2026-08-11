@@ -1,8 +1,8 @@
 # Local libvirt packages
 
-This directory contains separate Docker build environments for Ubuntu 24.04
-and Ubuntu 26.04. The build uses the Debian libvirt packaging and resolves all
-build dependencies inside the target Ubuntu image.
+This directory contains a parameterized Docker build environment for Ubuntu
+24.04 and Ubuntu 26.04. The build uses the Debian libvirt packaging and resolves
+all build dependencies inside the target Ubuntu image.
 
 The default source is the `debian/12.5.0-1` tag from the Debian libvirt Salsa
 repository. Resulting packages have a local version such as:
@@ -70,7 +70,10 @@ packages, `.changes`, `.buildinfo`, and `SHA256SUMS`. Do not mix packages built
 for different Ubuntu releases.
 
 The build script only creates local, unsigned packages. It does not install
-them, create an APT repository, or build QEMU and python3-libvirt.
+them, create an APT repository, or build QEMU and python3-libvirt. Before using
+`scripts/start_super_protocol_libvirt.sh`, run the matching host bootstrap; the
+runtime also requires `python3-libvirt`, `passt`, `acl`, and libvirt 12.1 or
+newer for GPU passthrough.
 
 The `Build packages self-hosted` GitHub Actions workflow can build either
 Ubuntu target and publish the result to a prerelease. Select

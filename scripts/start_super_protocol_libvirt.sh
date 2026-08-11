@@ -6,15 +6,9 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 BASE_SCRIPT="${SCRIPT_DIR}/start_super_protocol.sh"
 LIBVIRT_LAUNCHER="${SCRIPT_DIR}/libvirt_launcher.py"
 
-if ! grep -q '^parse_args \$@$' "${BASE_SCRIPT}"; then
-    echo "Error: could not find the start marker in ${BASE_SCRIPT}" >&2
-    exit 1
-fi
-
-# Reuse the release, validation, VFIO, and provider-config preparation code,
-# but deliberately exclude the original entrypoint and direct QEMU execution.
+# Reuse the sourceable release, validation, VFIO, and provider-config helpers.
 # shellcheck disable=SC1090
-source <(sed '/^parse_args \$@$/,$d' "${BASE_SCRIPT}")
+source "${BASE_SCRIPT}"
 
 # qemu:///system normally runs QEMU as libvirt-qemu, which cannot traverse
 # /root. Keep the same --cache option, but use libvirt's image directory as the
@@ -443,8 +437,21 @@ grant_static_libvirt_resource_access() {
     grant_libvirt_file_access firmware "${BIOS_PATH}" r--
 }
 
+cleanup_provider_disk() {
+    local provider_loop=${1:-} provider_mount=${2:-}
+    if [[ -n "${provider_mount}" ]] && mountpoint -q "${provider_mount}"; then
+        umount "${provider_mount}" || true
+    fi
+    if [[ -n "${provider_loop}" ]]; then
+        losetup -d "${provider_loop}" 2>/dev/null || true
+    fi
+    if [[ -n "${provider_mount}" ]]; then
+        rmdir "${provider_mount}" 2>/dev/null || true
+    fi
+}
+
 create_vm_disks() {
-    local provider_loop provider_mount
+    local provider_loop="" provider_mount
 
     rm -f "${STATE_DISK_PATH}"
     qemu-img create -f qcow2 "${STATE_DISK_PATH}" "${STATE_DISK_SIZE}G"
@@ -453,27 +460,14 @@ create_vm_disks() {
     dd if=/dev/zero of="${PROVIDER_CONFIG_DISK_PATH}" bs=1M count=1 status=none
     mkfs.ext4 -q -O '^has_journal,^huge_file,^meta_bg,^ext_attr' \
         -L provider_config "${PROVIDER_CONFIG_DISK_PATH}"
-    provider_loop=$(losetup --find --show --partscan "${PROVIDER_CONFIG_DISK_PATH}")
     provider_mount=$(mktemp -d)
-
-    cleanup_provider_disk() {
-        if mountpoint -q "${provider_mount}"; then
-            umount "${provider_mount}" || true
-        fi
-        if [[ -n "${provider_loop}" ]]; then
-            losetup -d "${provider_loop}" 2>/dev/null || true
-        fi
-        rmdir "${provider_mount}" 2>/dev/null || true
-    }
-    trap cleanup_provider_disk RETURN
+    trap 'cleanup_provider_disk "${provider_loop:-}" "${provider_mount:-}"' RETURN
+    provider_loop=$(losetup --find --show --partscan "${PROVIDER_CONFIG_DISK_PATH}")
 
     mount "${provider_loop}" "${provider_mount}"
     cp -a "${PROVIDER_CONFIG}/." "${provider_mount}/"
     rm -rf "${provider_mount}/lost+found"
-    umount "${provider_mount}"
-    losetup -d "${provider_loop}"
-    provider_loop=""
-    rmdir "${provider_mount}"
+    cleanup_provider_disk "${provider_loop}" "${provider_mount}"
     trap - RETURN
 
     grant_libvirt_file_access state-disk "${STATE_DISK_PATH}" rw-

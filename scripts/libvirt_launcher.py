@@ -15,7 +15,6 @@ import re
 import select
 import sys
 import termios
-import threading
 import tty
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -519,64 +518,65 @@ def _write_console_output(data: bytes, log: BinaryIO) -> None:
 
 def attach_serial_console(conn: Any, domain: Any, libvirt_module: Any, log_path: str) -> None:
     """Attach a bidirectional console; Ctrl-C or Ctrl-] only detaches."""
-    stream = conn.newStream(0)
+    stream = conn.newStream(getattr(libvirt_module, "VIR_STREAM_NONBLOCK", 1))
     domain.openConsole(None, stream, 0)
-    stopped = threading.Event()
-    receiver_error: list[BaseException] = []
-    log_file = open(log_path, "ab", buffering=0)
-
-    def receive() -> None:
-        try:
-            while not stopped.is_set():
-                chunk = stream.recv(65536)
-                if not chunk:
-                    break
-                _write_console_output(chunk, log_file)
-        except BaseException as exc:  # propagated after terminal restoration
-            if not stopped.is_set():
-                receiver_error.append(exc)
-        finally:
-            stopped.set()
-
-    receiver = threading.Thread(target=receive, name="libvirt-console-recv", daemon=True)
-    receiver.start()
-
-    stdin_fd = sys.stdin.fileno()
+    stdin_fd: Optional[int] = None
     old_terminal = None
-    if os.isatty(stdin_fd):
-        old_terminal = termios.tcgetattr(stdin_fd)
-        tty.setraw(stdin_fd)
-
-    print(
-        "\nConnected to serial console. Press Ctrl-C or Ctrl-] to detach; "
-        "the VM will keep running.\r",
-        file=sys.stderr,
-    )
+    active = False
     try:
-        while not stopped.is_set():
-            readable, _, _ = select.select([stdin_fd], [], [], 0.25)
-            if not readable:
-                continue
-            data = os.read(stdin_fd, 4096)
-            if not data:
-                break
-            if b"\x03" in data or b"\x1d" in data:
-                break
-            sent = 0
-            while sent < len(data):
-                sent += stream.send(data[sent:])
+        with open(log_path, "ab", buffering=0) as log_file:
+            stdin_fd = sys.stdin.fileno()
+            if os.isatty(stdin_fd):
+                old_terminal = termios.tcgetattr(stdin_fd)
+                tty.setraw(stdin_fd)
+
+            print(
+                "\nConnected to serial console. Press Ctrl-C or Ctrl-] to detach; "
+                "the VM will keep running.\r",
+                file=sys.stderr,
+            )
+            pending = bytearray()
+            console_open = True
+            while console_open:
+                while True:
+                    chunk = stream.recv(65536)
+                    if chunk == -2:
+                        break
+                    if not chunk:
+                        console_open = False
+                        break
+                    _write_console_output(chunk, log_file)
+                if not console_open:
+                    break
+
+                if pending:
+                    sent = stream.send(bytes(pending))
+                    if sent == -2:
+                        sent = 0
+                    elif sent <= 0:
+                        raise RuntimeError("libvirt console send made no progress")
+                    del pending[:sent]
+
+                readable, _, _ = select.select(
+                    [stdin_fd] if not pending else [], [], [], 0.05
+                )
+                if not readable:
+                    continue
+                data = os.read(stdin_fd, 4096)
+                if not data or b"\x03" in data or b"\x1d" in data:
+                    break
+                pending.extend(data)
     except KeyboardInterrupt:
         pass
     finally:
-        stopped.set()
-        if old_terminal is not None:
-            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_terminal)
         try:
-            stream.abort()
-        except libvirt_module.libvirtError:
-            pass
-        receiver.join(timeout=1)
-        log_file.close()
+            if old_terminal is not None and stdin_fd is not None:
+                termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_terminal)
+        finally:
+            try:
+                stream.abort()
+            except libvirt_module.libvirtError:
+                pass
         try:
             active = bool(domain.isActive())
         except libvirt_module.libvirtError:
@@ -586,8 +586,6 @@ def attach_serial_console(conn: Any, domain: Any, libvirt_module: Any, log_path:
         else:
             message = "Serial console closed because the VM stopped."
         print(f"\n{message}", file=sys.stderr)
-    if receiver_error and active:
-        raise RuntimeError(f"serial console failed: {receiver_error[0]}")
 
 
 def launch(config: DomainConfig) -> None:

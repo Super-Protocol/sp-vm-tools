@@ -770,6 +770,11 @@ start_vm() {
             return 0
         fi
         if ! tmux has-session -t "${session}" 2>/dev/null; then
+            # The release-mode launcher may exit immediately after createXML().
+            if domain_alive "${domain}"; then
+                log "Domain ${domain} is running"
+                return 0
+            fi
             err "Launcher session ${session} exited before the domain started."
             err "Last lines of ${CACHE}/log-${node_ip##*.}.txt:"
             tail -n 25 "${CACHE}/log-${node_ip##*.}.txt" 2>/dev/null | sed 's/^/    /' >&2 || true
