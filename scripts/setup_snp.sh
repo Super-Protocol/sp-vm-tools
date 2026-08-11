@@ -29,6 +29,24 @@ print_section_header() {
     echo -e "${BLUE}$(printf '=%.0s' {1..40})${NC}"
 }
 
+# Early boot messages such as the BIOS-provided RMP range can be evicted from
+# the finite kernel ring buffer on long-running or noisy hosts. Prefer the
+# persistent journal for the current boot and fall back to dmesg when journald
+# is unavailable.
+get_kernel_log() {
+    local log=""
+
+    if command -v journalctl >/dev/null 2>&1; then
+        log=$(journalctl -k -b --no-pager 2>/dev/null || true)
+    fi
+
+    if [ -n "$log" ]; then
+        printf '%s\n' "$log"
+    else
+        dmesg 2>/dev/null
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Platform detection
 # ---------------------------------------------------------------------------
@@ -158,9 +176,10 @@ check_smee_msr() {
 #   Minimum for SNP: API 1.51 (0x33).
 # ---------------------------------------------------------------------------
 check_sev_fw_version() {
+    local kernel_log="$1"
     # echoes status lines via the caller's results array is awkward; instead
     # set globals.
-    SEV_FW_LINE=$(dmesg | grep -iE "ccp.*SEV-SNP API:" | head -1 || echo "")
+    SEV_FW_LINE=$(printf '%s\n' "$kernel_log" | grep -im1 -E "ccp.*SEV-SNP API:" || echo "")
     SEV_FW_OK="unknown"
     SEV_FW_VER=""
     if [ -n "$SEV_FW_LINE" ]; then
@@ -186,6 +205,9 @@ check_sev_fw_version() {
 check_all_bios_settings() {
     local results=()
     local all_passed=true
+    local kernel_log
+
+    kernel_log=$(get_kernel_log)
 
     print_section_header "BIOS Configuration Check Results"
     echo "Checking all settings for ${PLATFORM} (${PLATFORM_ZEN})..."
@@ -251,7 +273,7 @@ check_all_bios_settings() {
     # --- SEV-SNP enablement + ASID range (kvm_amd: SEV-SNP enabled (ASIDs..))
     results+=("SEV-SNP Initialization:")
     local snp_enable_line
-    snp_enable_line=$(dmesg | grep -iE "kvm_amd:.*SEV-SNP enabled" | head -1 || echo "")
+    snp_enable_line=$(printf '%s\n' "$kernel_log" | grep -im1 -E "kvm_amd:.*SEV-SNP enabled" || echo "")
     if [ -n "$snp_enable_line" ]; then
         results+=("${SUCCESS} SEV-SNP enabled${NC}")
         # e.g. "(ASIDs 1 - 98)"
@@ -260,10 +282,11 @@ check_all_bios_settings() {
         [ -n "$asid_range" ] && results+=("  ${asid_range}")
         [ -n "$EXPECTED_ASIDS" ] && results+=("  Platform documented total: ${EXPECTED_ASIDS}")
     else
-        results+=("${FAILURE} 'SEV-SNP enabled' not found in dmesg${NC}")
+        results+=("${FAILURE} 'SEV-SNP enabled' not found in the current boot log${NC}")
         # Try to surface the actual reason rather than guessing BIOS.
         local snp_err
-        snp_err=$(dmesg | grep -iE "SEV(-SNP)?:.*(fail|error|disabled)|ccp.*error" | head -3 || echo "")
+        snp_err=$(printf '%s\n' "$kernel_log" \
+            | grep -im3 -E "SEV(-SNP)?:.*(fail|error|disabled)|ccp.*error" || echo "")
         if [ -n "$snp_err" ]; then
             results+=("  Reported by kernel:")
             while IFS= read -r line; do
@@ -285,19 +308,19 @@ check_all_bios_settings() {
     # --- RMP table (SEV-SNP: ... RMP ...) ---------------------------------
     results+=("RMP Table:")
     local rmp_line
-    rmp_line=$(dmesg | grep -iE "SEV-SNP:.*RMP" | head -1 || echo "")
+    rmp_line=$(printf '%s\n' "$kernel_log" | grep -im1 -E "SEV-SNP:.*RMP" || echo "")
     if [ -n "$rmp_line" ]; then
         results+=("${SUCCESS} RMP table present${NC}")
         results+=("  $(echo "$rmp_line" | sed -E 's/.*SEV-SNP: //')")
     else
-        results+=("${FAILURE} RMP table not reported in dmesg${NC}")
+        results+=("${FAILURE} RMP table not reported in the current boot log${NC}")
         results+=("  Location: ${PATH_RMP}  ${BIOS_NOTE}")
         all_passed=false
     fi
 
     # --- SEV firmware version (min 1.51 / 0x33) ---------------------------
     results+=("SEV Firmware (min API 1.51):")
-    check_sev_fw_version
+    check_sev_fw_version "$kernel_log"
     if [ -n "$SEV_FW_VER" ]; then
         if [ "$SEV_FW_OK" = "yes" ]; then
             results+=("${SUCCESS} SEV-SNP API ${SEV_FW_VER} (>= 1.51)${NC}")
@@ -308,7 +331,7 @@ check_all_bios_settings() {
             all_passed=false
         fi
     else
-        results+=("${WARNING} Could not read SEV-SNP API version from dmesg${NC}")
+        results+=("${WARNING} Could not read SEV-SNP API version from the current boot log${NC}")
         results+=("  If you see 'SEV: failed to INIT error 0x1, rc -5' -> PSP BootLoader too old; update system BIOS")
     fi
 
