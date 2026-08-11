@@ -554,6 +554,28 @@ configure_qemu_binary_permissions() {
     fi
 }
 
+configure_iommufd() {
+    local modules_dir modules_file tmp
+    modules_dir=$(libvirt_host_path /etc/modules-load.d)
+    modules_file="${modules_dir}/sp-vm-tools-iommufd.conf"
+
+    install -d -m 0755 "${modules_dir}"
+    tmp=$(mktemp)
+    printf '%s\n' \
+        '# Managed by sp-vm-tools bootstrap.' \
+        'iommufd' > "${tmp}"
+    install -m 0644 "${tmp}" "${modules_file}"
+    rm -f "${tmp}"
+
+    if [[ -z "${SPVM_TEST_ROOT:-}" ]]; then
+        modprobe iommufd
+        [[ -c /dev/iommu ]] || {
+            libvirt_host_error "iommufd loaded but /dev/iommu is missing"
+            return 1
+        }
+    fi
+}
+
 verify_libvirt_host() {
     local mode=$1 installed_version daemon_version qemu version_line qemu_major capabilities dropin
     installed_version=$(installed_libvirt_version)
@@ -655,6 +677,7 @@ setup_libvirt_host() {
     configure_libvirt_qemu_runtime
     configure_libvirt_apparmor
     configure_qemu_binary_permissions
+    configure_iommufd
     # shellcheck disable=SC2119
     configure_passt_capabilities
     systemctl daemon-reload

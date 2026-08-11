@@ -113,7 +113,7 @@ check_passt_apparmor_profile() {
     fi
 
     local profile=/etc/apparmor.d/abstractions/libvirt-qemu
-    [[ -r "${profile}" ]] || return
+    [[ -r "${profile}" ]] || return 0
 
     if awk '
         /^[[:space:]]*profile passt[[:space:]]*\{/ { in_passt = 1 }
@@ -140,7 +140,7 @@ check_passt_apparmor_profile() {
 }
 
 check_tdx_vsock_apparmor_profile() {
-    [[ "${VM_MODE}" == "tdx" ]] || return
+    [[ "${VM_MODE}" == "tdx" ]] || return 0
     local dropin=/etc/apparmor.d/abstractions/libvirt-qemu.d/99-sp-vm-tools-local
     if [[ ! -r "${dropin}" ]] || ! grep -qF 'network vsock stream,' "${dropin}"; then
         echo "Error: TDX QGS requires the AppArmor rule 'network vsock stream,'." >&2
