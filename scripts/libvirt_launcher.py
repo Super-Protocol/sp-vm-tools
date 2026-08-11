@@ -519,11 +519,11 @@ def _write_console_output(data: bytes, log: BinaryIO) -> None:
 def attach_serial_console(conn: Any, domain: Any, libvirt_module: Any, log_path: str) -> None:
     """Attach a bidirectional console; Ctrl-C or Ctrl-] only detaches."""
     stream = conn.newStream(getattr(libvirt_module, "VIR_STREAM_NONBLOCK", 1))
-    domain.openConsole(None, stream, 0)
     stdin_fd: Optional[int] = None
     old_terminal = None
     active = False
     try:
+        domain.openConsole(None, stream, 0)
         with open(log_path, "ab", buffering=0) as log_file:
             stdin_fd = sys.stdin.fileno()
             if os.isatty(stdin_fd):
