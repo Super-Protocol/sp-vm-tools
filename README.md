@@ -63,7 +63,7 @@ sudo ./scripts/bootstrap_snp.sh
 
 The bootstrap performs the host-wide work that previously required manual fixes:
 
-- installs the project libvirt 12.5 packages when the installed version is older;
+- installs the complete project libvirt 12.5 package set, including `libvirt-dev`, when the installed version is older or any required split package is missing;
 - preserves already installed libvirt split drivers during the package transaction;
 - enables executable mmap and the libvirt socket in the nested AppArmor `passt` profile;
 - permits QEMU to contact TDX QGS through VSOCK;

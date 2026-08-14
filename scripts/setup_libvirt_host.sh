@@ -26,6 +26,7 @@ LIBVIRT_BASE_PACKAGES=(
     libvirt-daemon-plugin-lockd
     libvirt-daemon-system
     libvirt-daemon-system-systemd
+    libvirt-dev
 )
 
 LIBVIRT_PACKAGE_PATHS=()
@@ -110,6 +111,15 @@ libvirt_upgrade_required() {
     local installed_version=${1:-}
     [[ -z "${installed_version}" ]] || \
         ! dpkg --compare-versions "${installed_version}" ge "${LIBVIRT_REQUIRED_VERSION}"
+}
+
+missing_required_libvirt_packages() {
+    local package
+    for package in "${LIBVIRT_BASE_PACKAGES[@]}"; do
+        if ! dpkg-query -W -f='${db:Status-Status}' "${package}" 2>/dev/null | grep -qx installed; then
+            printf '%s\n' "${package}"
+        fi
+    done
 }
 
 validate_tar_listing() {
@@ -577,10 +587,15 @@ configure_iommufd() {
 }
 
 verify_libvirt_host() {
-    local mode=$1 installed_version daemon_version qemu version_line qemu_major capabilities dropin
+    local mode=$1 installed_version missing_packages daemon_version qemu version_line qemu_major capabilities dropin
     installed_version=$(installed_libvirt_version)
     if [[ -z "${installed_version}" ]] || ! dpkg --compare-versions "${installed_version}" ge "${LIBVIRT_REQUIRED_VERSION}"; then
         libvirt_host_error "libvirt ${LIBVIRT_REQUIRED_VERSION} or newer is required; installed package is ${installed_version:-missing}"
+        return 1
+    fi
+    missing_packages=$(missing_required_libvirt_packages)
+    if [[ -n "${missing_packages}" ]]; then
+        libvirt_host_error "required libvirt packages are missing: ${missing_packages//$'\n'/, }"
         return 1
     fi
     python3 -c 'import libvirt' || {
@@ -656,7 +671,7 @@ verify_libvirt_host() {
 }
 
 setup_libvirt_host() {
-    local mode=$1 installed_version
+    local mode=$1 installed_version missing_packages
     if [[ "${mode}" != "tdx" && "${mode}" != "sev-snp" ]]; then
         libvirt_host_error "setup_libvirt_host mode must be tdx or sev-snp"
         return 1
@@ -669,7 +684,8 @@ setup_libvirt_host() {
 
     print_section_header "Libvirt Host Setup"
     installed_version=$(installed_libvirt_version)
-    if libvirt_upgrade_required "${installed_version}"; then
+    missing_packages=$(missing_required_libvirt_packages)
+    if libvirt_upgrade_required "${installed_version}" || [[ -n "${missing_packages}" ]]; then
         assert_no_running_libvirt_domains || return 1
     fi
     apt-get update || return 1
@@ -678,11 +694,17 @@ setup_libvirt_host() {
         qemu-system-x86 qemu-utils wget || return 1
 
     installed_version=$(installed_libvirt_version)
-    if libvirt_upgrade_required "${installed_version}"; then
-        echo "Installed libvirt ${installed_version:-none} is older than ${LIBVIRT_REQUIRED_VERSION}."
+    missing_packages=$(missing_required_libvirt_packages)
+    if libvirt_upgrade_required "${installed_version}" || [[ -n "${missing_packages}" ]]; then
+        if libvirt_upgrade_required "${installed_version}"; then
+            echo "Installed libvirt ${installed_version:-none} is older than ${LIBVIRT_REQUIRED_VERSION}."
+        fi
+        if [[ -n "${missing_packages}" ]]; then
+            echo "Required libvirt packages are missing: ${missing_packages//$'\n'/, }"
+        fi
         install_project_libvirt || return 1
     else
-        echo "Installed libvirt ${installed_version} is ${LIBVIRT_REQUIRED_VERSION} or newer; keeping it."
+        echo "Installed libvirt ${installed_version} is ${LIBVIRT_REQUIRED_VERSION} or newer and all required packages are present; keeping it."
     fi
 
     if dpkg-query -W -f='${db:Status-Status}' libvirt-daemon-system-systemd 2>/dev/null | grep -qx installed; then
