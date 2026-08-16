@@ -173,7 +173,7 @@ BIOS settings:
 |---|---|
 | `CPU PA limit to 46 bits` | Disabled |
 | `SMT` | Enabled |
-| `TXT` | Enabled |
+| `TXT` | Optional for TDX; status is reported but does not block setup |
 | `SGX` | Enabled |
 | `TME` | Enabled |
 | `TME-MT (Multi-Tenant)` | Enabled, KeyIDs configured (non-zero key split) |

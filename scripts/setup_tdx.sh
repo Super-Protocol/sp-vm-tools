@@ -17,6 +17,7 @@ NC='\033[0m' # No Color
 # Modify status indicators:
 SUCCESS="[${GREEN}✓${NC}]"
 FAILURE="[${RED}✗${NC}]"
+WARNING="[${YELLOW}!${NC}]"
 
 print_section_header() {
     echo -e "\n${BLUE}=== $1 ===${NC}"
@@ -146,47 +147,43 @@ check_all_bios_settings() {
         all_passed=false
     fi
 
-    results+=("TXT Settings:")
-    
+    # Intel TXT is useful for TXT/tboot measured-launch workflows, but it is
+    # not a prerequisite for Intel TDX. Always report its status without
+    # making the TDX host validation fail.
+    results+=("TXT Settings (optional for TDX):")
+
     local sinit_base=""
-    
+    local senter_en=""
+
     # 0) Does the CPU support SMX/TXT at all?
     if ! grep -qw smx /proc/cpuinfo; then
-        results+=("${FAILURE} CPU does not support SMX/TXT${NC}")
-        all_passed=false
+        results+=("${WARNING} CPU does not support SMX/TXT${NC}")
+        results+=("  TXT is not required for TDX; continuing")
     else
         # 1) Read SINIT.BASE directly from TXT public config space:
         #    0xFED30000 + 0x270 (this is what txt-stat used to do)
-        sinit_base=$(od -An -tx4 -j $((0xFED30270)) -N4 /dev/mem 2>/dev/null | tr -d ' ')
+        sinit_base=$(od -An -tx4 -j $((0xFED30270)) -N4 /dev/mem 2>/dev/null | tr -d ' ' || true)
         [ -n "$sinit_base" ] && sinit_base="0x${sinit_base}"
-    
-        # 2) Fallback: IA32_FEATURE_CONTROL MSR (0x3A), bit 15 = SENTER global enable.
-        #    Set by BIOS when TXT is enabled. Used when /dev/mem is unavailable
-        #    (e.g. kernel lockdown).
-        if [ -z "$sinit_base" ] && command -v rdmsr >/dev/null 2>&1; then
-            modprobe msr 2>/dev/null
-            local senter_en
-            senter_en=$(rdmsr -f 15:15 0x3a 2>/dev/null)
+
+        if [ -n "$sinit_base" ] && [ "$sinit_base" != "0x0" ] && \
+           [ "$sinit_base" != "0x00000000" ] && [ "$sinit_base" != "0xffffffff" ]; then
+            results+=("${SUCCESS} TXT enabled (SINIT.BASE = $sinit_base)${NC}")
+        else
+            # 2) Fallback: IA32_FEATURE_CONTROL MSR (0x3A), bit 15 = SENTER
+            #    global enable. Check it for every invalid/unavailable
+            #    SINIT.BASE value, not only when /dev/mem returned no output.
+            modprobe msr 2>/dev/null || true
+            if command -v rdmsr >/dev/null 2>&1; then
+                senter_en=$(rdmsr -f 15:15 0x3a 2>/dev/null || true)
+            fi
+
             if [ "$senter_en" = "1" ]; then
                 results+=("${SUCCESS} TXT enabled (SENTER enabled in IA32_FEATURE_CONTROL)${NC}")
             else
-                results+=("${FAILURE} TXT not enabled in BIOS${NC}")
-                results+=("  Required: Enable TXT in BIOS")
-                all_passed=false
-            fi
-            sinit_base="__msr_checked__"
-        fi
-    
-        if [ "$sinit_base" != "__msr_checked__" ]; then
-            # 0xffffffff means the chipset does not decode the TXT region => TXT disabled.
-            # Empty value means we could not read /dev/mem at all.
-            if [ -n "$sinit_base" ] && [ "$sinit_base" != "0x0" ] && \
-               [ "$sinit_base" != "0x00000000" ] && [ "$sinit_base" != "0xffffffff" ]; then
-                results+=("${SUCCESS} TXT enabled (SINIT.BASE = $sinit_base)${NC}")
-            else
-                results+=("${FAILURE} TXT not enabled in BIOS${NC}")
-                results+=("  Required: Enable TXT in BIOS")
-                all_passed=false
+                results+=("${WARNING} TXT not enabled or could not be verified${NC}")
+                results+=("  SINIT.BASE: ${sinit_base:-unavailable}")
+                results+=("  IA32_FEATURE_CONTROL.SENTER: ${senter_en:-unavailable}")
+                results+=("  TXT is not required for TDX; continuing")
             fi
         fi
     fi
@@ -226,11 +223,11 @@ check_all_bios_settings() {
         all_passed=false
     fi
         
-    # Configuration requirements section remains unchanged
+    # List only settings that can fail the TDX validation. TXT is intentionally
+    # omitted because it is diagnostic-only for this setup.
     results+=("${YELLOW}Required BIOS Configuration:${NC}")
     results+=("• Core Security:")
     results+=("  - CPU PA: Limit to 46 bits Disable")
-    results+=("  - TXT: Enable")
     results+=("  - SGX: Enable")
     results+=("  - SMT: Enable")
     results+=("• Memory Protection:")
