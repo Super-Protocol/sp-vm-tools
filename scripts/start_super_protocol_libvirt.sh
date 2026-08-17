@@ -69,11 +69,11 @@ check_target_os() {
 
 bootstrap_hint() {
     if [[ "${VM_MODE}" == "tdx" ]]; then
-        echo "Re-run scripts/bootstrap_tdx.sh to restore the libvirt host configuration." >&2
+        echo "Fix: run sudo ${SCRIPT_DIR}/bootstrap_tdx.sh to restore the libvirt host configuration." >&2
     elif [[ "${VM_MODE}" == "sev-snp" ]]; then
-        echo "Re-run scripts/bootstrap_snp.sh to restore the libvirt host configuration." >&2
+        echo "Fix: run sudo ${SCRIPT_DIR}/bootstrap_snp.sh to restore the libvirt host configuration." >&2
     else
-        echo "Re-run the host bootstrap to restore the libvirt host configuration." >&2
+        echo "Fix: re-run the host bootstrap with sudo to restore the libvirt host configuration." >&2
     fi
 }
 
@@ -144,7 +144,7 @@ check_tdx_vsock_apparmor_profile() {
     fi
 }
 
-check_passt_privileged_ports() {
+check_passt_unprivileged_ports() {
     local ports=()
     local port port_number minimum=65536
 
@@ -171,30 +171,19 @@ check_passt_privileged_ports() {
         return
     fi
 
-    command -v getcap >/dev/null 2>&1 || {
-        echo "Error: getcap is required to verify privileged passt port ${minimum}." >&2
-        bootstrap_hint
-        exit 1
-    }
-
-    local binary path real capabilities found_passt=false
-    local -A checked=()
-    for binary in passt passt.avx2; do
-        path=$(command -v "${binary}" 2>/dev/null || true)
-        [[ -n "${path}" ]] || continue
-        real=$(readlink -f -- "${path}")
-        [[ -n "${real}" && -z "${checked[${real}]:-}" ]] || continue
-        checked["${real}"]=1
-        found_passt=true
-        capabilities=$(getcap "${real}" 2>/dev/null || true)
-        if [[ "${capabilities}" != *cap_net_bind_service* ]]; then
-            echo "Error: passt must bind host port ${minimum}, but ${real} lacks CAP_NET_BIND_SERVICE." >&2
-            bootstrap_hint
-            exit 1
-        fi
-    done
-    if [[ "${found_passt}" != "true" ]]; then
-        echo "Error: no passt binary was found for privileged host port ${minimum}." >&2
+    local sysctl_path=/proc/sys/net/ipv4/ip_unprivileged_port_start
+    local unprivileged_port_start=""
+    if [[ -r "${sysctl_path}" ]]; then
+        read -r unprivileged_port_start < "${sysctl_path}" || true
+    fi
+    if [[ "${unprivileged_port_start}" != "0" ]]; then
+        # TODO: UNSAFE CONFIGURATION. Temporary workaround for a passt regression:
+        # recent versions create forwarded host listeners after entering a user
+        # namespace, so the binary's CAP_NET_BIND_SERVICE cannot authorize bind()
+        # in the host network namespace. This is the only stock, unpatched setup
+        # currently found to work; it makes all host ports unprivileged.
+        echo "Error: passt must bind host port ${minimum}, but net.ipv4.ip_unprivileged_port_start is ${unprivileged_port_start:-unavailable} (expected 0)." >&2
+        echo "This temporary workaround allows every unprivileged process on the host to bind any free TCP/UDP port." >&2
         bootstrap_hint
         exit 1
     fi
@@ -536,7 +525,7 @@ main_libvirt() {
     check_qemu_version
     preflight_libvirt
     check_params
-    check_passt_privileged_ports
+    check_passt_unprivileged_ports
     prepare_selected_host_devices
     prepare_mode_parameters
 

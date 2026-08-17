@@ -6,6 +6,7 @@
 LIBVIRT_REQUIRED_VERSION="12.5.0"
 LIBVIRT_RELEASE_REPO="Super-Protocol/sp-vm-tools"
 LIBVIRT_URI="qemu:///system"
+PASST_UNPRIVILEGED_PORT_START="0"
 
 LIBVIRT_BASE_PACKAGES=(
     libvirt0
@@ -38,10 +39,6 @@ libvirt_host_error() {
     return 1
 }
 
-libvirt_host_path() {
-    printf '%s%s\n' "${SPVM_TEST_ROOT:-}" "$1"
-}
-
 select_libvirt_release() {
     local ubuntu_version=$1
     case "${ubuntu_version}" in
@@ -64,8 +61,7 @@ select_libvirt_release() {
 }
 
 get_supported_ubuntu_version() {
-    local os_release
-    os_release=$(libvirt_host_path /etc/os-release)
+    local os_release=/etc/os-release
     if [[ ! -r "${os_release}" ]]; then
         libvirt_host_error "cannot read ${os_release}"
         return 1
@@ -352,12 +348,12 @@ patch_libvirt_apparmor_profile() {
 
 configure_libvirt_apparmor() {
     local profile dropin_dir dropin template daemon_profile daemon_local tmp
-    profile=$(libvirt_host_path /etc/apparmor.d/abstractions/libvirt-qemu)
-    dropin_dir=$(libvirt_host_path /etc/apparmor.d/abstractions/libvirt-qemu.d)
+    profile=/etc/apparmor.d/abstractions/libvirt-qemu
+    dropin_dir=/etc/apparmor.d/abstractions/libvirt-qemu.d
     dropin="${dropin_dir}/99-sp-vm-tools-local"
-    template=$(libvirt_host_path /etc/apparmor.d/libvirt/TEMPLATE.qemu)
-    daemon_profile=$(libvirt_host_path /etc/apparmor.d/usr.sbin.libvirtd)
-    daemon_local=$(libvirt_host_path /etc/apparmor.d/local/usr.sbin.libvirtd)
+    template=/etc/apparmor.d/libvirt/TEMPLATE.qemu
+    daemon_profile=/etc/apparmor.d/usr.sbin.libvirtd
+    daemon_local=/etc/apparmor.d/local/usr.sbin.libvirtd
 
     [[ -r "${profile}" ]] || {
         libvirt_host_error "libvirt AppArmor profile is missing: ${profile}"
@@ -398,14 +394,11 @@ configure_libvirt_apparmor() {
         return 1
     }
     apparmor_parser -Q -r "${template}"
-    if [[ -z "${SPVM_TEST_ROOT:-}" ]]; then
-        systemctl reload apparmor
-    fi
+    systemctl reload apparmor
 }
 
 configure_libvirt_qemu_runtime() {
-    local config backup tmp
-    config=$(libvirt_host_path /etc/libvirt/qemu.conf)
+    local config=/etc/libvirt/qemu.conf backup tmp
     backup="${config}.sp-vm-tools.bak"
     [[ -r "${config}" ]] || {
         libvirt_host_error "libvirt QEMU configuration is missing: ${config}"
@@ -456,11 +449,9 @@ configure_libvirt_qemu_runtime() {
         return
     fi
 
-    if [[ -z "${SPVM_TEST_ROOT:-}" ]]; then
-        if ! assert_no_running_libvirt_domains; then
-            rm -f "${tmp}"
-            return 1
-        fi
+    if ! assert_no_running_libvirt_domains; then
+        rm -f "${tmp}"
+        return 1
     fi
     if [[ ! -e "${backup}" ]]; then
         cp -a "${config}" "${backup}"
@@ -523,6 +514,43 @@ configure_passt_capabilities() {
     done
 }
 
+verify_passt_unprivileged_ports() {
+    local value
+    value=$(sysctl -n net.ipv4.ip_unprivileged_port_start 2>/dev/null || true)
+    if [[ "${value}" != "${PASST_UNPRIVILEGED_PORT_START}" ]]; then
+        libvirt_host_error \
+            "net.ipv4.ip_unprivileged_port_start must be ${PASST_UNPRIVILEGED_PORT_START} for passt privileged-port forwarding (found ${value:-unavailable})"
+        return 1
+    fi
+}
+
+configure_passt_unprivileged_ports() {
+    local sysctl_dir=/etc/sysctl.d
+    local config="${sysctl_dir}/99-sp-vm-tools-passt.conf" tmp
+
+    install -d -m 0755 "${sysctl_dir}"
+    tmp=$(mktemp)
+    printf '%s\n' \
+        '# Managed by sp-vm-tools bootstrap.' \
+        '# TODO: UNSAFE CONFIGURATION. Temporary workaround for a passt regression.' \
+        '# Remove it when passt can bind forwarded low ports before entering its' \
+        '# unprivileged user namespace. New passt versions create host listeners' \
+        '# after user-namespace isolation,' \
+        '# so CAP_NET_BIND_SERVICE on the passt binary no longer authorizes bind()' \
+        '# in the host network namespace. This is the only stock, unpatched setup' \
+        '# currently found to keep libvirt low-port forwarding working. Setting' \
+        '# this value to 0 lets every unprivileged process on the host bind any' \
+        '# free TCP or UDP port.' \
+        "net.ipv4.ip_unprivileged_port_start = ${PASST_UNPRIVILEGED_PORT_START}" > "${tmp}"
+    install -m 0644 "${tmp}" "${config}"
+    rm -f "${tmp}"
+
+    sysctl -w \
+        "net.ipv4.ip_unprivileged_port_start=${PASST_UNPRIVILEGED_PORT_START}" >/dev/null
+    verify_passt_unprivileged_ports || return 1
+    echo "Configured net.ipv4.ip_unprivileged_port_start=${PASST_UNPRIVILEGED_PORT_START} for passt port forwarding (unsafe workaround)."
+}
+
 find_bootstrap_qemu() {
     local path
     for path in \
@@ -565,8 +593,7 @@ configure_qemu_binary_permissions() {
 }
 
 configure_iommufd() {
-    local modules_dir modules_file tmp
-    modules_dir=$(libvirt_host_path /etc/modules-load.d)
+    local modules_dir=/etc/modules-load.d modules_file tmp
     modules_file="${modules_dir}/sp-vm-tools-iommufd.conf"
 
     install -d -m 0755 "${modules_dir}"
@@ -577,13 +604,11 @@ configure_iommufd() {
     install -m 0644 "${tmp}" "${modules_file}"
     rm -f "${tmp}"
 
-    if [[ -z "${SPVM_TEST_ROOT:-}" ]]; then
-        modprobe iommufd
-        [[ -c /dev/iommu ]] || {
-            libvirt_host_error "iommufd loaded but /dev/iommu is missing"
-            return 1
-        }
-    fi
+    modprobe iommufd
+    [[ -c /dev/iommu ]] || {
+        libvirt_host_error "iommufd loaded but /dev/iommu is missing"
+        return 1
+    }
 }
 
 verify_libvirt_host() {
@@ -640,8 +665,9 @@ verify_libvirt_host() {
     fi
     # shellcheck disable=SC2119
     verify_passt_capabilities || return 1
+    verify_passt_unprivileged_ports || return 1
 
-    dropin=$(libvirt_host_path /etc/apparmor.d/abstractions/libvirt-qemu.d/99-sp-vm-tools-local)
+    dropin=/etc/apparmor.d/abstractions/libvirt-qemu.d/99-sp-vm-tools-local
     grep -qF 'network vsock stream,' "${dropin}" || {
         libvirt_host_error "AppArmor VSOCK rule is missing from ${dropin}"
         return 1
@@ -690,7 +716,7 @@ setup_libvirt_host() {
     fi
     apt-get update || return 1
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        acl apparmor-utils ca-certificates libcap2-bin passt python3-libvirt \
+        acl apparmor-utils ca-certificates libcap2-bin passt procps python3-libvirt \
         qemu-system-x86 qemu-utils wget || return 1
 
     installed_version=$(installed_libvirt_version)
@@ -717,6 +743,7 @@ setup_libvirt_host() {
     configure_iommufd || return 1
     # shellcheck disable=SC2119
     configure_passt_capabilities || return 1
+    configure_passt_unprivileged_ports || return 1
     systemctl daemon-reload || return 1
     systemctl enable --now libvirtd.service || return 1
     systemctl start virtlogd.socket virtlockd.socket || return 1
