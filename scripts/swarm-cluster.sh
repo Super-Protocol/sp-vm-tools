@@ -831,7 +831,7 @@ wait_bootstrap() {
         sleep 5; waited=$(( waited + 5 ))
     done
     echo >&2
-    die "Bootstrap did not come up within ${timeout}s. Check ${CACHE}/log-${BOOTSTRAP_IP##*.}.txt and: virsh -c ${LIBVIRT_URI} console ${DOMAIN_BOOTSTRAP}"
+    die "Bootstrap did not come up within ${timeout}s. Check ${CACHE}/log-${BOOTSTRAP_IP##*.}.txt and /var/log/libvirt/qemu/${DOMAIN_BOOTSTRAP}-serial.log"
 }
 
 # ----------------------------------------------------------------------------
@@ -966,8 +966,8 @@ cmd_up() {
     log "Cluster started. Ingress: gw.dyn.${GLOBAL_ID}.${BASE_DOMAIN} -> 80/443"
 
     log "Cluster started. Domains: virsh -c ${LIBVIRT_URI} list"
-    log "  bootstrap console: virsh -c ${LIBVIRT_URI} console ${DOMAIN_BOOTSTRAP}"
-    log "  join consoles:     ${DOMAIN_JOIN[0]} | ${DOMAIN_JOIN[1]}"
+    log "  bootstrap serial:  tail -f /var/log/libvirt/qemu/${DOMAIN_BOOTSTRAP}-serial.log"
+    log "  join serials:      /var/log/libvirt/qemu/{${DOMAIN_JOIN[0]},${DOMAIN_JOIN[1]}}-serial.log"
     if [[ "${DEBUG_MODE}" == "true" ]]; then
         log "  attached debug consoles are in tmux: ${TMUX_BOOTSTRAP}, ${TMUX_JOIN[0]}, ${TMUX_JOIN[1]}"
     fi

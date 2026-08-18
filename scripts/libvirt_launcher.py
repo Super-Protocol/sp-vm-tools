@@ -9,11 +9,11 @@ is actually launched.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import select
 import sys
+import time
 import termios
 import tty
 import xml.etree.ElementTree as ET
@@ -54,7 +54,7 @@ class DomainConfig:
     state_disk: str
     provider_config_disk: str
     guest_cid: int
-    qgs_cid: int
+    qgs_socket: str
     mac_address: str
     netdev_mode: str
     debug: bool = False
@@ -100,6 +100,16 @@ def _parse_bdf(bdf: str) -> dict[str, str]:
     }
 
 
+def _normalized_bdf(bdf: str) -> str:
+    match = BDF_RE.fullmatch(bdf)
+    if not match:
+        raise ValueError(f"invalid PCI BDF: {bdf!r}")
+    parts = match.groupdict(default="0000")
+    return (
+        f"{parts['domain']}:{parts['bus']}:{parts['slot']}.{parts['function']}"
+    ).lower()
+
+
 def _validate_config(config: DomainConfig) -> None:
     if not DOMAIN_NAME_RE.fullmatch(config.name):
         raise ValueError(
@@ -111,8 +121,8 @@ def _validate_config(config: DomainConfig) -> None:
         raise ValueError(f"unsupported network mode: {config.netdev_mode}")
     if config.memory_gib < 1 or config.vcpus < 1:
         raise ValueError("memory and vCPU count must be positive")
-    if config.guest_cid < 3 or config.qgs_cid < 2:
-        raise ValueError("guest CID must be >= 3 and QGS CID must be >= 2")
+    if config.guest_cid < 3:
+        raise ValueError("guest CID must be >= 3")
     if not MAC_RE.fullmatch(config.mac_address):
         raise ValueError(f"invalid MAC address: {config.mac_address!r}")
     for path in (
@@ -125,6 +135,10 @@ def _validate_config(config: DomainConfig) -> None:
     ):
         if not Path(path).is_absolute():
             raise ValueError(f"libvirt resource path must be absolute: {path!r}")
+    if config.mode == "tdx" and not Path(config.qgs_socket).is_absolute():
+        raise ValueError(
+            f"TDX QGS socket path must be absolute: {config.qgs_socket!r}"
+        )
     ports = (
         config.ssh_port,
         config.wg_port,
@@ -258,10 +272,9 @@ def _add_host_devices(devices: ET.Element, config: DomainConfig) -> None:
 
         hostdev = _sub(devices, "hostdev", mode="subsystem", type="pci", managed="no")
         _sub(hostdev, "driver", name="vfio", iommufd="yes")
+        alias = f"ua-hostdev{index}"
         source = _sub(hostdev, "source")
         _sub(source, "address", **_parse_bdf(host_device.bdf))
-        if host_device.kind == "gpu":
-            _sub(hostdev, "rom", bar="off")
         _sub(
             hostdev,
             "address",
@@ -271,6 +284,7 @@ def _add_host_devices(devices: ET.Element, config: DomainConfig) -> None:
             slot="0x00",
             function="0x0",
         )
+        _sub(hostdev, "alias", name=alias)
 
 
 def _add_cpu_and_features(domain: ET.Element, config: DomainConfig) -> None:
@@ -310,48 +324,26 @@ def _qemu_commandline(domain: ET.Element) -> ET.Element:
     return commandline
 
 
-def _add_fw_cfg_qemu_args(domain: ET.Element) -> None:
+def _add_fw_cfg_qemu_args(domain: ET.Element, config: DomainConfig) -> None:
     # Libvirt deliberately rejects opt/ovmf/* through native fwcfg XML because
     # that namespace is reserved for OVMF.  The direct launcher needs this
     # existing OVMF knob, so pass it through QEMU's command line namespace.
-    commandline = _qemu_commandline(domain)
-    _sub(commandline, f"{{{QEMU_NS}}}arg", value="-fw_cfg")
-    _sub(
-        commandline,
-        f"{{{QEMU_NS}}}arg",
-        value="name=opt/ovmf/X-PciMmio64,string=262144",
-    )
+    #
+    # OVMF reads one knob per PCI root bridge, named X-PciMmio64Mb<N> where N
+    # is the 1-based root-port index; a bare "X-PciMmio64" is silently ignored.
+    # Only the ports carrying passthrough devices need the enlarged 64-bit MMIO
+    # aperture, so emit nothing when no host device is attached.
+    if not config.host_devices:
+        return
 
-
-def _add_tdx_qemu_args(domain: ET.Element, config: DomainConfig) -> None:
     commandline = _qemu_commandline(domain)
-    _sub(commandline, f"{{{QEMU_NS}}}arg", value="-object")
-    _sub(
-        commandline,
-        f"{{{QEMU_NS}}}arg",
-        value=f"memory-backend-ram,id=sp-mem,size={config.memory_gib}G",
-    )
-    tdx_object = {
-        "qom-type": "tdx-guest",
-        "id": "sp-tdx",
-        "quote-generation-socket": {
-            "type": "vsock",
-            "cid": str(config.qgs_cid),
-            "port": "4050",
-        },
-    }
-    _sub(commandline, f"{{{QEMU_NS}}}arg", value="-object")
-    _sub(
-        commandline,
-        f"{{{QEMU_NS}}}arg",
-        value=json.dumps(tdx_object, separators=(",", ":")),
-    )
-    _sub(commandline, f"{{{QEMU_NS}}}arg", value="-machine")
-    _sub(
-        commandline,
-        f"{{{QEMU_NS}}}arg",
-        value="confidential-guest-support=sp-tdx,memory-backend=sp-mem",
-    )
+    for index in range(1, len(config.host_devices) + 1):
+        _sub(commandline, f"{{{QEMU_NS}}}arg", value="-fw_cfg")
+        _sub(
+            commandline,
+            f"{{{QEMU_NS}}}arg",
+            value=f"name=opt/ovmf/X-PciMmio64Mb{index},string=262144",
+        )
 
 
 def build_domain_xml(config: DomainConfig) -> str:
@@ -363,6 +355,11 @@ def build_domain_xml(config: DomainConfig) -> str:
     _sub(domain, "memory", config.memory_gib, unit="GiB")
     _sub(domain, "currentMemory", config.memory_gib, unit="GiB")
     _sub(domain, "vcpu", config.vcpus, placement="static")
+    if config.host_devices:
+        # Domain-level IOMMUFD lets libvirt open each assigned device itself
+        # and hand QEMU the resulting fd, keeping the cdev outside the guest's
+        # reach.
+        _sub(domain, "iommufd", enabled="yes")
 
     os_element = _sub(domain, "os")
     _sub(os_element, "type", "hvm", arch="x86_64", machine="q35")
@@ -371,7 +368,11 @@ def build_domain_xml(config: DomainConfig) -> str:
     _sub(os_element, "cmdline", config.kernel_cmdline)
 
     _add_cpu_and_features(domain, config)
-    _sub(domain, "clock", offset="utc")
+    clock = _sub(domain, "clock", offset="utc")
+    if config.mode == "tdx":
+        # TD guests do not emulate the HPET; Intel's and Canonical's reference
+        # TD definitions both disable it explicitly.
+        _sub(clock, "timer", name="hpet", present="no")
     _sub(domain, "on_poweroff", "destroy")
     _sub(domain, "on_reboot", "restart")
     _sub(domain, "on_crash", "destroy")
@@ -385,9 +386,28 @@ def build_domain_xml(config: DomainConfig) -> str:
     _sub(devices, "controller", type="usb", model="none")
     _add_network(devices, config)
 
-    serial = _sub(devices, "serial", type="pty")
+    # The serial port must drain into a file rather than a bare pty.  A pty that
+    # nothing reads fills up, after which the 16550 line status register never
+    # reports the transmitter as empty and the guest spins forever inside
+    # console output -- the boot stops mid-word with vCPU0 burning host CPU on
+    # port 0x3fd reads.  A file sink always accepts writes, so the guest keeps
+    # running whether or not a console client is attached, and libvirt still
+    # records everything from the very first byte.
+    serial = _sub(devices, "serial", type="file")
+    _sub(
+        serial,
+        "source",
+        path=f"/var/log/libvirt/qemu/{config.name}-serial.log",
+        append="off",
+    )
     _sub(serial, "target", type="isa-serial", port="0")
-    console = _sub(devices, "console", type="pty")
+    console = _sub(devices, "console", type="file")
+    _sub(
+        console,
+        "source",
+        path=f"/var/log/libvirt/qemu/{config.name}-serial.log",
+        append="off",
+    )
     _sub(console, "target", type="serial", port="0")
     video = _sub(devices, "video")
     _sub(video, "model", type="none")
@@ -396,7 +416,6 @@ def build_domain_xml(config: DomainConfig) -> str:
     vsock = _sub(devices, "vsock", model="virtio")
     _sub(vsock, "cid", auto="no", address=config.guest_cid)
     _add_host_devices(devices, config)
-    _add_fw_cfg_qemu_args(domain)
 
     if config.mode == "sev-snp":
         launch_security = _sub(
@@ -409,7 +428,16 @@ def build_domain_xml(config: DomainConfig) -> str:
         _sub(launch_security, "reducedPhysBits", "1")
         _sub(launch_security, "policy", "0x30000")
     elif config.mode == "tdx":
-        _add_tdx_qemu_args(domain, config)
+        launch_security = _sub(domain, "launchSecurity", type="tdx")
+        _sub(
+            launch_security,
+            "quoteGenerationService",
+            path=config.qgs_socket,
+        )
+
+    # QEMU namespace extensions must follow native domain elements for the
+    # libvirt domain schema to accept the document.
+    _add_fw_cfg_qemu_args(domain, config)
 
     ET.indent(domain, space="  ")
     return ET.tostring(domain, encoding="unicode")
@@ -430,18 +458,31 @@ def _iommufd_advertised(domain_capabilities: str) -> bool:
     return False
 
 
+def _tdx_launch_security_advertised(domain_capabilities: str) -> bool:
+    try:
+        root = ET.fromstring(domain_capabilities)
+    except ET.ParseError:
+        return False
+    for enum in root.findall(".//features/launchSecurity/enum[@name='sectype']"):
+        if any((value.text or "").strip() == "tdx" for value in enum.findall("value")):
+            return True
+    return False
+
+
 def check_connection_capabilities(conn: Any, config: Any) -> None:
     if conn.getType().upper() != "QEMU":
         raise RuntimeError(f"qemu:///system returned unexpected driver {conn.getType()!r}")
-    if not config.host_devices:
+    mode = getattr(config, "mode", None)
+    if not config.host_devices and mode != "tdx":
         return
 
-    version = conn.getLibVersion()
-    if version < LIBVIRT_IOMMUFD_VERSION:
-        raise RuntimeError(
-            "GPU passthrough requires libvirt >= 12.1.0; "
-            f"the daemon reports {_version_string(version)}"
-        )
+    if config.host_devices:
+        version = conn.getLibVersion()
+        if version < LIBVIRT_IOMMUFD_VERSION:
+            raise RuntimeError(
+                "GPU passthrough requires libvirt >= 12.1.0; "
+                f"the daemon reports {_version_string(version)}"
+            )
     try:
         capabilities = conn.getDomainCapabilities(
             config.emulator,
@@ -452,9 +493,13 @@ def check_connection_capabilities(conn: Any, config: Any) -> None:
         )
     except Exception as exc:
         raise RuntimeError(f"failed to query libvirt domain capabilities: {exc}") from exc
-    if not _iommufd_advertised(capabilities):
+    if config.host_devices and not _iommufd_advertised(capabilities):
         raise RuntimeError(
             "libvirt domain capabilities do not advertise hostdev iommufd support"
+        )
+    if mode == "tdx" and not _tdx_launch_security_advertised(capabilities):
+        raise RuntimeError(
+            "libvirt domain capabilities do not advertise native TDX launch security"
         )
 
 
@@ -482,7 +527,9 @@ def _format_launch_error(exc: BaseException) -> str:
     return f"libvirt failed to start the domain: {message}"
 
 
-def preflight_connection(emulator: str, name: str, require_iommufd: bool) -> None:
+def preflight_connection(
+    emulator: str, name: str, mode: str, require_iommufd: bool
+) -> None:
     """Check the daemon, domain name, and optional IOMMUFD support without mutation."""
     try:
         import libvirt  # type: ignore
@@ -501,6 +548,7 @@ def preflight_connection(emulator: str, name: str, require_iommufd: bool) -> Non
     try:
         probe = SimpleNamespace(
             emulator=str(Path(emulator).resolve()),
+            mode=mode,
             host_devices=[object()] if require_iommufd else [],
         )
         check_connection_capabilities(conn, probe)
@@ -588,6 +636,54 @@ def attach_serial_console(conn: Any, domain: Any, libvirt_module: Any, log_path:
         print(f"\n{message}", file=sys.stderr)
 
 
+def follow_serial_log(
+    domain: Any, libvirt_module: Any, serial_log: str, log_path: str
+) -> None:
+    """Mirror the domain serial log until the VM stops or the user detaches.
+
+    The domain writes its console to a file, so the guest never blocks on a
+    console nobody reads.  Debug mode simply tails that file; Ctrl-C detaches
+    and leaves the VM running.
+    """
+    print(
+        "\nFollowing serial console; press Ctrl-C to detach "
+        "(the VM keeps running).",
+        file=sys.stderr,
+    )
+    deadline = time.monotonic() + 30.0
+    while not Path(serial_log).exists():
+        if time.monotonic() > deadline:
+            print(
+                f"Serial log did not appear: {serial_log}",
+                file=sys.stderr,
+            )
+            return
+        time.sleep(0.2)
+
+    try:
+        with open(serial_log, "rb") as source, open(
+            log_path, "ab", buffering=0
+        ) as log_file:
+            while True:
+                chunk = source.read(65536)
+                if chunk:
+                    _write_console_output(chunk, log_file)
+                    continue
+                try:
+                    if not domain.isActive():
+                        break
+                except libvirt_module.libvirtError:
+                    break
+                time.sleep(0.2)
+    except KeyboardInterrupt:
+        print(
+            f"\nDetached from {domain.name()}; VM is still managed by libvirt.",
+            file=sys.stderr,
+        )
+        return
+    print("\nSerial console closed because the VM stopped.", file=sys.stderr)
+
+
 def launch(config: DomainConfig) -> None:
     try:
         import libvirt  # type: ignore
@@ -615,11 +711,18 @@ def launch(config: DomainConfig) -> None:
             name = domain.name()
             uuid = domain.UUIDString()
             print(f"Started transient libvirt domain: {name} ({uuid})")
-            print(f"  console: virsh -c qemu:///system console {name}")
+            # The console is a write-only file sink, so "virsh console" has
+            # nothing to attach to; point at the log libvirt actually writes.
+            print(f"  serial log: /var/log/libvirt/qemu/{name}-serial.log")
             print(f"  shutdown: virsh -c qemu:///system shutdown {name}")
             print(f"  force stop: virsh -c qemu:///system destroy {name}")
             if config.debug:
-                attach_serial_console(conn, domain, libvirt, str(config.log_file))
+                follow_serial_log(
+                    domain,
+                    libvirt,
+                    f"/var/log/libvirt/qemu/{name}-serial.log",
+                    str(config.log_file),
+                )
         except libvirt.libvirtError as exc:
             raise RuntimeError(_format_launch_error(exc)) from exc
     finally:
@@ -654,7 +757,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--state-disk", required=True)
     parser.add_argument("--provider-config-disk", required=True)
     parser.add_argument("--guest-cid", type=int, required=True)
-    parser.add_argument("--qgs-cid", type=int, required=True)
+    parser.add_argument("--qgs-socket", required=True)
     parser.add_argument("--mac-address", required=True)
     parser.add_argument("--netdev-mode", choices=("user", "tap"), required=True)
     parser.add_argument("--debug", action="store_true")
@@ -681,6 +784,7 @@ def _preflight_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Check libvirt before preparing VM resources")
     parser.add_argument("--emulator", required=True)
     parser.add_argument("--name", required=True)
+    parser.add_argument("--mode", choices=("untrusted", "tdx", "sev-snp"), required=True)
     parser.add_argument("--require-iommufd", action="store_true")
     return parser
 
@@ -699,7 +803,7 @@ def _config_from_args(args: argparse.Namespace) -> DomainConfig:
         state_disk=str(Path(args.state_disk).resolve()),
         provider_config_disk=str(Path(args.provider_config_disk).resolve()),
         guest_cid=args.guest_cid,
-        qgs_cid=args.qgs_cid,
+        qgs_socket=str(Path(args.qgs_socket).resolve()),
         mac_address=args.mac_address,
         netdev_mode=args.netdev_mode,
         debug=args.debug,
@@ -731,7 +835,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 raise ValueError(
                     "domain name may contain only letters, digits, '.', '_', '+', ':', and '-'"
                 )
-            preflight_connection(args.emulator, args.name, args.require_iommufd)
+            preflight_connection(
+                args.emulator, args.name, args.mode, args.require_iommufd
+            )
         except (RuntimeError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1

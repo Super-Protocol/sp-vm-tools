@@ -110,7 +110,7 @@ check_passt_apparmor_profile() {
     [[ -r "${profile}" ]] || return 0
 
     if awk '
-        /^[[:space:]]*profile passt[[:space:]]*\{/ { in_passt = 1 }
+        /^[[:space:]]*profile passt([[:space:]]+flags=\([^)]*\))?[[:space:]]*\{/ { in_passt = 1 }
         in_passt && /\/usr\/bin\/passt[[:space:]]+r,/ { incompatible = 1 }
         in_passt && /^[[:space:]]*}/ { exit }
         END { exit incompatible ? 0 : 1 }
@@ -122,7 +122,7 @@ check_passt_apparmor_profile() {
     fi
 
     if ! awk '
-        /^[[:space:]]*profile passt[[:space:]]*\{/ { in_passt = 1 }
+        /^[[:space:]]*profile passt([[:space:]]+flags=\([^)]*\))?[[:space:]]*\{/ { in_passt = 1 }
         in_passt && /^[[:space:]]*capability[[:space:]]+net_bind_service,/ { found = 1 }
         in_passt && /^[[:space:]]*}/ { exit }
         END { exit found ? 0 : 1 }
@@ -204,7 +204,31 @@ preflight_libvirt() {
         require_iommufd=true
     fi
 
-    local args=(preflight --emulator "${QEMU_PATH}" --name "${LIBVIRT_DOMAIN_NAME}")
+    local ubuntu_version=""
+    if [[ -r /etc/os-release ]]; then
+        ubuntu_version=$(
+            # shellcheck disable=SC1091
+            source /etc/os-release
+            printf '%s' "${VERSION_ID:-}"
+        )
+    fi
+    if [[ "${ubuntu_version}" == "26.04" ]]; then
+        local passt_apparmor=/etc/apparmor.d/abstractions/libvirt-qemu
+        if [[ ! -r "${passt_apparmor}" ]] || \
+            ! grep -Eq '^[[:space:]]*profile[[:space:]]+passt[[:space:]]+flags=\([^)]*attach_disconnected(\.path=[^[:space:])]+)?[^)]*\)[[:space:]]*\{' \
+                "${passt_apparmor}"; then
+            echo "Error: Ubuntu 26.04 AppArmor blocks passt from accepting the libvirt Unix socket." >&2
+            bootstrap_hint
+            exit 1
+        fi
+    fi
+
+    local args=(
+        preflight
+        --emulator "${QEMU_PATH}"
+        --name "${LIBVIRT_DOMAIN_NAME}"
+        --mode "${VM_MODE}"
+    )
     if [[ "${require_iommufd}" == "true" ]]; then
         args+=(--require-iommufd)
     fi
@@ -485,7 +509,7 @@ launch_with_libvirt() {
         --state-disk "${STATE_DISK_PATH}"
         --provider-config-disk "${PROVIDER_CONFIG_DISK_PATH}"
         --guest-cid "${GUEST_CID}"
-        --qgs-cid "${BASE_CID}"
+        --qgs-socket "/var/run/tdx-qgs/qgs.socket"
         --mac-address "${MAC_ADDRESS}"
         --netdev-mode "${NETDEV_MODE}"
         --ip-address "${IP_ADDRESS}"

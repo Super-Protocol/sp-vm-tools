@@ -7,6 +7,7 @@ LIBVIRT_REQUIRED_VERSION="12.5.0"
 LIBVIRT_RELEASE_REPO="Super-Protocol/sp-vm-tools"
 LIBVIRT_URI="qemu:///system"
 PASST_UNPRIVILEGED_PORT_START="0"
+PASST_APPARMOR_DISCONNECTED_PATH="/att/passt/"
 
 LIBVIRT_BASE_PACKAGES=(
     libvirt0
@@ -294,7 +295,11 @@ install_project_libvirt() {
 passthrough_profile_state() {
     local profile=$1
     awk '
-        /^[[:space:]]*profile passt[[:space:]]*\{/ { in_passt = 1; found = 1; next }
+        /^[[:space:]]*profile passt([[:space:]]+flags=\([^)]*\))?[[:space:]]*\{/ {
+            in_passt = 1
+            found = 1
+            next
+        }
         in_passt && /^[[:space:]]*}/ { in_passt = 0; done = 1 }
         in_passt && /\/usr\/bin\/passt[[:space:]]+r,/ { readonly = 1 }
         in_passt && /\/usr\/bin\/passt[[:space:]]+rm,/ { mmap = 1 }
@@ -307,6 +312,44 @@ passthrough_profile_state() {
             else print "unknown"
         }
     ' "${profile}"
+}
+
+passthrough_profile_handles_disconnected_sockets() {
+    local profile=$1
+    awk '
+        /^[[:space:]]*profile passt([[:space:]]+flags=\([^)]*\))?[[:space:]]*\{/ {
+            found = 1
+            if ($0 ~ /attach_disconnected/) handled = 1
+        }
+        END { exit !(found && handled) }
+    ' "${profile}"
+}
+
+patch_passthrough_disconnected_socket_handling() {
+    local profile=$1 tmp
+    tmp=$(mktemp)
+    if ! awk -v path="${PASST_APPARMOR_DISCONNECTED_PATH}" '
+        BEGIN { patched = 0 }
+        /^[[:space:]]*profile passt([[:space:]]+flags=\([^)]*\))?[[:space:]]*\{/ {
+            if ($0 ~ /attach_disconnected/) {
+                patched = 1
+            } else if ($0 ~ /flags=\(/) {
+                sub(/flags=\(/, "flags=(attach_disconnected.path=" path " ")
+                patched = 1
+            } else {
+                sub(/\{[[:space:]]*$/, "flags=(attach_disconnected.path=" path ") {")
+                patched = 1
+            }
+        }
+        { print }
+        END { if (!patched) exit 1 }
+    ' "${profile}" > "${tmp}"; then
+        rm -f "${tmp}"
+        libvirt_host_error "failed to add disconnected socket handling to the nested passt profile"
+        return 1
+    fi
+    cat "${tmp}" > "${profile}"
+    rm -f "${tmp}"
 }
 
 patch_libvirt_apparmor_profile() {
@@ -340,8 +383,23 @@ patch_libvirt_apparmor_profile() {
         cat "${tmp}" > "${profile}"
         rm -f "${tmp}"
     fi
+
+    # TODO: Remove this workaround after Ubuntu's passt/libvirt AppArmor
+    # policy handles the listening Unix socket that becomes disconnected when
+    # passt pivots into its empty sandbox root.  AppArmor 5 on Ubuntu 26.04
+    # otherwise rejects accept4() with EACCES.  A synthetic attachment prefix
+    # is scoped to the nested passt profile and avoids disabling confinement.
+    if [[ "${UBUNTU_VERSION:-}" == "26.04" ]] && \
+        ! passthrough_profile_handles_disconnected_sockets "${profile}"; then
+        patch_passthrough_disconnected_socket_handling "${profile}" || return 1
+    fi
     if [[ "$(passthrough_profile_state "${profile}")" != "ready" ]]; then
         libvirt_host_error "failed to make the nested passt AppArmor profile usable"
+        return 1
+    fi
+    if [[ "${UBUNTU_VERSION:-}" == "26.04" ]] && \
+        ! passthrough_profile_handles_disconnected_sockets "${profile}"; then
+        libvirt_host_error "nested passt AppArmor profile does not handle disconnected Unix sockets"
         return 1
     fi
 }
@@ -369,6 +427,7 @@ configure_libvirt_apparmor() {
         '/usr/local/lib{,64}/qemu/*.so mr,' \
         '/usr/local/lib/@{multiarch}/qemu/*.so mr,' \
         'owner @{run}/libvirt/qemu/passt/* rw,' \
+        '@{run}/tdx-qgs/qgs.socket rw,' \
         'network vsock stream,' > "${tmp}"
     install -m 0644 "${tmp}" "${dropin}"
     rm -f "${tmp}"
@@ -395,6 +454,14 @@ configure_libvirt_apparmor() {
     }
     apparmor_parser -Q -r "${template}"
     systemctl reload apparmor
+}
+
+configure_tdx_qgs_access() {
+    getent group qgsd >/dev/null || {
+        libvirt_host_error "QGS group qgsd is missing"
+        return 1
+    }
+    usermod -a -G qgsd libvirt-qemu || return 1
 }
 
 configure_libvirt_qemu_runtime() {
@@ -672,19 +739,42 @@ verify_libvirt_host() {
         libvirt_host_error "AppArmor VSOCK rule is missing from ${dropin}"
         return 1
     }
+    if [[ "${UBUNTU_VERSION:-}" == "26.04" ]] && \
+        ! passthrough_profile_handles_disconnected_sockets \
+            /etc/apparmor.d/abstractions/libvirt-qemu; then
+        libvirt_host_error "nested passt AppArmor profile lacks Ubuntu 26.04 disconnected socket handling; rerun bootstrap"
+        return 1
+    fi
     if [[ "${mode}" == "tdx" ]]; then
         [[ -c /dev/vhost-vsock ]] || {
             libvirt_host_error "/dev/vhost-vsock is missing"
             return 1
         }
-        grep -Eq '^[[:space:]]*port[[:space:]]*=[[:space:]]*4050([[:space:]]|$)' /etc/qgs.conf || {
-            libvirt_host_error "QGS is not configured for VSOCK port 4050"
+        if grep -Eq '^[[:space:]]*port[[:space:]]*=' /etc/qgs.conf; then
+            libvirt_host_error "QGS must use its Unix socket; remove the port setting from /etc/qgs.conf"
             return 1
-        }
+        fi
         systemctl is-active --quiet qgsd || {
             libvirt_host_error "qgsd is not active"
             return 1
         }
+        [[ -S /var/run/tdx-qgs/qgs.socket ]] || {
+            libvirt_host_error "QGS Unix socket is missing: /var/run/tdx-qgs/qgs.socket"
+            return 1
+        }
+        id -nG libvirt-qemu | tr ' ' '\n' | grep -qx qgsd || {
+            libvirt_host_error "libvirt-qemu is not a member of the qgsd group"
+            return 1
+        }
+        grep -qF '@{run}/tdx-qgs/qgs.socket rw,' "${dropin}" || {
+            libvirt_host_error "AppArmor QGS socket rule is missing from ${dropin}"
+            return 1
+        }
+        if ! grep -Eq "<enum[[:space:]][^>]*name=['\"]sectype['\"]" <<< "${capabilities}" || \
+            ! grep -Eq '<value>tdx</value>' <<< "${capabilities}"; then
+            libvirt_host_error "domain capabilities do not advertise native TDX launch security"
+            return 1
+        fi
     elif [[ "${mode}" == "sev-snp" ]]; then
         grep -qi 'sev-snp' <<< "${capabilities}" || {
             libvirt_host_error "domain capabilities do not advertise SEV-SNP launch security"
@@ -738,6 +828,9 @@ setup_libvirt_host() {
     fi
 
     configure_libvirt_qemu_runtime || return 1
+    if [[ "${mode}" == "tdx" ]]; then
+        configure_tdx_qgs_access || return 1
+    fi
     configure_libvirt_apparmor || return 1
     configure_qemu_binary_permissions || return 1
     configure_iommufd || return 1

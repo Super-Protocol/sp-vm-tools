@@ -734,6 +734,14 @@ check_params() {
         USED_GPUS=("${AVAILABLE_GPUS[@]}")
     fi
 
+    # lspci reports BDFs without the PCI domain, so accept the fully qualified
+    # form too and compare everything in the short form.
+    local -a NORMALIZED_GPUS=()
+    for GPU in "${USED_GPUS[@]}"; do
+        NORMALIZED_GPUS+=("${GPU#0000:}")
+    done
+    USED_GPUS=("${NORMALIZED_GPUS[@]}")
+
     # Remove duplicates efficiently
     declare -A UNIQUE_GPUS
     for GPU in "${USED_GPUS[@]}"; do
@@ -1010,7 +1018,7 @@ main() {
             fi
             CC_PARAMS+=" -object memory-backend-ram,id=mem0,size=${VM_RAM}G "
             MACHINE_PARAMS="q35,kernel_irqchip=split,confidential-guest-support=tdx,memory-backend=mem0"
-            CC_SPECIFIC_PARAMS=" -object '{\"qom-type\":\"tdx-guest\",\"id\":\"tdx\",\"quote-generation-socket\":{\"type\":\"vsock\",\"cid\":\"${BASE_CID}\",\"port\":\"4050\"}}'"
+            CC_SPECIFIC_PARAMS=" -object '{\"qom-type\":\"tdx-guest\",\"id\":\"tdx\",\"quote-generation-socket\":{\"type\":\"unix\",\"path\":\"/var/run/tdx-qgs/qgs.socket\"}}'"
             ;;
         "sev-snp")
             if [[ ! $SEV_SNP_SUPPORT ]]; then
