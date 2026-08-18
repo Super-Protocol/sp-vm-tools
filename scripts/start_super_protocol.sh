@@ -151,7 +151,7 @@ parse_args() {
         case $1 in
             --cores) VM_CPU=$2; shift ;;
             --mem) VM_RAM=$(echo $2 | sed 's/G//'); shift ;;
-            --gpu) USED_GPUS+=("$2"); shift ;;
+            --gpu) USED_GPUS+=("${2#0000:}"); shift ;;
             --state_disk_path) STATE_DISK_PATH=$2; shift ;;
             --state_disk_size) STATE_DISK_SIZE=$2; shift ;;
             --provider_config_disk_path) PROVIDER_CONFIG_DISK_PATH=$2; shift ;;
@@ -721,9 +721,11 @@ check_params() {
     TOTAL_CPUS=$(nproc)
     TOTAL_RAM=$(free -g | awk '/^Mem:/{print $2}')
 
-    # Get list of all NVIDIA GPUs and NVSwitch devices
-    AVAILABLE_GPUS=($( { lspci -nnk -d 10de: | grep -E '3D controller' | awk '{print $1}'; } || echo))
-    AVAILABLE_NVSWITCHES=($( { lspci -mm -n -d 10de:22a3 | cut -d' ' -f1; } || echo))
+    # Get list of all NVIDIA GPUs and NVSwitch devices.  lspci prints the PCI
+    # domain on some hosts and omits it on others, and users may pass either
+    # form, so strip a leading "0000:" everywhere and compare short BDFs.
+    AVAILABLE_GPUS=($( { lspci -nnk -d 10de: | grep -E '3D controller' | awk '{sub(/^0000:/, "", $1); print $1}'; } || echo))
+    AVAILABLE_NVSWITCHES=($( { lspci -mm -n -d 10de:22a3 | awk '{sub(/^0000:/, "", $1); print $1}'; } || echo))
 
     echo "Debug: Found GPUs: ${AVAILABLE_GPUS[@]}"
 
@@ -733,14 +735,6 @@ check_params() {
     elif [[ ${#USED_GPUS[@]} -eq 0 ]]; then
         USED_GPUS=("${AVAILABLE_GPUS[@]}")
     fi
-
-    # lspci reports BDFs without the PCI domain, so accept the fully qualified
-    # form too and compare everything in the short form.
-    local -a NORMALIZED_GPUS=()
-    for GPU in "${USED_GPUS[@]}"; do
-        NORMALIZED_GPUS+=("${GPU#0000:}")
-    done
-    USED_GPUS=("${NORMALIZED_GPUS[@]}")
 
     # Remove duplicates efficiently
     declare -A UNIQUE_GPUS
