@@ -86,7 +86,7 @@ check_libvirt_dependencies() {
     if ! python3 -c 'import libvirt' >/dev/null 2>&1; then
         missing+=(python3-libvirt)
     fi
-    if [[ "${NETDEV_MODE}" == "user" || "${DEBUG_MODE}" == "true" ]]; then
+    if [[ "${NETDEV_MODE}" == "user" || -n "${SSH_PORT}" ]]; then
         command -v passt >/dev/null 2>&1 || missing+=(passt)
     fi
     if [[ ${#missing[@]} -gt 0 ]]; then
@@ -102,7 +102,7 @@ check_libvirt_dependencies() {
 }
 
 check_passt_apparmor_profile() {
-    if [[ "${NETDEV_MODE}" != "user" && "${DEBUG_MODE}" != "true" ]]; then
+    if [[ "${NETDEV_MODE}" != "user" && -z "${SSH_PORT}" ]]; then
         return
     fi
 
@@ -155,7 +155,7 @@ check_passt_unprivileged_ports() {
             "${SWARM_DB_GOSSIP_PORT}" "${DNS_PORT}"
         )
     fi
-    if [[ "${DEBUG_MODE}" == "true" ]]; then
+    if [[ -n "${SSH_PORT}" ]]; then
         ports+=("${SSH_PORT}")
     fi
 

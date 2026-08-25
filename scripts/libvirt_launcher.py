@@ -241,8 +241,7 @@ def _add_passt_interface(
     )
     _add_port_forward(interface, "udp", config.dns_port, 53, config.ip_address)
     _add_port_forward(interface, "tcp", config.dns_port, 53, config.ip_address)
-    if config.debug:
-        _add_port_forward(interface, "tcp", config.ssh_port, 22, "127.0.0.1")
+    _add_port_forward(interface, "tcp", config.ssh_port, 22, "127.0.0.1")
     return interface
 
 
@@ -255,7 +254,7 @@ def _add_network(devices: ET.Element, config: DomainConfig) -> None:
     _sub(interface, "mac", address=config.mac_address)
     _sub(interface, "target", dev=config.tap_iface, managed="no")
     _sub(interface, "model", type="virtio")
-    if config.debug:
+    if config.ssh_port is not None:
         _add_passt_interface(devices, config, debug_only=True)
 
 
