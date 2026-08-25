@@ -15,6 +15,7 @@ import select
 import sys
 import time
 import termios
+import uuid as uuidlib
 import tty
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -43,6 +44,7 @@ class HostDevice:
 @dataclass
 class DomainConfig:
     name: str
+    uuid: Optional[str]
     mode: str
     emulator: str
     memory_gib: int
@@ -115,6 +117,12 @@ def _validate_config(config: DomainConfig) -> None:
         raise ValueError(
             "domain name may contain only letters, digits, '.', '_', '+', ':', and '-'"
         )
+    if config.uuid is not None:
+        try:
+            parsed_uuid = uuidlib.UUID(config.uuid)
+        except (ValueError, AttributeError) as exc:
+            raise ValueError(f"invalid domain UUID: {config.uuid!r}") from exc
+        config.uuid = str(parsed_uuid)
     if config.mode not in {"untrusted", "tdx", "sev-snp"}:
         raise ValueError(f"unsupported VM mode: {config.mode}")
     if config.netdev_mode not in {"user", "tap"}:
@@ -351,6 +359,8 @@ def build_domain_xml(config: DomainConfig) -> str:
 
     domain = ET.Element("domain", {"type": "kvm"})
     _sub(domain, "name", config.name)
+    if config.uuid:
+        _sub(domain, "uuid", config.uuid)
     _sub(domain, "memory", config.memory_gib, unit="GiB")
     _sub(domain, "currentMemory", config.memory_gib, unit="GiB")
     _sub(domain, "vcpu", config.vcpus, placement="static")
@@ -745,6 +755,7 @@ def _host_device(value: str) -> HostDevice:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--name", required=True)
+    parser.add_argument("--uuid")
     parser.add_argument("--mode", choices=("untrusted", "tdx", "sev-snp"), required=True)
     parser.add_argument("--emulator", required=True)
     parser.add_argument("--memory-gib", type=int, required=True)
@@ -791,6 +802,7 @@ def _preflight_parser() -> argparse.ArgumentParser:
 def _config_from_args(args: argparse.Namespace) -> DomainConfig:
     return DomainConfig(
         name=args.name,
+        uuid=args.uuid,
         mode=args.mode,
         emulator=str(Path(args.emulator).resolve()),
         memory_gib=args.memory_gib,

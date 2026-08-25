@@ -17,6 +17,8 @@ DEFAULT_CACHE="/var/lib/libvirt/images/superprotocol"
 CACHE=${DEFAULT_CACHE}
 
 LIBVIRT_DOMAIN_NAME=""
+LIBVIRT_DOMAIN_UUID=""
+REUSE_DISKS=false
 LIBVIRT_QEMU_USER=""
 BASE_ARGS=()
 
@@ -24,6 +26,8 @@ usage_libvirt() {
     usage
     echo "Libvirt-specific options:"
     echo "  --name <domain>                Transient domain name (default: super-protocol-<guest-cid>)"
+    echo "  --uuid <uuid>                  Domain UUID (for Nova-managed instances)"
+    echo "  --reuse-disks                  Reuse existing state/provider disks on power-on"
     echo ""
     echo "Runtime behavior:"
     echo "  --debug false                  Start in the background and return"
@@ -40,6 +44,15 @@ extract_libvirt_args() {
                 fi
                 LIBVIRT_DOMAIN_NAME=$2
                 shift 2
+                ;;
+            --uuid)
+                [[ $# -ge 2 ]] || { echo "Error: --uuid requires a value" >&2; exit 1; }
+                LIBVIRT_DOMAIN_UUID=$2
+                shift 2
+                ;;
+            --reuse-disks)
+                REUSE_DISKS=true
+                shift
                 ;;
             --help)
                 usage_libvirt
@@ -466,6 +479,21 @@ cleanup_provider_disk() {
 create_vm_disks() {
     local provider_loop="" provider_mount
 
+    if [[ "${REUSE_DISKS}" == "true" && -f "${STATE_DISK_PATH}" && -f "${PROVIDER_CONFIG_DISK_PATH}" ]]; then
+        if ! qemu-img info --output=json "${STATE_DISK_PATH}" | grep -q '"format": "qcow2"'; then
+            echo "Error: existing state disk is not a valid qcow2 image: ${STATE_DISK_PATH}" >&2
+            exit 1
+        fi
+        if [[ "$(blkid -o value -s TYPE "${PROVIDER_CONFIG_DISK_PATH}" || true)" != "ext4" ]]; then
+            echo "Error: existing provider config disk is not ext4: ${PROVIDER_CONFIG_DISK_PATH}" >&2
+            exit 1
+        fi
+        echo "Validated reusable state and provider disks."
+        grant_libvirt_file_access state-disk "${STATE_DISK_PATH}" rw-
+        grant_libvirt_file_access provider-config-disk "${PROVIDER_CONFIG_DISK_PATH}" r--
+        return
+    fi
+
     rm -f "${STATE_DISK_PATH}"
     qemu-img create -f qcow2 "${STATE_DISK_PATH}" "${STATE_DISK_SIZE}G"
 
@@ -518,6 +546,7 @@ launch_with_libvirt() {
         --swarm-db-gossip-port "${SWARM_DB_GOSSIP_PORT}"
         --dns-port "${DNS_PORT}"
     )
+    append_optional_arg --uuid "${LIBVIRT_DOMAIN_UUID}"
     append_optional_arg --http-port "${HTTP_PORT}"
     append_optional_arg --https-port "${HTTPS_PORT}"
     append_optional_arg --pki-port "${PKI_PORT}"

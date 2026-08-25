@@ -762,12 +762,20 @@ check_params() {
         PROVIDER_CONFIG_DISK_PATH="$CACHE/provider_config.img"
     fi
 
-    echo "Removing old state disk..."
-    rm -f ${STATE_DISK_PATH}
-    echo "Creating new state disk directory..."
-    mkdir -p $(dirname ${STATE_DISK_PATH})
-    echo "Initializing state disk..."
-    touch ${STATE_DISK_PATH}
+    if [[ "${REUSE_DISKS:-false}" == "true" ]]; then
+        if [[ ! -f "${STATE_DISK_PATH}" || ! -f "${PROVIDER_CONFIG_DISK_PATH}" ]]; then
+            echo "Error: --reuse-disks requires existing state and provider disks" >&2
+            exit 1
+        fi
+        echo "Reusing existing state and provider disks..."
+    else
+        echo "Removing old state disk..."
+        rm -f "${STATE_DISK_PATH}"
+        echo "Creating new state disk directory..."
+        mkdir -p "$(dirname "${STATE_DISK_PATH}")"
+        echo "Initializing state disk..."
+        touch "${STATE_DISK_PATH}"
+    fi
 
 
     if [[ -n "$HTTP_PORT" ]]; then
@@ -822,7 +830,8 @@ check_params() {
         fi
     fi
 
-    if [[ "${STATE_DISK_SIZE}" -gt "${MOUNT_SIZE_AVAIL}" ]]; then
+    if [[ "${REUSE_DISKS:-false}" != "true" &&
+          "${STATE_DISK_SIZE}" -gt "${MOUNT_SIZE_AVAIL}" ]]; then
         echo "No free space to create virtual disk with ${STATE_DISK_SIZE}Gb"
         exit 1
     fi
