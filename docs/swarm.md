@@ -121,7 +121,7 @@ The bootstrap node gets all remaining host resources after subtracting the host 
 8. Launches join nodes.
 9. Sets up HAProxy ingress: `gw.dyn.<global_id>.superprotocol.io` → bootstrap ports 80/443.
 
-Attach to a VM with `virsh -c qemu:///system console swarm-bootstrap` (or `swarm-join-1` / `swarm-join-2`). In debug mode, use the matching `tmux attach -t <domain>` session instead.
+Follow a VM's boot output with `tail -f /var/log/libvirt/qemu/swarm-bootstrap-serial.log` (or `swarm-join-1` / `swarm-join-2`); libvirt records it from the first byte, whether or not anything is attached. In debug mode, use the matching `tmux attach -t <domain>` session instead.
 
 </details>
 

@@ -49,7 +49,7 @@ sudo ./scripts/start_super_protocol_libvirt.sh \
   --mode tdx
 ```
 
-With `--debug false` the command returns after the domain starts. With `--debug true --log_file /path/to/boot.log`, it attaches a bidirectional serial console and copies console output to the log; `Ctrl-C` or `Ctrl-]` detaches without stopping the VM. Use `virsh -c qemu:///system list`, `console`, `shutdown`, or `destroy` to manage it. `--gpu none` disables GPU, NVSwitch, and CX7 passthrough for diagnostics.
+With `--debug false` the command returns after the domain starts. With `--debug true --log_file /path/to/boot.log`, it follows the domain serial log and copies it to the log file; `Ctrl-C` detaches without stopping the VM. The domain always records its console to `/var/log/libvirt/qemu/<domain>-serial.log` from the first byte, so a VM that fails early can still be diagnosed. The serial port is a file sink rather than a pty, because a pty nobody reads fills up and stalls the guest inside console output. Use `virsh -c qemu:///system list`, `shutdown`, or `destroy` to manage it. `--gpu none` disables GPU, NVSwitch, and CX7 passthrough for diagnostics.
 
 #### Libvirt host configuration
 
