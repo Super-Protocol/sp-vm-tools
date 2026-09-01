@@ -6,7 +6,7 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 
 LIBVIRT_VERSION=12.5.0
 DEBIAN_REVISION=1
-SPVM_REVISION=1
+SPVM_REVISION=2
 PACKAGING_COMMIT=a8f73eb070c24b72f9d6dfbeffc28a334f29e076
 OUTPUT_ROOT="${SCRIPT_DIR}/out"
 DOCKER_PLATFORM=linux/amd64
@@ -25,7 +25,7 @@ Usage:
 Options:
   --libvirt-version VERSION   Upstream libvirt version (default: 12.5.0)
   --debian-revision NUMBER    Debian packaging revision (default: 1)
-  --spvm-revision NUMBER      Local package revision (default: 1)
+  --spvm-revision NUMBER      Local package revision (default: 2)
   --packaging-commit SHA      Immutable Debian packaging commit
   --output DIR                Artifact root (default: build/libvirt/out)
   --platform PLATFORM         Docker platform (default: linux/amd64)
@@ -164,7 +164,7 @@ build_target() {
             ;;
     esac
 
-    image_name="sp-vm-libvirt-builder:ubuntu${ubuntu_version}-${LIBVIRT_VERSION}-${DEBIAN_REVISION}"
+    image_name="sp-vm-libvirt-builder:ubuntu${ubuntu_version}-${LIBVIRT_VERSION}-${DEBIAN_REVISION}-spvm${SPVM_REVISION}"
     package_version="${LIBVIRT_VERSION}-${DEBIAN_REVISION}spvm${SPVM_REVISION}~ubuntu${ubuntu_version}.1"
     output_dir="${OUTPUT_ROOT}/ubuntu-${ubuntu_version}/${package_version}"
     rm -rf -- "${output_dir}"

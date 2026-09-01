@@ -8,13 +8,18 @@ The default source is the `debian/12.5.0-1` tag from the Debian libvirt Salsa
 repository. Resulting packages have a local version such as:
 
 ```text
-12.5.0-1spvm1~ubuntu24.04.1
-12.5.0-1spvm1~ubuntu26.04.1
+12.5.0-1spvm2~ubuntu24.04.1
+12.5.0-1spvm2~ubuntu26.04.1
 ```
 
 The local suffix sorts after older upstream versions but before a future
 `12.5.0-1ubuntu*` package, so an official build of the same upstream release
 can replace it normally.
+
+CI uses the automatically increasing GitHub Actions `run_number` as the
+`spvm` revision. For example, workflow run 123 produces package revision
+`spvm123`. Local builds use the default revision unless `--spvm-revision` is
+provided explicitly.
 
 ## Requirements
 
@@ -45,6 +50,12 @@ compiles and packages libvirt:
 ./build/libvirt/build.sh all --skip-tests
 ```
 
+The local source patch keeps libvirt's runtime `KVM_CAP_VM_TYPES` probe enabled
+when the Ubuntu build image has older KVM UAPI headers. The package build also
+extracts the QEMU driver from the resulting `.deb` and fails unless the runtime
+TDX probe is present, preventing a package that always reports
+`tdx supported='no'` from being published.
+
 The script supports alternative upstream/local revisions, for example:
 
 ```bash
@@ -61,8 +72,8 @@ Use `./build/libvirt/build.sh --help` to see all options.
 Packages are placed in a target- and version-specific directory:
 
 ```text
-build/libvirt/out/ubuntu-24.04/12.5.0-1spvm1~ubuntu24.04.1/
-build/libvirt/out/ubuntu-26.04/12.5.0-1spvm1~ubuntu26.04.1/
+build/libvirt/out/ubuntu-24.04/12.5.0-1spvm2~ubuntu24.04.1/
+build/libvirt/out/ubuntu-26.04/12.5.0-1spvm2~ubuntu26.04.1/
 ```
 
 Each directory contains the split libvirt `.deb` packages, debug `.ddeb`

@@ -22,7 +22,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY docker/prepare-source.sh /usr/local/bin/prepare-libvirt-source
-RUN prepare-libvirt-source "${LIBVIRT_VERSION}" "${DEBIAN_REVISION}" "${PACKAGING_COMMIT}"
+COPY patches/ /opt/libvirt-patches/
+RUN prepare-libvirt-source \
+        "${LIBVIRT_VERSION}" \
+        "${DEBIAN_REVISION}" \
+        "${PACKAGING_COMMIT}" \
+        /opt/libvirt-patches
 
 COPY docker/build-packages.sh /usr/local/bin/build-libvirt-packages
 

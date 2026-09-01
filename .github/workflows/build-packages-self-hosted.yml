@@ -81,7 +81,9 @@ jobs:
           archive_name="${BUILD_TYPE}.tar.gz"
           archive_path="${RUNNER_TEMP}/${archive_name}"
 
-          ./build/libvirt/build.sh "${target}"
+          ./build/libvirt/build.sh \
+            "${target}" \
+            --spvm-revision "${RUNNER_ID}"
 
           tar \
             --create \

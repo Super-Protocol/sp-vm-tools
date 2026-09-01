@@ -7,7 +7,7 @@ readonly OUTPUT_DIR=/out
 
 readonly LIBVIRT_VERSION=${LIBVIRT_VERSION:?LIBVIRT_VERSION is required}
 readonly DEBIAN_REVISION=${DEBIAN_REVISION:?DEBIAN_REVISION is required}
-readonly SPVM_REVISION=${SPVM_REVISION:-1}
+readonly SPVM_REVISION=${SPVM_REVISION:-2}
 readonly TARGET_UBUNTU_VERSION=${TARGET_UBUNTU_VERSION:?TARGET_UBUNTU_VERSION is required}
 readonly SKIP_TESTS=${SKIP_TESTS:-false}
 readonly OUTPUT_UID=${OUTPUT_UID:-0}
@@ -61,7 +61,7 @@ dch \
     --newversion "${PACKAGE_VERSION}" \
     --distribution "${expected_codename}" \
     --force-distribution \
-    "Local rebuild for Ubuntu ${TARGET_UBUNTU_VERSION}."
+    "Enable runtime detection of Intel TDX KVM VM types on Ubuntu ${TARGET_UBUNTU_VERSION}."
 
 build_options=""
 if [[ "${SKIP_TESTS}" == "true" ]]; then
@@ -75,8 +75,31 @@ export DEB_BUILD_OPTIONS="${build_options}"
 echo "Building libvirt ${PACKAGE_VERSION} on Ubuntu ${TARGET_UBUNTU_VERSION} (${VERSION_CODENAME})"
 dpkg-buildpackage --build=binary --unsigned-source --unsigned-changes -jauto
 
-mkdir -p "${OUTPUT_DIR}"
 shopt -s nullglob
+driver_packages=("${work_dir}"/libvirt-daemon-driver-qemu_*.deb)
+if [[ ${#driver_packages[@]} -ne 1 ]]; then
+    echo "Error: expected one libvirt-daemon-driver-qemu package, found ${#driver_packages[@]}" >&2
+    exit 1
+fi
+
+verify_dir="${work_dir}/verify-tdx-driver"
+dpkg-deb --extract "${driver_packages[0]}" "${verify_dir}"
+driver_candidates=("${verify_dir}"/usr/lib/*/libvirt/connection-driver/libvirt_driver_qemu.so)
+if [[ ${#driver_candidates[@]} -ne 1 ]]; then
+    echo "Error: expected one libvirt QEMU connection driver, found ${#driver_candidates[@]}" >&2
+    exit 1
+fi
+if ! LC_ALL=C grep -aFq 'KVM VM types:' "${driver_candidates[0]}"; then
+    echo "Error: libvirt QEMU driver was built without the runtime KVM VM-types probe" >&2
+    exit 1
+fi
+if LC_ALL=C grep -aFq 'KVM not compiled' "${driver_candidates[0]}"; then
+    echo "Error: libvirt QEMU driver still contains the compile-time-disabled TDX probe" >&2
+    exit 1
+fi
+echo "Verified runtime KVM VM-types probing in libvirt QEMU driver."
+
+mkdir -p "${OUTPUT_DIR}"
 artifacts=(
     "${work_dir}"/*.deb
     "${work_dir}"/*.ddeb
