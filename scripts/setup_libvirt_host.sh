@@ -4,6 +4,7 @@
 # This file is sourceable for unit tests and can also be executed directly.
 
 LIBVIRT_REQUIRED_VERSION="12.5.0"
+LIBVIRT_REQUIRED_PACKAGE_VERSION="${LIBVIRT_REQUIRED_VERSION}"
 LIBVIRT_RELEASE_REPO="Super-Protocol/sp-vm-tools"
 LIBVIRT_URI="qemu:///system"
 PASST_UNPRIVILEGED_PORT_START="0"
@@ -44,11 +45,13 @@ select_libvirt_release() {
     local ubuntu_version=$1
     case "${ubuntu_version}" in
         24.04)
-            LIBVIRT_RELEASE_TAG="44-libvirt-ubuntu24"
+            LIBVIRT_REQUIRED_PACKAGE_VERSION="12.5.0-1spvm45~ubuntu24.04.1"
+            LIBVIRT_RELEASE_TAG="45-libvirt-ubuntu24"
             LIBVIRT_RELEASE_ASSET="libvirt-ubuntu24.tar.gz"
-            LIBVIRT_RELEASE_SHA256="17a1aa837260e3e584b2ebcdd066ff541d2d89d1b798dc71c626976ff70ae452"
+            LIBVIRT_RELEASE_SHA256="ab1f980944a9ffb452654e3897fd91465e4673debf51683db9b7f2df96a21d61"
             ;;
         26.04)
+            LIBVIRT_REQUIRED_PACKAGE_VERSION="${LIBVIRT_REQUIRED_VERSION}"
             LIBVIRT_RELEASE_TAG="43-libvirt-ubuntu26"
             LIBVIRT_RELEASE_ASSET="libvirt-ubuntu26.tar.gz"
             LIBVIRT_RELEASE_SHA256="fd1ba716a9ee722c5fc0d3db72b92ccba3c57954c2464759ff4dc3f70a8bf6ad"
@@ -107,7 +110,7 @@ finally:
 libvirt_upgrade_required() {
     local installed_version=${1:-}
     [[ -z "${installed_version}" ]] || \
-        ! dpkg --compare-versions "${installed_version}" ge "${LIBVIRT_REQUIRED_VERSION}"
+        ! dpkg --compare-versions "${installed_version}" ge "${LIBVIRT_REQUIRED_PACKAGE_VERSION}"
 }
 
 missing_required_libvirt_packages() {
@@ -270,7 +273,7 @@ install_project_libvirt() {
     chmod 0755 "${work_dir}" || return 1
     archive="${work_dir}/${LIBVIRT_RELEASE_ASSET}"
 
-    echo "Downloading libvirt ${LIBVIRT_REQUIRED_VERSION} from ${LIBVIRT_RELEASE_URL}"
+    echo "Downloading libvirt ${LIBVIRT_REQUIRED_PACKAGE_VERSION} from ${LIBVIRT_RELEASE_URL}"
     wget --https-only --tries=3 -O "${archive}" "${LIBVIRT_RELEASE_URL}" || return 1
     chmod 0644 "${archive}" || return 1
     verify_and_extract_libvirt_archive "${archive}" "${work_dir}" || return 1
@@ -681,8 +684,8 @@ configure_iommufd() {
 verify_libvirt_host() {
     local mode=$1 installed_version missing_packages daemon_version qemu version_line qemu_major capabilities dropin
     installed_version=$(installed_libvirt_version)
-    if [[ -z "${installed_version}" ]] || ! dpkg --compare-versions "${installed_version}" ge "${LIBVIRT_REQUIRED_VERSION}"; then
-        libvirt_host_error "libvirt ${LIBVIRT_REQUIRED_VERSION} or newer is required; installed package is ${installed_version:-missing}"
+    if [[ -z "${installed_version}" ]] || ! dpkg --compare-versions "${installed_version}" ge "${LIBVIRT_REQUIRED_PACKAGE_VERSION}"; then
+        libvirt_host_error "libvirt package ${LIBVIRT_REQUIRED_PACKAGE_VERSION} or newer is required; installed package is ${installed_version:-missing}"
         return 1
     fi
     missing_packages=$(missing_required_libvirt_packages)
@@ -813,14 +816,14 @@ setup_libvirt_host() {
     missing_packages=$(missing_required_libvirt_packages)
     if libvirt_upgrade_required "${installed_version}" || [[ -n "${missing_packages}" ]]; then
         if libvirt_upgrade_required "${installed_version}"; then
-            echo "Installed libvirt ${installed_version:-none} is older than ${LIBVIRT_REQUIRED_VERSION}."
+            echo "Installed libvirt ${installed_version:-none} is older than ${LIBVIRT_REQUIRED_PACKAGE_VERSION}."
         fi
         if [[ -n "${missing_packages}" ]]; then
             echo "Required libvirt packages are missing: ${missing_packages//$'\n'/, }"
         fi
         install_project_libvirt || return 1
     else
-        echo "Installed libvirt ${installed_version} is ${LIBVIRT_REQUIRED_VERSION} or newer and all required packages are present; keeping it."
+        echo "Installed libvirt ${installed_version} is ${LIBVIRT_REQUIRED_PACKAGE_VERSION} or newer and all required packages are present; keeping it."
     fi
 
     if dpkg-query -W -f='${db:Status-Status}' libvirt-daemon-system-systemd 2>/dev/null | grep -qx installed; then
