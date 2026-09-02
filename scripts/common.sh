@@ -14,27 +14,94 @@ print_section_header() {
     echo -e "${BLUE}$(printf '=%.0s' {1..40})${NC}"
 }
 
+detect_nvidia_cc_mode() {
+  local requested_mode="${1:-auto}"
+  local pci_root="${PCI_SYSFS_ROOT:-/sys/bus/pci/devices}"
+  local dev_path vendor device vpd_file
+
+  DETECTED_NVSWITCH_BDFS=()
+  DETECTED_CX7_BRIDGE_BDFS=()
+
+  for dev_path in "${pci_root}"/*/; do
+    [[ -d "${dev_path}" ]] || continue
+    [[ -r "${dev_path}vendor" && -r "${dev_path}device" ]] || continue
+
+    vendor=$(<"${dev_path}vendor")
+    device=$(<"${dev_path}device")
+    vendor="${vendor,,}"
+    device="${device,,}"
+
+    # Hopper HGX exposes its third-generation NVSwitches as NVIDIA PCI
+    # devices.  PPCIe mode is required for confidential multi-GPU use.
+    if [[ "${vendor}" == "0x10de" && "${device}" == "0x22a3" ]]; then
+      DETECTED_NVSWITCH_BDFS+=("$(basename "${dev_path}")")
+      continue
+    fi
+
+    # HGX B200 exposes four ConnectX-7 switch-management PFs.  The SW_MNG
+    # VPD marker distinguishes them from ordinary ConnectX-7 NICs.  Blackwell
+    # uses encrypted NVLink and must remain in regular CC mode, not PPCIe.
+    vpd_file="${dev_path}vpd"
+    if [[ "${vendor}" == "0x15b3" && "${device}" == "0x1021" && -f "${vpd_file}" ]] \
+      && grep -a -q "SW_MNG" "${vpd_file}" 2>/dev/null; then
+      DETECTED_CX7_BRIDGE_BDFS+=("$(basename "${dev_path}")")
+    fi
+  done
+
+  case "${requested_mode}" in
+    auto)
+      if (( ${#DETECTED_NVSWITCH_BDFS[@]} > 0 && ${#DETECTED_CX7_BRIDGE_BDFS[@]} > 0 )); then
+        echo "ERROR: Both Hopper NVSwitch and Blackwell CX7 fabric devices were detected."
+        echo "Re-run with --gpu-mode cc or --gpu-mode ppcie after verifying the platform."
+        return 1
+      elif (( ${#DETECTED_NVSWITCH_BDFS[@]} > 0 )); then
+        NVIDIA_CC_MODE="ppcie"
+        NVIDIA_FABRIC_TYPE="hopper-nvswitch"
+      elif (( ${#DETECTED_CX7_BRIDGE_BDFS[@]} > 0 )); then
+        NVIDIA_CC_MODE="cc"
+        NVIDIA_FABRIC_TYPE="blackwell-cx7"
+      else
+        NVIDIA_CC_MODE="cc"
+        NVIDIA_FABRIC_TYPE="none"
+      fi
+      ;;
+    cc|ppcie)
+      NVIDIA_CC_MODE="${requested_mode}"
+      if (( ${#DETECTED_NVSWITCH_BDFS[@]} > 0 )); then
+        NVIDIA_FABRIC_TYPE="hopper-nvswitch"
+      elif (( ${#DETECTED_CX7_BRIDGE_BDFS[@]} > 0 )); then
+        NVIDIA_FABRIC_TYPE="blackwell-cx7"
+      else
+        NVIDIA_FABRIC_TYPE="none"
+      fi
+      ;;
+    *)
+      echo "ERROR: Invalid GPU mode '${requested_mode}'. Expected auto, cc, or ppcie."
+      return 1
+      ;;
+  esac
+
+  echo "Detected NVIDIA fabric: ${NVIDIA_FABRIC_TYPE}"
+  echo "Selected confidential GPU mode: ${NVIDIA_CC_MODE} (requested: ${requested_mode})"
+
+  if [[ "${requested_mode}" != "auto" ]]; then
+    if [[ "${NVIDIA_FABRIC_TYPE}" == "blackwell-cx7" && "${NVIDIA_CC_MODE}" == "ppcie" ]]; then
+      echo "WARNING: PPCIe was forced on a Blackwell/CX7 platform; NVIDIA recommends regular CC mode."
+    elif [[ "${NVIDIA_FABRIC_TYPE}" == "hopper-nvswitch" && "${NVIDIA_CC_MODE}" == "cc" ]]; then
+      echo "WARNING: Regular CC mode was forced on a Hopper NVSwitch platform; multi-GPU requires PPCIe."
+    fi
+  fi
+}
+
 setup_nvidia_gpus() {
-  TMP_DIR=$1
+  local TMP_DIR=$1
+  local requested_mode="${2:-auto}"
 
   echo "Checking for NVIDIA GPUs..."
   if ! command -v lspci >/dev/null; then
     echo "lspci not found, skipping NVIDIA GPU configuration"
     return 0
   fi
-
-  # Blacklist both NVIDIA and Nouveau drivers
-  echo "Blacklisting NVIDIA and Nouveau drivers..."
-  tee /etc/modprobe.d/blacklist-nvidia.conf << EOF
-blacklist nvidia
-blacklist nvidia_drm
-blacklist nouveau
-blacklist nvidia_uvm
-blacklist nvidia_modeset
-EOF
-
-  # Remove Nouveau from modules if present
-  sed -i '/nouveau/d' /etc/modules
 
   echo "Determining PCI IDs for your NVIDIA GPU(s)..."
   
@@ -60,49 +127,81 @@ EOF
   echo "GPU details:"
   echo "$gpu_list"
 
+  detect_nvidia_cc_mode "${requested_mode}" || return 1
+
+  # Do not modify the host until GPU mode selection has been validated.
+  echo "Blacklisting NVIDIA and Nouveau drivers..."
+  tee /etc/modprobe.d/blacklist-nvidia.conf << EOF
+blacklist nvidia
+blacklist nvidia_drm
+blacklist nouveau
+blacklist nvidia_uvm
+blacklist nvidia_modeset
+EOF
+
+  # Remove Nouveau from modules if present
+  sed -i '/nouveau/d' /etc/modules
+
   # Clone gpu-admin-tools
   sudo rm -rf "${TMP_DIR}/gpu-admin-tools" 2>/dev/null || true
   git clone -b v2026.06.05 --single-branch --depth 1 --no-tags https://github.com/NVIDIA/gpu-admin-tools.git "${TMP_DIR}/gpu-admin-tools"
   pushd "${TMP_DIR}/gpu-admin-tools"
 
-  # Step 1: Disable PPCIe mode on GPUs only (using BDF addresses)
-  echo "Disabling PPCIe mode on GPU devices..."
-  if [ "$gpu_count" -gt 0 ]; then
-    gpu_bdfs=$(echo "$gpu_list" | awk '{print $1}')
+  local gpu_bdfs gpu_bdf device_bdf
+  gpu_bdfs=$(echo "$gpu_list" | awk '{print $1}')
+
+  if [[ "${NVIDIA_CC_MODE}" == "ppcie" ]]; then
+    # Hopper PPCIe and regular CC are mutually exclusive.  Disable CC on the
+    # GPUs first, then enable PPCIe on every GPU and Hopper NVSwitch.
+    echo "Configuring Hopper GPUs and NVSwitches for Protected PCIe mode..."
     for gpu_bdf in $gpu_bdfs; do
-      echo "Disabling PPCIe mode for GPU ${gpu_bdf}"
-      python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu_bdf} --set-ppcie-mode=off --reset-after-ppcie-mode-switch
-      if [ $? -ne 0 ]; then
-        echo "Warning: Failed to disable PPCIe mode for GPU ${gpu_bdf} (this may be normal)"
-      fi
+      echo "Disabling regular CC mode for GPU ${gpu_bdf}"
+      python3 ./nvidia_gpu_tools.py --gpu-bdf="${gpu_bdf}" \
+        --set-cc-mode=off --reset-after-cc-mode-switch || {
+          echo "ERROR: Failed to disable regular CC mode for GPU ${gpu_bdf}"
+          popd
+          return 1
+        }
+    done
+
+    for device_bdf in $gpu_bdfs "${DETECTED_NVSWITCH_BDFS[@]}"; do
+      echo "Enabling PPCIe mode for NVIDIA device ${device_bdf}"
+      python3 ./nvidia_gpu_tools.py --devices="${device_bdf}" \
+        --set-ppcie-mode=on --reset-after-ppcie-mode-switch || {
+          echo "ERROR: Failed to enable PPCIe mode for NVIDIA device ${device_bdf}"
+          popd
+          return 1
+        }
+      python3 ./nvidia_gpu_tools.py --devices="${device_bdf}" --query-ppcie-settings
     done
   else
-    echo "No GPUs found to configure"
-    popd
-    return 0
+    # Single-GPU, PCIe-only multi-GPU, and Blackwell NVLink systems use
+    # regular CC mode.  Clear stale PPCIe state before enabling CC.
+    echo "Configuring GPUs for regular Confidential Computing mode..."
+    for device_bdf in $gpu_bdfs "${DETECTED_NVSWITCH_BDFS[@]}"; do
+      echo "Disabling PPCIe mode for NVIDIA device ${device_bdf}"
+      if ! python3 ./nvidia_gpu_tools.py --devices="${device_bdf}" \
+        --set-ppcie-mode=off --reset-after-ppcie-mode-switch; then
+        if [[ "${NVIDIA_FABRIC_TYPE}" == "hopper-nvswitch" ]]; then
+          echo "ERROR: Failed to disable PPCIe mode for Hopper device ${device_bdf}"
+          popd
+          return 1
+        fi
+        echo "WARNING: Failed to disable PPCIe mode for ${device_bdf}; the device may not support PPCIe"
+      fi
+    done
+
+    for gpu_bdf in $gpu_bdfs; do
+      echo "Enabling CC mode for GPU ${gpu_bdf}"
+      python3 ./nvidia_gpu_tools.py --gpu-bdf="${gpu_bdf}" \
+        --set-cc-mode=on --reset-after-cc-mode-switch || {
+          echo "ERROR: Failed to enable CC mode for GPU ${gpu_bdf}"
+          popd
+          return 1
+        }
+      python3 ./nvidia_gpu_tools.py --gpu-bdf="${gpu_bdf}" --query-cc-settings
+    done
   fi
-
-  # Step 2: Configure GPUs for CC mode
-  echo "Configuring GPUs for Confidential Computing mode..."
-  
-  gpu_bdfs=$(echo "$gpu_list" | awk '{print $1}')
-  
-  for gpu_bdf in $gpu_bdfs; do
-    echo "Setting CC mode for GPU ${gpu_bdf}"
-    python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu_bdf} --set-cc-mode=on --reset-after-cc-mode-switch
-    if [ $? -ne 0 ]; then
-      echo "ERROR: Failed to enable CC mode for GPU ${gpu_bdf}"
-      echo "This is critical for confidential computing functionality"
-      exit 1
-    fi
-    
-    # Verify the mode was set correctly
-    echo "Verifying CC mode for GPU ${gpu_bdf}"
-    python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu_bdf} --query-cc-settings
-  done
-
-  # Note: We don't need to handle NVSwitches separately as nvidia_gpu_tools
-  # will handle all necessary infrastructure automatically
 
   popd
 
@@ -151,23 +250,29 @@ EOF
   sudo update-initramfs -u
 
   echo "NVIDIA GPU configuration completed successfully"
-  echo "GPUs configured for CC mode: $gpu_count"
+  echo "GPUs configured for ${NVIDIA_CC_MODE} mode: $gpu_count"
   echo "Total NVIDIA devices in system: $all_nvidia_devices"
   echo "VFIO-PCI configured with IDs: $combined_pci_ids"
   
   echo ""
   echo "GPU Status Summary:"
   for gpu_bdf in $(echo "$gpu_list" | awk '{print $1}'); do
-    echo "- $gpu_bdf: CC mode enabled, VFIO ready"
+    echo "- $gpu_bdf: ${NVIDIA_CC_MODE} mode enabled, VFIO ready"
   done
 
   echo ""
   echo "IMPORTANT: GPU configuration is persistent across reboots."
   echo "To revert changes, run the following commands:"
   echo "cd ${TMP_DIR}/gpu-admin-tools"
-  for gpu_bdf in $(echo "$gpu_list" | awk '{print $1}'); do
-    echo "sudo python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu_bdf} --set-cc-mode=off --reset-after-cc-mode-switch"
-  done
+  if [[ "${NVIDIA_CC_MODE}" == "ppcie" ]]; then
+    for device_bdf in $gpu_bdfs "${DETECTED_NVSWITCH_BDFS[@]}"; do
+      echo "sudo python3 ./nvidia_gpu_tools.py --devices=${device_bdf} --set-ppcie-mode=off --reset-after-ppcie-mode-switch"
+    done
+  else
+    for gpu_bdf in $gpu_bdfs; do
+      echo "sudo python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu_bdf} --set-cc-mode=off --reset-after-cc-mode-switch"
+    done
+  fi
   
   return 0
 }

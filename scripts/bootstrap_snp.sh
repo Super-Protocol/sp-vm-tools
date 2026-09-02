@@ -448,7 +448,7 @@ bootstrap() {
     print_section_header "Hardware Configuration"
     if command -v lspci >/dev/null; then
         echo "Checking NVIDIA GPU configuration..."
-        setup_nvidia_gpus "${TMP_DIR}" || true
+        setup_nvidia_gpus "${TMP_DIR}" "auto"
         setup_cx7_bridge_vfio "amd_iommu=on"
         verify_cx7_vfio_setup
     else
