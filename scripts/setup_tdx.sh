@@ -32,6 +32,23 @@ check_error() {
     fi
 }
 
+get_current_kernel_log() {
+    local kernel_log=""
+
+    # The live dmesg ring buffer can wrap on noisy hardware (for example when
+    # an HBA repeatedly logs errors).  Journald keeps the early boot messages
+    # that contain the TDX/PAMT initialization result.
+    if command -v journalctl >/dev/null 2>&1; then
+        kernel_log=$(journalctl -k -b --no-pager 2>/dev/null \
+            | grep -E 'virt/tdx|PAMT' || true)
+    fi
+    if [ -z "${kernel_log}" ]; then
+        kernel_log=$(dmesg 2>/dev/null | grep -E 'virt/tdx|PAMT' || true)
+    fi
+
+    printf '%s\n' "${kernel_log}"
+}
+
 # Configuration variables
 PCCS_API_KEY="aecd5ebb682346028d60c36131eb2d92"
 PCCS_PORT="8081"
@@ -46,6 +63,15 @@ USER_TOKEN=$(echo -n "${PCCS_PASSWORD}" | sha512sum | awk '{print $1}')
 check_all_bios_settings() {
     local results=()
     local all_passed=true
+    local kernel_log
+    local tdx_enabled=false
+
+    kernel_log=$(get_current_kernel_log)
+    if [ "$(cat /sys/module/kvm_intel/parameters/tdx 2>/dev/null)" = "Y" ]; then
+        # This is the authoritative runtime signal: kvm_intel exposes Y only
+        # after host TDX initialization has succeeded.
+        tdx_enabled=true
+    fi
     
     print_section_header "BIOS Configuration Check Results"
     echo "Checking all settings..."
@@ -85,7 +111,7 @@ check_all_bios_settings() {
     
     # Check if TME is actually enabled via TDX initialization
     # (Modern TDX systems don't show direct TME messages, TME status is confirmed via TDX)
-    if dmesg | grep -q "virt/tdx.*module initialized"; then
+    if $tdx_enabled || grep -q "virt/tdx.*module initialized" <<< "${kernel_log}"; then
         tme_active=true
     fi
     
@@ -108,19 +134,19 @@ check_all_bios_settings() {
     # Check if TME-MT is active via TDX module initialization and PAMT allocation
     # In modern TDX implementations, PAMT allocation indicates TME-MT is working
     tme_mt_active=false
-    tdx_enabled=false
-    
-    # Check if TDX is enabled in KVM (indicates TME-MT capability)
-    if [ -f /sys/module/kvm_intel/parameters/tdx ] && [ "$(cat /sys/module/kvm_intel/parameters/tdx)" = "Y" ]; then
-        tdx_enabled=true
-    fi
     
     # Check if PAMT is allocated (confirms TME-MT is working)
-    if dmesg | grep -q "virt/tdx.*KB allocated for PAMT"; then
+    if grep -q "virt/tdx.*KB allocated for PAMT" <<< "${kernel_log}"; then
         tme_mt_active=true
         # Extract PAMT allocation info
-        pamt_info=$(dmesg | grep "virt/tdx.*KB allocated for PAMT" | head -1 | sed 's/.*virt\/tdx: //' | sed 's/ KB allocated for PAMT//')
+        pamt_info=$(grep "virt/tdx.*KB allocated for PAMT" <<< "${kernel_log}" | head -1 | sed 's/.*virt\/tdx: //' | sed 's/ KB allocated for PAMT//')
         results+=("  PAMT allocation: ${pamt_info} KB")
+    elif $tdx_enabled; then
+        # PAMT and TME-MT are prerequisites for successful host TDX
+        # initialization.  The detailed allocation line may have aged out of
+        # dmesg and may be unavailable when journald is not persistent.
+        tme_mt_active=true
+        results+=("  PAMT allocation: active TDX confirms initialization (boot message unavailable)")
     fi
     
     # Final TME-MT assessment
@@ -188,8 +214,7 @@ check_all_bios_settings() {
         fi
     fi
     results+=("SEAM Settings:")
-    if dmesg | grep -q "virt/tdx: module initialized" && \
-       dmesg | grep -q "virt/tdx: BIOS enabled"; then
+    if $tdx_enabled; then
         results+=("${SUCCESS} SEAM loader enabled and functioning${NC}")
         local tdx_cap_msr=$(rdmsr -X 0x982 2>/dev/null || echo "0")
         results+=("  MSR 0x982: ${tdx_cap_msr} (for reference only)")
@@ -200,16 +225,19 @@ check_all_bios_settings() {
     fi
 
     results+=("TDX Settings:")
-    if dmesg | grep -q "virt/tdx: BIOS enabled"; then
+    if $tdx_enabled; then
         results+=("${SUCCESS} TDX supported and initialized${NC}")
         
-        local pamt_alloc=$(dmesg | grep -i "KB allocated for PAMT" || echo "")
+        local pamt_alloc
+        pamt_alloc=$(grep -i "KB allocated for PAMT" <<< "${kernel_log}" || true)
         if [ ! -z "$pamt_alloc" ]; then
             results+=("${SUCCESS} PAMT allocation successful: $(echo $pamt_alloc | grep -o '[0-9]* KB')${NC}")
         fi
         
-        if dmesg | grep -q "virt/tdx: module initialized"; then
+        if grep -q "virt/tdx: module initialized" <<< "${kernel_log}"; then
             results+=("${SUCCESS} TDX module initialized${NC}")
+        else
+            results+=("${SUCCESS} TDX module active (confirmed by kvm_intel.tdx=Y)${NC}")
         fi
     else
         results+=("${FAILURE} TDX not properly configured on host${NC}")
