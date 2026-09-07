@@ -60,7 +60,8 @@ bootstrap() {
         exit 1
     fi
 
-    # Install the project TDX kernel/QEMU stack and host attestation runtime.
+    # Install the pinned Canonical HWE kernel, project TDX QEMU and host
+    # attestation runtime.
     print_section_header "TDX Host Setup"
     TMP_DIR=$(mktemp -d)
 

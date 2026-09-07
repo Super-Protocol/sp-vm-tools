@@ -41,6 +41,10 @@ LOG_FILE=""
 DEFAULT_MAC_PREFIX="52:54:00:12:34"
 DEFAULT_MAC_SUFFIX="56"
 QEMU_PATH=""
+QEMU_MAJOR_VERSION=0
+QEMU_MINOR_VERSION=0
+TDX_MODERN_STACK=false
+QEMU_FIRMWARE_PARAMS=""
 DEFAULT_DEBUG=false
 LOCAL_BUILD_DIR=""
 
@@ -141,7 +145,6 @@ IMAGE_PATH=""
 ROOTFS_HASH_PATH=""
 KERNEL_PATH=""
 PROVIDER_CONFIG_DISK_PATH=""
-QEMU_MAJOR_VERSION=0
 SNP_VCPU="EPYC-v4"
 PHYS_BITS=48
 
@@ -263,6 +266,8 @@ detect_phys_bits() {
 
 find_qemu_path() {
     local qemu_locations=(
+        "/opt/sp-qemu-tdx-10.2/bin/qemu-system-x86_64"
+        "/opt/sp-qemu-tdx-9.2/bin/qemu-system-x86_64"
         "/usr/local/bin/qemu-system-x86_64"
         "/usr/bin/qemu-system-x86_64"
         "/bin/qemu-system-x86_64"
@@ -284,14 +289,16 @@ find_qemu_path() {
 
 check_qemu_version() {
     local min_major=9
-    local ver major
+    local ver major minor
     ver=$("${QEMU_PATH}" --version 2>/dev/null | head -1)
     major=$(echo "${ver}" | sed -nE 's/.*version ([0-9]+).*/\1/p')
+    minor=$(echo "${ver}" | sed -nE 's/.*version [0-9]+\.([0-9]+).*/\1/p')
     if [[ -z "${major}" ]]; then
         echo "Error: could not parse QEMU version from: '${ver}'"
         exit 1
     fi
     QEMU_MAJOR_VERSION=${major}
+    QEMU_MINOR_VERSION=${minor:-0}
     if (( major < min_major )); then
         echo "Error: QEMU major version ${major} is too old (need >= ${min_major})."
         echo "Found: ${ver} at ${QEMU_PATH}"
@@ -299,7 +306,21 @@ check_qemu_version() {
         echo "Re-run scripts/bootstrap_tdx.sh to install the bundled QEMU."
         exit 1
     fi
-    echo "QEMU version OK: ${ver} (${QEMU_PATH})"
+    # QEMU 9.2 from Canonical and QEMU 10+ use the upstream TDX KVM UAPI
+    # (typed KVM_X86_TDX_VM, supported_xfam and guest_memfd).  Older Intel
+    # QEMU 9.0 snapshots use the incompatible v20 development UAPI.
+    if (( major > 9 || (major == 9 && QEMU_MINOR_VERSION >= 2) )); then
+        TDX_MODERN_STACK=true
+    fi
+
+    # The standalone /opt build intentionally does not bundle generic PC ROMs.
+    # Reuse the complete ROM set installed with sp-qemu-tdx (including
+    # efi-virtio.rom); confidential firmware is still selected with -bios.
+    if [[ "${QEMU_PATH}" == /opt/sp-qemu-tdx-9.2/* ]]; then
+        QEMU_FIRMWARE_PARAMS="-L /usr/local/share/qemu"
+    fi
+
+    echo "QEMU version OK: ${ver} (${QEMU_PATH}, modern_tdx=${TDX_MODERN_STACK})"
 }
 
 download_release() {
@@ -372,7 +393,7 @@ parse_and_download_release_files() {
     required_keys=()
     if [[ "${VM_MODE}" == "sev-snp" ]]; then
         required_keys=("image" "bios_amd" "kernel" "rootfs_hash")
-    elif (( QEMU_MAJOR_VERSION >= 10 )); then
+    elif [[ "${TDX_MODERN_STACK}" == true ]]; then
         required_keys=("image" "bios_tdx" "kernel" "rootfs_hash")
     else
         required_keys=("image" "bios" "kernel" "rootfs_hash")
@@ -401,13 +422,13 @@ parse_and_download_release_files() {
             kernel) KERNEL_PATH=$local_path; echo "Set KERNEL_PATH to ${local_path}" ;;
             rootfs_hash) ROOTFS_HASH_PATH=$local_path; echo "Set ROOTFS_HASH_PATH to ${local_path}" ;;
             bios)
-                if [[ "${VM_MODE}" != "sev-snp" ]] && (( QEMU_MAJOR_VERSION < 10 )); then
+                if [[ "${VM_MODE}" != "sev-snp" ]] && [[ "${TDX_MODERN_STACK}" != true ]]; then
                     BIOS_PATH=$local_path
                     echo "Set BIOS_PATH to ${local_path} (QEMU ${QEMU_MAJOR_VERSION})"
                 fi
                 ;;
             bios_tdx)
-                if [[ "${VM_MODE}" != "sev-snp" ]] && (( QEMU_MAJOR_VERSION >= 10 )); then
+                if [[ "${VM_MODE}" != "sev-snp" ]] && [[ "${TDX_MODERN_STACK}" == true ]]; then
                     BIOS_PATH=$local_path
                     echo "Set BIOS_PATH to ${local_path} (QEMU ${QEMU_MAJOR_VERSION})"
                 fi
@@ -422,11 +443,11 @@ parse_and_download_release_files() {
         esac
 
         # Skip downloading firmware files not needed for this mode/version
-        if [[ "$key" == "bios" ]] && { [[ "${VM_MODE}" == "sev-snp" ]] || (( QEMU_MAJOR_VERSION >= 10 )); }; then
+        if [[ "$key" == "bios" ]] && { [[ "${VM_MODE}" == "sev-snp" ]] || [[ "${TDX_MODERN_STACK}" == true ]]; }; then
             echo "Skipping $filename (mode=${VM_MODE}, qemu=${QEMU_MAJOR_VERSION})"
             continue
         fi
-        if [[ "$key" == "bios_tdx" ]] && { [[ "${VM_MODE}" == "sev-snp" ]] || (( QEMU_MAJOR_VERSION < 10 )); }; then
+        if [[ "$key" == "bios_tdx" ]] && { [[ "${VM_MODE}" == "sev-snp" ]] || [[ "${TDX_MODERN_STACK}" != true ]]; }; then
             echo "Skipping $filename (mode=${VM_MODE}, qemu=${QEMU_MAJOR_VERSION})"
             continue
         fi
@@ -1022,6 +1043,11 @@ main() {
             CC_PARAMS+=" -object memory-backend-ram,id=mem0,size=${VM_RAM}G "
             MACHINE_PARAMS="q35,kernel_irqchip=split,confidential-guest-support=tdx,memory-backend=mem0"
             CC_SPECIFIC_PARAMS=" -object '{\"qom-type\":\"tdx-guest\",\"id\":\"tdx\",\"quote-generation-socket\":{\"type\":\"unix\",\"path\":\"/var/run/tdx-qgs/qgs.socket\"}}'"
+            if [[ "${TDX_MODERN_STACK}" == true ]]; then
+                # Granite Rapids advertises AVX10, but current TDX modules do
+                # not expose it to TD guests.  Avoid one warning per vCPU.
+                CPU_PARAMS="-cpu host,-avx10"
+            fi
             ;;
         "sev-snp")
             if [[ ! $SEV_SNP_SUPPORT ]]; then
@@ -1119,6 +1145,7 @@ if [[ "${NETDEV_MODE}" == "tap" ]]; then
     fi
 
     QEMU_COMMAND="${QEMU_PATH} \
+        ${QEMU_FIRMWARE_PARAMS} \
         -enable-kvm \
         -append \"${KERNEL_CMD_LINE}\" \
         -drive file=${IMAGE_PATH},if=virtio,format=raw,readonly=on \

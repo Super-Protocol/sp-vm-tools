@@ -14,6 +14,7 @@ on:
           - SEV+TDX
           - libvirt-ubuntu24
           - libvirt-ubuntu26
+          - qemu-ubuntu24
 
 jobs:
   build:
@@ -95,6 +96,24 @@ jobs:
           tar --list --gzip --file "${archive_path}" >/dev/null
           echo "LIBVIRT_ARCHIVE_NAME=${archive_name}" >> "$GITHUB_ENV"
           echo "LIBVIRT_ARCHIVE_PATH=${archive_path}" >> "$GITHUB_ENV"
+
+      - name: Build QEMU packages for Ubuntu 24.04
+        if: ${{ github.event.inputs.build_type == 'qemu-ubuntu24' }}
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          ./build/qemu/build.sh \
+            --spvm-revision "${RUNNER_ID}" \
+            --output "${RUNNER_TEMP}/qemu"
+
+          archive_path="${RUNNER_TEMP}/qemu/ubuntu-24.04/qemu-ubuntu24.tar.gz"
+          checksum_path="${archive_path}.sha256"
+          tar --list --gzip --file "${archive_path}" >/dev/null
+          (
+            cd "$(dirname "${checksum_path}")"
+            sha256sum --check "$(basename "${checksum_path}")"
+          )
+          echo "QEMU_ARCHIVE_PATH=${archive_path}" >> "$GITHUB_ENV"
+          echo "QEMU_CHECKSUM_PATH=${checksum_path}" >> "$GITHUB_ENV"
           
       - name: Set release name
         id: release-name
@@ -106,6 +125,8 @@ jobs:
           elif [[ "${BUILD_TYPE}" == "SNP" ]]; then
             echo "RELEASE_NAME=${RUNNER_ID}-snp" >> "$GITHUB_ENV"
           elif [[ "${BUILD_TYPE}" == libvirt-ubuntu* ]]; then
+            echo "RELEASE_NAME=${RUNNER_ID}-${BUILD_TYPE}" >> "$GITHUB_ENV"
+          elif [[ "${BUILD_TYPE}" == "qemu-ubuntu24" ]]; then
             echo "RELEASE_NAME=${RUNNER_ID}-${BUILD_TYPE}" >> "$GITHUB_ENV"
           else
             echo "Error: Unknown BUILD_TYPE ${BUILD_TYPE}" >&2
@@ -144,3 +165,16 @@ jobs:
           name: Release ${{ env.RELEASE_NAME }}
           prerelease: true
           files: ${{ env.LIBVIRT_ARCHIVE_PATH }}
+
+      - name: Publish QEMU Ubuntu 24.04 Release Asset
+        if: ${{ github.event.inputs.build_type == 'qemu-ubuntu24' }}
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.RELEASE_NAME }}
+          name: Release ${{ env.RELEASE_NAME }}
+          prerelease: true
+          files: |
+            ${{ env.QEMU_ARCHIVE_PATH }}
+            ${{ env.QEMU_CHECKSUM_PATH }}

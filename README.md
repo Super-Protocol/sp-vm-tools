@@ -61,6 +61,12 @@ sudo ./scripts/bootstrap_tdx.sh
 sudo ./scripts/bootstrap_snp.sh
 ```
 
+The TDX bootstrap selects the NVIDIA confidential GPU mode from driverless PCI
+and VPD data. It uses regular CC mode for standalone/PCIe GPUs and Blackwell
+NVLink systems, and Protected PCIe mode for Hopper NVSwitch systems. Automatic
+detection is the default; use `--gpu-mode cc` or `--gpu-mode ppcie` only as an
+explicit hardware override.
+
 The bootstrap performs the host-wide work that previously required manual fixes:
 
 - installs the complete project libvirt 12.5 package set, including `libvirt-dev`, when the installed version is older or any required split package is missing;
@@ -92,7 +98,7 @@ Pick the script that matches your CPU vendor. See [docs/swarm.md](docs/swarm.md)
 What it does:
 
 1. Verifies Ubuntu version and root privileges.
-2. Runs `setup_tdx.sh` to install the project-matched TDX kernel/QEMU bundle and PCCS attestation host components.
+2. Runs `setup_tdx.sh` to install the pinned Canonical HWE kernel, the project TDX QEMU package, and PCCS attestation host components.
 3. Verifies BIOS/CPU TDX settings (TME, TME-MT, SEAM, TXT, SGX, …).
 4. Installs the required QGS/PCCS attestation packages directly, without running Canonical's host-setup script or enabling global package downgrades.
 5. Updates the Intel TDX-Module to a known-good version.
