@@ -53,7 +53,11 @@ install_noble_stable_kernel() {
 
     mkdir -p "${work}"
     installed_libc_version=$(dpkg-query -W -f='${Version}' linux-libc-dev 2>/dev/null || true)
-    candidate_libc_version=$(apt-cache policy linux-libc-dev 2>/dev/null | awk '/Candidate:/ {print $2; exit}')
+    # apt-cache policy treats a manually installed higher version as Candidate
+    # even when no configured repository provides it. madison lists repository
+    # versions only, which lets us distinguish Ubuntu packages from old custom
+    # kernel builds.
+    candidate_libc_version=$(apt-cache madison linux-libc-dev 2>/dev/null | awk 'NR == 1 {print $3; exit}')
 
     # linux-libc-dev is produced by Noble's GA kernel source and therefore has
     # an independent 6.8 package version even though the installed HWE ABI is 7.0.

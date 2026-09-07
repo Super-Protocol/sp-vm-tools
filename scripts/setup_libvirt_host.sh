@@ -426,7 +426,9 @@ configure_libvirt_apparmor() {
     printf '%s\n' \
         '# Managed by sp-vm-tools bootstrap.' \
         '/usr/local/bin/qemu-system-x86_64 rmix,' \
+        "${NOBLE_QEMU_INSTALL_PREFIX}/bin/qemu-system-x86_64 rmix," \
         '/usr/local/share/qemu/** rk,' \
+        "${NOBLE_QEMU_INSTALL_PREFIX}/share/qemu/** rk," \
         '/usr/local/lib{,64}/qemu/*.so mr,' \
         '/usr/local/lib/@{multiarch}/qemu/*.so mr,' \
         'owner @{run}/libvirt/qemu/passt/* rw,' \
@@ -447,6 +449,12 @@ configure_libvirt_apparmor() {
             printf '%s\n' \
                 '# Managed by sp-vm-tools: allow libvirtd capabilities probing.' \
                 '/usr/local/bin/qemu-system-x86_64 PUx,' >> "${daemon_local}"
+        fi
+        if ! grep -qF "${NOBLE_QEMU_INSTALL_PREFIX}/bin/qemu-system-x86_64 PUx," "${daemon_local}"; then
+            printf '%s\n' \
+                '# The project package exposes /usr/local/bin as a symlink;' \
+                '# libvirt resolves it before execve, so allow the real target too.' \
+                "${NOBLE_QEMU_INSTALL_PREFIX}/bin/qemu-system-x86_64 PUx," >> "${daemon_local}"
         fi
         apparmor_parser -Q -r "${daemon_profile}"
     fi
