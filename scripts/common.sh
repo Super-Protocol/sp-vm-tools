@@ -14,6 +14,135 @@ print_section_header() {
     echo -e "${BLUE}$(printf '=%.0s' {1..40})${NC}"
 }
 
+# Shared Ubuntu 24.04 confidential-computing stack. Both Intel TDX and AMD
+# SEV-SNP use the same signed Canonical kernel and the same upstream QEMU
+# binary. The concrete versions and every downloaded artifact are pinned.
+NOBLE_KERNEL_ABI="7.0.0-31-generic"
+NOBLE_KERNEL_PACKAGE_VERSION="7.0.0-31.31~24.04.1"
+NOBLE_QEMU_RELEASE_REPO="Super-Protocol/sp-vm-tools"
+NOBLE_QEMU_RELEASE_TAG="46-qemu-ubuntu24"
+NOBLE_QEMU_RELEASE_ASSET="qemu-ubuntu24.tar.gz"
+NOBLE_QEMU_RELEASE_ASSET_SHA256="12e571708fbd6b77d4dbe526313252f7c3c4e4d6a9bfc829ea9d2ecf4519cbfa"
+NOBLE_QEMU_INSTALL_PREFIX="/opt/sp-qemu-tdx-10.2"
+
+download_pinned_package() {
+    local output="$1"
+    local url="$2"
+    local expected_sha256="$3"
+    local actual_sha256
+
+    wget -O "${output}" "${url}"
+    actual_sha256=$(sha256sum "${output}" | awk '{print $1}')
+    if [ "${actual_sha256}" != "${expected_sha256}" ]; then
+        echo "ERROR: SHA-256 mismatch for $(basename "${output}")" >&2
+        echo "Expected: ${expected_sha256}" >&2
+        echo "Actual:   ${actual_sha256}" >&2
+        rm -f "${output}"
+        return 1
+    fi
+}
+
+install_noble_stable_kernel() {
+    local work="$1"
+    local archive="https://archive.ubuntu.com/ubuntu"
+
+    mkdir -p "${work}"
+
+    # linux-libc-dev is produced by Noble's GA kernel source and therefore has
+    # an independent 6.8 package version even though the installed HWE ABI is 7.0.
+    download_pinned_package \
+        "${work}/linux-image-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+        "${archive}/pool/main/l/linux-signed-hwe-7.0/linux-image-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+        "df803cb70c2a3b0899987390cf6483fbeb05c3610855d10d3a7050a01eeecd19"
+    download_pinned_package \
+        "${work}/linux-modules-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+        "${archive}/pool/main/l/linux-hwe-7.0/linux-modules-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+        "45f19f8e9aec61b57236925b9db5ee14469a854b1f631004443aa453880124ce"
+    download_pinned_package \
+        "${work}/linux-hwe-7.0-headers-7.0.0-31_${NOBLE_KERNEL_PACKAGE_VERSION}_all.deb" \
+        "${archive}/pool/main/l/linux-hwe-7.0/linux-hwe-7.0-headers-7.0.0-31_${NOBLE_KERNEL_PACKAGE_VERSION}_all.deb" \
+        "3b2e3548a42e29e64f277e42e9248557f3cbb65071de6c384a4514145a1ab4a2"
+    download_pinned_package \
+        "${work}/linux-headers-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+        "${archive}/pool/main/l/linux-hwe-7.0/linux-headers-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+        "b4bff6ea35a6432482508908af5da5f35171a914cb31dcac5beecef19b81afd2"
+    download_pinned_package \
+        "${work}/linux-libc-dev_6.8.0-139.139_amd64.deb" \
+        "${archive}/pool/main/l/linux/linux-libc-dev_6.8.0-139.139_amd64.deb" \
+        "f8292b3414cac372ec28ba484a45e3f18b3ac5fc7872ca82661835286f1c5865"
+
+    CURRENT_KERNEL=$(uname -r)
+    NEW_KERNEL_VERSION="${NOBLE_KERNEL_ABI}"
+
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        "${work}/linux-libc-dev_6.8.0-139.139_amd64.deb" \
+        "${work}/linux-hwe-7.0-headers-7.0.0-31_${NOBLE_KERNEL_PACKAGE_VERSION}_all.deb" \
+        "${work}/linux-headers-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+        "${work}/linux-modules-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+        "${work}/linux-image-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb"
+
+    [ -s "/boot/vmlinuz-${NEW_KERNEL_VERSION}" ] || {
+        echo "ERROR: installed kernel image /boot/vmlinuz-${NEW_KERNEL_VERSION} is missing" >&2
+        return 1
+    }
+    [ -d "/lib/modules/${NEW_KERNEL_VERSION}" ] || {
+        echo "ERROR: installed kernel modules /lib/modules/${NEW_KERNEL_VERSION} are missing" >&2
+        return 1
+    }
+    [ -d "/usr/src/linux-headers-${NEW_KERNEL_VERSION}" ] || {
+        echo "ERROR: installed kernel headers for ${NEW_KERNEL_VERSION} are missing" >&2
+        return 1
+    }
+}
+
+install_noble_coco_qemu() {
+    local work="$1"
+    local url="https://github.com/${NOBLE_QEMU_RELEASE_REPO}/releases/download/${NOBLE_QEMU_RELEASE_TAG}/${NOBLE_QEMU_RELEASE_ASSET}"
+    local qemu_deb qemu_binary
+
+    mkdir -p "${work}"
+    echo "Installing QEMU from ${NOBLE_QEMU_RELEASE_REPO}@${NOBLE_QEMU_RELEASE_TAG}..."
+    download_pinned_package \
+        "${work}/${NOBLE_QEMU_RELEASE_ASSET}" "${url}" \
+        "${NOBLE_QEMU_RELEASE_ASSET_SHA256}"
+    tar -xzf "${work}/${NOBLE_QEMU_RELEASE_ASSET}" -C "${work}"
+
+    if [ ! -s "${work}/SHA256SUMS" ]; then
+        echo "ERROR: ${NOBLE_QEMU_RELEASE_ASSET} does not contain SHA256SUMS" >&2
+        return 1
+    fi
+    (
+        cd "${work}"
+        sha256sum --check SHA256SUMS
+    ) || {
+        echo "ERROR: QEMU package checksum validation failed" >&2
+        return 1
+    }
+
+    # Release 46 retains the historical sp-qemu-tdx package name, but the
+    # installed upstream binary is verified below for both TDX and SEV-SNP.
+    qemu_deb=$(find "${work}" -maxdepth 1 -type f -name 'sp-qemu-tdx*.deb' -print -quit)
+    if [ -z "${qemu_deb}" ]; then
+        echo "ERROR: ${NOBLE_QEMU_RELEASE_ASSET} does not contain sp-qemu-tdx" >&2
+        return 1
+    fi
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "${qemu_deb}"
+
+    qemu_binary="${NOBLE_QEMU_INSTALL_PREFIX}/bin/qemu-system-x86_64"
+    [ -x "${qemu_binary}" ] || {
+        echo "ERROR: installed QEMU binary is missing: ${qemu_binary}" >&2
+        return 1
+    }
+    "${qemu_binary}" -object help | grep -q 'tdx-guest' || {
+        echo "ERROR: installed QEMU does not provide tdx-guest" >&2
+        return 1
+    }
+    "${qemu_binary}" -object help | grep -q 'sev-snp-guest' || {
+        echo "ERROR: installed QEMU does not provide sev-snp-guest" >&2
+        return 1
+    }
+}
+
 detect_nvidia_cc_mode() {
   local requested_mode="${1:-auto}"
   local pci_root="${PCI_SYSFS_ROOT:-/sys/bus/pci/devices}"

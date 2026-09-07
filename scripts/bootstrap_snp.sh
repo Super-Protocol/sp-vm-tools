@@ -15,10 +15,6 @@ get_kernel_log() {
     fi
 }
 
-SNP_RELEASE_REPO="Super-Protocol/sp-vm-tools"
-SNP_RELEASE_TAG="42-snp"
-SNP_RELEASE_ASSET="package-snp.tar.gz"
-
 check_snp_status() {
     print_section_header "SNP Status Validation"
     
@@ -279,22 +275,15 @@ run_comprehensive_snp_gpu_check() {
     return $snp_status
 }
 
-install_snp_release_packages() {
+install_noble_snp_stack() {
     local tmp_dir="$1"
     local work="${tmp_dir}/snp-pkg"
-    local tag_enc="${SNP_RELEASE_TAG//+/%2B}"
-    local url="https://github.com/${SNP_RELEASE_REPO}/releases/download/${tag_enc}/${SNP_RELEASE_ASSET}"
+    local kernel_work="${work}/kernel"
+    local qemu_work="${work}/qemu"
 
-    echo "Installing SEV-SNP kernel + QEMU from ${SNP_RELEASE_REPO}@${SNP_RELEASE_TAG}..."
-    mkdir -p "${work}"
-    echo "Downloading ${SNP_RELEASE_ASSET} (~160 MB), this may take a while..."
-    wget -O "${work}/${SNP_RELEASE_ASSET}" "${url}"
-    echo "Download complete: ${work}/${SNP_RELEASE_ASSET}"
-    tar -xzf "${work}/${SNP_RELEASE_ASSET}" -C "${work}"
-
-    # Install all packages from the release archive: custom kernel, headers and QEMU.
-    # install_debs (common.sh) also sets CURRENT_KERNEL and NEW_KERNEL_VERSION.
-    install_debs "${work}"
+    echo "Installing Canonical Noble kernel ${NOBLE_KERNEL_ABI} for SEV-SNP..."
+    install_noble_stable_kernel "${kernel_work}"
+    install_noble_coco_qemu "${qemu_work}"
 }
 
 install_prerequisites() {
@@ -307,9 +296,9 @@ install_prerequisites() {
 
     [ -f /etc/os-release ] && ubuntu_version=$(. /etc/os-release && echo "$VERSION_ID")
     if [ "$ubuntu_version" = "24.04" ]; then
-        # Ubuntu 24.04 needs the matched SEV-SNP kernel/QEMU bundle from our release.
-        # Newer Ubuntu releases carry the required kernel support and QEMU in archive.
-        install_snp_release_packages "${tmp_dir}"
+        # TDX and SEV-SNP share the same pinned Canonical kernel and upstream
+        # QEMU package on Noble. AMD firmware and guest bios_amd stay separate.
+        install_noble_snp_stack "${tmp_dir}"
         setup_grub "${NEW_KERNEL_VERSION:-$(uname -r)}" snp
     else
         echo "Ubuntu ${ubuntu_version:-unknown}: using distro kernel and QEMU"

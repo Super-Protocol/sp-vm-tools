@@ -112,13 +112,13 @@ What it does:
 What it does:
 
 1. Verifies Ubuntu version, root privileges, and detects the EPYC generation (Milan / Genoa / Turin).
-2. Installs the SEV-SNP hypervisor stack: bundled kernel/QEMU from `package-snp.tar.gz` in release `42-snp` on Ubuntu 24.04, or distro QEMU on newer Ubuntu releases.
+2. Installs the SEV-SNP hypervisor stack: the pinned Canonical **7.0.0-31** kernel and project QEMU **10.2.1** package on Ubuntu 24.04 (the same base stack as TDX), or distro kernel/QEMU on newer Ubuntu releases.
 3. Downloads and installs the matching AMD SEV firmware blob to `/lib/firmware/amd/` and reloads `ccp` / `kvm_amd`.
 4. Runs SNP status checks (RMP table, SEV / SEV-SNP API versions, ASID allocation, IOMMU groups, hugepages, CPU governor).
 5. Configures NVIDIA GPUs for CC mode and binds them to `vfio-pci`.
 6. Installs and validates libvirt 12.5, AppArmor policy, and `passt` capabilities before binding devices to the VM stack.
 
-> **Ubuntu 24.04 note:** the SNP bootstrap installs a bundled Linux **6.16** kernel. On some systems, network interfaces may be renamed after reboot, which can affect networking and remote SSH access. Make sure you have iKVM or other interactive console access before rebooting, so you can reconfigure networking for the new interface names if needed.
+> **Ubuntu 24.04 note:** the SNP bootstrap pins the exact Canonical HWE kernel and QEMU package versions validated by this project. A reboot into the new kernel is required before SNP validation can finish.
 
 ### 3. Reboot
 

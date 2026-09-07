@@ -303,7 +303,7 @@ check_qemu_version() {
         echo "Error: QEMU major version ${major} is too old (need >= ${min_major})."
         echo "Found: ${ver} at ${QEMU_PATH}"
         echo "iommufd-based passthrough requires QEMU >= 9.0."
-        echo "Re-run scripts/bootstrap_tdx.sh to install the bundled QEMU."
+        echo "Re-run the bootstrap script matching this host (bootstrap_tdx.sh or bootstrap_snp.sh)."
         exit 1
     fi
     # QEMU 9.2 from Canonical and QEMU 10+ use the upstream TDX KVM UAPI

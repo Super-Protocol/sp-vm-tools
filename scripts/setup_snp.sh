@@ -99,9 +99,9 @@ detect_platform() {
 
 # ---------------------------------------------------------------------------
 # OS / kernel prerequisites
-#   SEV-SNP host support is upstream as of Linux 6.11. Ubuntu 24.04 gets a
-#   matched kernel/QEMU bundle from the sp-vm-tools 38-tdx+snp release; newer
-#   Ubuntu releases use the distro kernel/QEMU stack.
+#   SEV-SNP host support is upstream as of Linux 6.11. Ubuntu 24.04 uses the
+#   same pinned Canonical 7.0 kernel and QEMU 10.2 stack as TDX; newer Ubuntu
+#   releases use the distro kernel/QEMU stack.
 # ---------------------------------------------------------------------------
 check_os_prereqs() {
     local results=()
@@ -116,7 +116,7 @@ check_os_prereqs() {
         local rel_num
         rel_num=$(echo "${VERSION_ID:-0}" | awk -F. '{printf "%d%02d", $1, $2}')
         if [ "${ID:-}" = "ubuntu" ] && [ "$rel_num" -eq 2404 ]; then
-            results+=("${SUCCESS} Ubuntu 24.04 uses the bundled SEV-SNP kernel/QEMU stack${NC}")
+            results+=("${SUCCESS} Ubuntu 24.04 uses the pinned Canonical 7.0 kernel and project QEMU 10.2${NC}")
         elif [ "${ID:-}" = "ubuntu" ] && [ "$rel_num" -ge 2504 ]; then
             results+=("${SUCCESS} Ubuntu ${VERSION_ID} provides in-tree SEV-SNP host support${NC}")
         else

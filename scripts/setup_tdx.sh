@@ -442,20 +442,6 @@ EOL
     systemctl daemon-reload
 }
 
-# Ubuntu 24.04 uses Canonical's signed 7.0 HWE kernel.  Keep the concrete ABI
-# pinned: installing a moving linux-generic-hwe-24.04 meta-package would make a
-# later unattended upgrade silently change the host kernel we validated.
-NOBLE_KERNEL_ABI="7.0.0-31-generic"
-NOBLE_KERNEL_PACKAGE_VERSION="7.0.0-31.31~24.04.1"
-
-# QEMU is still taken from the project bundle until it is replaced separately.
-# Only sp-qemu-tdx is extracted from this archive; its old custom kernel packages
-# are deliberately not installed.
-QEMU_RELEASE_REPO="Super-Protocol/sp-vm-tools"
-QEMU_RELEASE_TAG="38-tdx+snp"          # tag carrying package-tdx.tar.gz
-QEMU_RELEASE_ASSET="package-tdx.tar.gz"
-QEMU_RELEASE_ASSET_SHA256="dce5769682b73ab4c9423c5cb2a7a7cc23d4cb8efd9ed2d6e5f0bf325c2110cb"
-
 # Resolve the TDX SEAM module version to install for the host CPU.
 # Prints the version string (e.g. "2.0.14") to stdout; all human-readable
 # progress goes to stderr so callers can capture the version cleanly.
@@ -528,84 +514,12 @@ update_tdx_module() {
   popd
 }
 
-download_pinned_package() {
-  local output="$1"
-  local url="$2"
-  local expected_sha256="$3"
-  local actual_sha256
-
-  wget -O "${output}" "${url}"
-  actual_sha256=$(sha256sum "${output}" | awk '{print $1}')
-  if [ "${actual_sha256}" != "${expected_sha256}" ]; then
-    echo "ERROR: SHA-256 mismatch for $(basename "${output}")" >&2
-    echo "Expected: ${expected_sha256}" >&2
-    echo "Actual:   ${actual_sha256}" >&2
-    rm -f "${output}"
-    return 1
-  fi
-}
-
-install_noble_stable_kernel() {
-  local work="$1"
-  local archive="https://archive.ubuntu.com/ubuntu"
-
-  mkdir -p "${work}"
-
-  # The checksums come from Ubuntu's signed Noble Packages indices.  Include
-  # the image, modules and both header packages explicitly.  linux-libc-dev is
-  # produced by Noble's GA kernel source and is versioned independently from
-  # the HWE ABI, hence its 6.8 package version below.
-  download_pinned_package \
-    "${work}/linux-image-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
-    "${archive}/pool/main/l/linux-signed-hwe-7.0/linux-image-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
-    "df803cb70c2a3b0899987390cf6483fbeb05c3610855d10d3a7050a01eeecd19"
-  download_pinned_package \
-    "${work}/linux-modules-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
-    "${archive}/pool/main/l/linux-hwe-7.0/linux-modules-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
-    "45f19f8e9aec61b57236925b9db5ee14469a854b1f631004443aa453880124ce"
-  download_pinned_package \
-    "${work}/linux-hwe-7.0-headers-7.0.0-31_${NOBLE_KERNEL_PACKAGE_VERSION}_all.deb" \
-    "${archive}/pool/main/l/linux-hwe-7.0/linux-hwe-7.0-headers-7.0.0-31_${NOBLE_KERNEL_PACKAGE_VERSION}_all.deb" \
-    "3b2e3548a42e29e64f277e42e9248557f3cbb65071de6c384a4514145a1ab4a2"
-  download_pinned_package \
-    "${work}/linux-headers-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
-    "${archive}/pool/main/l/linux-hwe-7.0/linux-headers-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
-    "b4bff6ea35a6432482508908af5da5f35171a914cb31dcac5beecef19b81afd2"
-  download_pinned_package \
-    "${work}/linux-libc-dev_6.8.0-139.139_amd64.deb" \
-    "${archive}/pool/main/l/linux/linux-libc-dev_6.8.0-139.139_amd64.deb" \
-    "f8292b3414cac372ec28ba484a45e3f18b3ac5fc7872ca82661835286f1c5865"
-
-  CURRENT_KERNEL=$(uname -r)
-  NEW_KERNEL_VERSION="${NOBLE_KERNEL_ABI}"
-
-  DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    "${work}/linux-libc-dev_6.8.0-139.139_amd64.deb" \
-    "${work}/linux-hwe-7.0-headers-7.0.0-31_${NOBLE_KERNEL_PACKAGE_VERSION}_all.deb" \
-    "${work}/linux-headers-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
-    "${work}/linux-modules-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
-    "${work}/linux-image-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb"
-
-  [ -s "/boot/vmlinuz-${NEW_KERNEL_VERSION}" ] || {
-    echo "ERROR: installed kernel image /boot/vmlinuz-${NEW_KERNEL_VERSION} is missing" >&2
-    return 1
-  }
-  [ -d "/lib/modules/${NEW_KERNEL_VERSION}" ] || {
-    echo "ERROR: installed kernel modules /lib/modules/${NEW_KERNEL_VERSION} are missing" >&2
-    return 1
-  }
-  [ -d "/usr/src/linux-headers-${NEW_KERNEL_VERSION}" ] || {
-    echo "ERROR: installed kernel headers for ${NEW_KERNEL_VERSION} are missing" >&2
-    return 1
-  }
-}
-
 install_tdx_release_packages() {
   local tmp_dir="$1"
 
-  # Noble gets its signed, pinned HWE kernel from Ubuntu and only sp-qemu-tdx
-  # from the legacy project bundle. Newer Ubuntu releases use their complete
-  # distro kernel/QEMU stack instead.
+  # Noble gets its signed, pinned HWE kernel from Ubuntu and sp-qemu-tdx from
+  # the dedicated Ubuntu 24.04 project release. Newer Ubuntu releases use their
+  # complete distro kernel/QEMU stack instead.
   local ubuntu_version=""
   [ -f /etc/os-release ] && ubuntu_version=$(. /etc/os-release && echo "$VERSION_ID")
   if [ "$ubuntu_version" != "24.04" ]; then
@@ -616,29 +530,11 @@ install_tdx_release_packages() {
   local work="${tmp_dir}/tdx-pkg"
   local kernel_work="${work}/kernel"
   local qemu_work="${work}/qemu"
-  # URL-encode the '+' in the tag for the direct download URL.
-  local tag_enc="${QEMU_RELEASE_TAG//+/%2B}"
-  local url="https://github.com/${QEMU_RELEASE_REPO}/releases/download/${tag_enc}/${QEMU_RELEASE_ASSET}"
 
   echo "Installing Canonical Noble kernel ${NOBLE_KERNEL_ABI}..."
   install_noble_stable_kernel "${kernel_work}"
 
-  echo "Installing TDX QEMU from ${QEMU_RELEASE_REPO}@${QEMU_RELEASE_TAG}..."
-  mkdir -p "${qemu_work}"
-  echo "Downloading ${QEMU_RELEASE_ASSET} (~160 MB), this may take a while..."
-  download_pinned_package \
-    "${qemu_work}/${QEMU_RELEASE_ASSET}" "${url}" \
-    "${QEMU_RELEASE_ASSET_SHA256}"
-  echo "Download complete: ${qemu_work}/${QEMU_RELEASE_ASSET}"
-  tar -xzf "${qemu_work}/${QEMU_RELEASE_ASSET}" -C "${qemu_work}"
-
-  local qemu_deb
-  qemu_deb=$(find "${qemu_work}" -maxdepth 1 -type f -name 'sp-qemu-tdx*.deb' -print -quit)
-  if [ -z "${qemu_deb}" ]; then
-    echo "ERROR: ${QEMU_RELEASE_ASSET} does not contain sp-qemu-tdx" >&2
-    return 1
-  fi
-  DEBIAN_FRONTEND=noninteractive apt-get install -y libslirp0 "${qemu_deb}"
+  install_noble_coco_qemu "${qemu_work}"
 }
 
 TMP_DIR=$1

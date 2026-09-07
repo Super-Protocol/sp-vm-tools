@@ -76,7 +76,7 @@ Standards-Version: 4.6.2
 
 Package: ${PACKAGE_NAME}
 Architecture: amd64
-Description: Pinned QEMU ${QEMU_VERSION} build for Intel TDX hosts
+Description: Pinned QEMU ${QEMU_VERSION} build for confidential-computing hosts
 EOF
 
 elf_args=()
@@ -108,8 +108,8 @@ Priority: optional
 Architecture: amd64
 Maintainer: Super Protocol VM Tools <devnull@superprotocol.com>
 Depends: ${runtime_deps}
-Description: QEMU ${QEMU_VERSION} for Intel TDX on Ubuntu 24.04
- Reproducible upstream QEMU build with KVM, VFIO/iommufd and TDX support.
+Description: QEMU ${QEMU_VERSION} for TDX and SEV-SNP on Ubuntu 24.04
+ Reproducible upstream QEMU build with KVM, VFIO/iommufd, TDX and SEV-SNP.
  Installed under ${INSTALL_PREFIX}.
 EOF
 
@@ -120,13 +120,14 @@ mkdir -p "${OUTPUT_DIR}"
 package_path="${OUTPUT_DIR}/${PACKAGE_NAME}_${PACKAGE_VERSION}_amd64.deb"
 dpkg-deb --root-owner-group --build "${package_root}" "${package_path}"
 
-# Verify the built package, its key capabilities, and the firmware ROM needed
-# by virtio-net before publishing it as a CI artifact.
+# Verify the built package, both confidential-computing modes, and the firmware
+# ROM needed by virtio-net before publishing it as a CI artifact.
 verify_root="${work_dir}/verify"
 dpkg-deb --extract "${package_path}" "${verify_root}"
 qemu_binary="${verify_root}${INSTALL_PREFIX}/bin/qemu-system-x86_64"
 "${qemu_binary}" --version | grep -F "QEMU emulator version ${QEMU_VERSION}"
 "${qemu_binary}" -object help | grep -q 'tdx-guest'
+"${qemu_binary}" -object help | grep -q 'sev-snp-guest'
 "${qemu_binary}" -device vfio-pci,help | grep -q 'iommufd'
 test -s "${verify_root}${INSTALL_PREFIX}/share/qemu/efi-virtio.rom"
 
