@@ -1,3 +1,4 @@
 build/out/
+build/qemu/out/
 *.swp
 *.swo

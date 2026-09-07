@@ -45,8 +45,15 @@ download_pinned_package() {
 install_noble_stable_kernel() {
     local work="$1"
     local archive="https://archive.ubuntu.com/ubuntu"
+    local pinned_libc_version="6.8.0-139.139"
+    local installed_libc_version=""
+    local candidate_libc_version=""
+    local libc_package="${work}/linux-libc-dev_${pinned_libc_version}_amd64.deb"
+    local kernel_packages=()
 
     mkdir -p "${work}"
+    installed_libc_version=$(dpkg-query -W -f='${Version}' linux-libc-dev 2>/dev/null || true)
+    candidate_libc_version=$(apt-cache policy linux-libc-dev 2>/dev/null | awk '/Candidate:/ {print $2; exit}')
 
     # linux-libc-dev is produced by Noble's GA kernel source and therefore has
     # an independent 6.8 package version even though the installed HWE ABI is 7.0.
@@ -66,20 +73,33 @@ install_noble_stable_kernel() {
         "${work}/linux-headers-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
         "${archive}/pool/main/l/linux-hwe-7.0/linux-headers-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
         "b4bff6ea35a6432482508908af5da5f35171a914cb31dcac5beecef19b81afd2"
-    download_pinned_package \
-        "${work}/linux-libc-dev_6.8.0-139.139_amd64.deb" \
-        "${archive}/pool/main/l/linux/linux-libc-dev_6.8.0-139.139_amd64.deb" \
-        "f8292b3414cac372ec28ba484a45e3f18b3ac5fc7872ca82661835286f1c5865"
-
     CURRENT_KERNEL=$(uname -r)
     NEW_KERNEL_VERSION="${NOBLE_KERNEL_ABI}"
 
-    DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        "${work}/linux-libc-dev_6.8.0-139.139_amd64.deb" \
+    # linux-libc-dev provides userspace UAPI headers and does not have to match
+    # the booted kernel ABI. Keep a newer package only when it is also the
+    # version selected by the configured Ubuntu repositories. A foreign/custom
+    # package (for example the legacy 6.9.0-rc7 build) is replaced with our
+    # pinned Ubuntu package; downgrade permission is scoped to this one package.
+    if [ -n "${installed_libc_version}" ] && \
+       [ "${installed_libc_version}" = "${candidate_libc_version}" ] && \
+       dpkg --compare-versions "${installed_libc_version}" ge "${pinned_libc_version}"; then
+        echo "Keeping repository linux-libc-dev ${installed_libc_version} (validated minimum: ${pinned_libc_version})"
+    else
+        download_pinned_package \
+            "${libc_package}" \
+            "${archive}/pool/main/l/linux/linux-libc-dev_${pinned_libc_version}_amd64.deb" \
+            "f8292b3414cac372ec28ba484a45e3f18b3ac5fc7872ca82661835286f1c5865"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades "${libc_package}"
+    fi
+
+    kernel_packages+=( \
         "${work}/linux-hwe-7.0-headers-7.0.0-31_${NOBLE_KERNEL_PACKAGE_VERSION}_all.deb" \
         "${work}/linux-headers-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
         "${work}/linux-modules-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
-        "${work}/linux-image-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb"
+        "${work}/linux-image-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+    )
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "${kernel_packages[@]}"
 
     [ -s "/boot/vmlinuz-${NEW_KERNEL_VERSION}" ] || {
         echo "ERROR: installed kernel image /boot/vmlinuz-${NEW_KERNEL_VERSION} is missing" >&2
