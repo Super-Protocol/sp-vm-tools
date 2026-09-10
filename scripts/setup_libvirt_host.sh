@@ -777,6 +777,16 @@ verify_libvirt_host() {
             libvirt_host_error "libvirt-qemu is not a member of the qgsd group"
             return 1
         }
+        if [[ "$(stat -Lc '%U:%G' /var/run/tdx-qgs/qgs.socket 2>/dev/null)" != "qgsd:qgsd" ]]; then
+            libvirt_host_error "QGS Unix socket must be owned by qgsd:qgsd: /var/run/tdx-qgs/qgs.socket"
+            return 1
+        fi
+        if ! runuser -u libvirt-qemu -- test -w /var/run/tdx-qgs/qgs.socket; then
+            local qgs_socket_mode
+            qgs_socket_mode=$(stat -Lc '%a' /var/run/tdx-qgs/qgs.socket 2>/dev/null || echo unknown)
+            libvirt_host_error "libvirt-qemu cannot connect to the QGS Unix socket (mode ${qgs_socket_mode}); rerun bootstrap_tdx.sh"
+            return 1
+        fi
         grep -qF '@{run}/tdx-qgs/qgs.socket rw,' "${dropin}" || {
             libvirt_host_error "AppArmor QGS socket rule is missing from ${dropin}"
             return 1

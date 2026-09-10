@@ -52,16 +52,15 @@ CID_JOIN=(123 124)
 STATE_DISK_SIZE=""             # empty = auto (proportional to cores); set to override
 HOST_DISK_RESERVE_PCT=10        # % of free disk left for the host
 
-# Host reserve — left for host OS, kernel, and QEMU per-VM overhead.
+# Host reserve — shared by the host OS, kernel, and all QEMU process overhead.
 # CC-VMs (TDX/SEV-SNP) reserve memory HARD (no swap, no overcommit), so
 # under-reserving here causes VM launch FAILURE, not slowdown. Be generous.
 HOST_RESERVE_CORES=4         # cores left for the host OS / kernel / qemu threads
-HOST_RESERVE_MEM=8           # GB left for the host OS
-QEMU_MEM_OVERHEAD_PER_VM=1   # GB headroom per VM (firmware, device model)
+HOST_RESERVE_MEM=32          # GB shared by the host OS and QEMU processes
 
 # Join-node minimums (auto-used when not overridden by --join-cores/--join-mem)
 JOIN_CORES=4
-JOIN_MEM=4
+JOIN_MEM=16
 
 # Computed at runtime by compute_allocation(); do not set by hand.
 BOOTSTRAP_CORES=""
@@ -183,14 +182,14 @@ detect_host_disk() {
     log "Host disk detected: ${HOST_AVAIL_DISK}GB free (total: ${HOST_TOTAL_DISK}GB) on ${CACHE}"
 }
 
-# Bootstrap = host_total - host_reserve - (join nodes) - (qemu overhead).
+# Bootstrap = host_total - host_reserve - join nodes. QEMU process overhead is
+# intentionally covered by the host reserve instead of being deducted again.
 # Join nodes use the fixed minimums (JOIN_CORES/JOIN_MEM), which are either the
 # built-in defaults or whatever was passed via --join-cores/--join-mem.
 compute_allocation() {
     detect_host_resources
 
     local num_join="${#JOIN_IPS[@]}"
-    local num_vms=$(( num_join + 1 ))
 
     # --- cores ---
     local join_cores_total=$(( JOIN_CORES * num_join ))
@@ -201,8 +200,7 @@ compute_allocation() {
 
     # --- memory ---
     local join_mem_total=$(( JOIN_MEM * num_join ))
-    local qemu_overhead=$(( QEMU_MEM_OVERHEAD_PER_VM * num_vms ))
-    local reserved_mem=$(( HOST_RESERVE_MEM + join_mem_total + qemu_overhead ))
+    local reserved_mem=$(( HOST_RESERVE_MEM + join_mem_total ))
     BOOTSTRAP_MEM=$(( HOST_TOTAL_MEM - reserved_mem ))
 
     # --- sanity checks ---
@@ -210,7 +208,7 @@ compute_allocation() {
         die "Not enough cores: host=${HOST_TOTAL_CORES}, reserve=${HOST_RESERVE_CORES}, join=${join_cores_total} (${JOIN_CORES}x${num_join}) -> bootstrap would get ${BOOTSTRAP_CORES}. Lower --join-cores or --host-reserve-cores."
     fi
     if (( BOOTSTRAP_MEM < JOIN_MEM )); then
-        die "Not enough RAM: host=${HOST_TOTAL_MEM}GB, reserve=${HOST_RESERVE_MEM}GB, join=${join_mem_total}GB (${JOIN_MEM}x${num_join}), qemu=${qemu_overhead}GB -> bootstrap would get ${BOOTSTRAP_MEM}GB. Lower --join-mem or --host-reserve-mem."
+        die "Not enough RAM: host=${HOST_TOTAL_MEM}GB, host+QEMU reserve=${HOST_RESERVE_MEM}GB, join=${join_mem_total}GB (${JOIN_MEM}x${num_join}) -> bootstrap would get ${BOOTSTRAP_MEM}GB. Lower --join-mem or --host-reserve-mem."
     fi
 
     # --- disk (auto or manual) ---
@@ -243,7 +241,7 @@ compute_allocation() {
     log "Resource allocation:"
     log "  bootstrap : ${BOOTSTRAP_CORES} cores, ${BOOTSTRAP_MEM}GB RAM, ${BOOTSTRAP_DISK}GB disk (+GPU)"
     log "  join x${num_join}    : ${JOIN_CORES} cores, ${JOIN_MEM}GB RAM, ${JOIN_DISK}GB disk each"
-    log "  host kept : ${HOST_RESERVE_CORES} cores, ${HOST_RESERVE_MEM}GB + ${qemu_overhead}GB qemu overhead"
+    log "  host kept : ${HOST_RESERVE_CORES} cores, ${HOST_RESERVE_MEM}GB shared by host + QEMU overhead"
 }
 
 # ----------------------------------------------------------------------------

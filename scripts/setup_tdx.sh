@@ -438,6 +438,12 @@ EOL
 [Service]
 RuntimeDirectory=tdx-qgs
 RuntimeDirectoryMode=0755
+# qgs creates the socket using its process umask.  The package default is
+# commonly 0755, which leaves libvirt-qemu unable to connect even when it is a
+# member of the qgsd group.  /run is recreated on every boot, so enforce the
+# access mode after every qgsd start instead of relying on a one-off chmod.
+ExecStartPost=/bin/chown qgsd:qgsd /run/tdx-qgs/qgs.socket
+ExecStartPost=/bin/chmod 0660 /run/tdx-qgs/qgs.socket
 EOL
     systemctl daemon-reload
 }
@@ -924,6 +930,16 @@ print_section_header "Starting remaining services..."
 configure_qgs   # select the Unix socket before (re)starting qgsd
 systemctl restart qgsd
 wait_for_service qgsd
+if [ ! -S /run/tdx-qgs/qgs.socket ]; then
+    echo -e "${RED}Error: QGS Unix socket was not created${NC}" >&2
+    exit 1
+fi
+if [ "$(stat -Lc '%a %U:%G' /run/tdx-qgs/qgs.socket)" != "660 qgsd:qgsd" ]; then
+    echo -e "${RED}Error: QGS Unix socket must be mode 0660 and owned by qgsd:qgsd${NC}" >&2
+    stat -Lc 'Actual QGS socket: mode=%a owner=%U:%G path=%n' \
+        /run/tdx-qgs/qgs.socket >&2
+    exit 1
+fi
 systemctl restart mpa_registration_tool
 
 # Check services status
