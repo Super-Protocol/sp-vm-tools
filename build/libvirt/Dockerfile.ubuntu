@@ -1,0 +1,34 @@
+# syntax=docker/dockerfile:1
+
+ARG UBUNTU_VERSION=24.04
+FROM ubuntu:${UBUNTU_VERSION}
+
+ARG LIBVIRT_VERSION=12.5.0
+ARG DEBIAN_REVISION=1
+ARG PACKAGING_COMMIT=a8f73eb070c24b72f9d6dfbeffc28a334f29e076
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        devscripts \
+        dpkg-dev \
+        equivs \
+        git \
+        libdistro-info-perl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/prepare-source.sh /usr/local/bin/prepare-libvirt-source
+COPY patches/ /opt/libvirt-patches/
+RUN prepare-libvirt-source \
+        "${LIBVIRT_VERSION}" \
+        "${DEBIAN_REVISION}" \
+        "${PACKAGING_COMMIT}" \
+        /opt/libvirt-patches
+
+COPY docker/build-packages.sh /usr/local/bin/build-libvirt-packages
+
+ENTRYPOINT ["/usr/local/bin/build-libvirt-packages"]

@@ -4,10 +4,54 @@ set -e
 source_common() {
     local script_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
     source "${script_dir}/common.sh"
+    source "${script_dir}/setup_libvirt_host.sh"
+}
+
+usage() {
+    cat <<EOF
+Usage: sudo $0 [--gpu-mode auto|cc|ppcie]
+
+  auto    Detect the platform from PCI/VPD data (default).
+  cc      Force regular CC mode (standalone/PCIe GPUs and Blackwell NVLink).
+  ppcie   Force Protected PCIe mode (Hopper NVSwitch multi-GPU only).
+EOF
+}
+
+parse_args() {
+    GPU_MODE="auto"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --gpu-mode)
+                [[ $# -ge 2 ]] || { echo "ERROR: --gpu-mode requires a value"; return 1; }
+                GPU_MODE="$2"
+                shift 2
+                ;;
+            --gpu-mode=*)
+                GPU_MODE="${1#*=}"
+                shift
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                echo "ERROR: Unknown argument: $1"
+                usage
+                return 1
+                ;;
+        esac
+    done
+
+    case "${GPU_MODE}" in
+        auto|cc|ppcie) ;;
+        *) echo "ERROR: Invalid --gpu-mode '${GPU_MODE}'"; return 1 ;;
+    esac
 }
 
 bootstrap() {
+    parse_args "$@"
     check_os_version "24.04"
+    get_supported_ubuntu_version || return 1
 
     # Check if the script is running as root
     print_section_header "Privilege Check"
@@ -16,8 +60,9 @@ bootstrap() {
         exit 1
     fi
 
-    # Download and setup official Canonical TDX
-    print_section_header "Official TDX Setup"
+    # Install the pinned Canonical HWE kernel, project TDX QEMU and host
+    # attestation runtime.
+    print_section_header "TDX Host Setup"
     TMP_DIR=$(mktemp -d)
 
     echo "Installing required tools..."
@@ -46,10 +91,15 @@ bootstrap() {
         exit 1
     fi
 
+    setup_libvirt_host tdx || {
+        echo -e "${RED}ERROR: libvirt host setup failed${NC}"
+        return 1
+    }
+
     print_section_header "Hardware Configuration"
     if command -v lspci >/dev/null; then
         echo "Checking NVIDIA GPU configuration..."
-        setup_nvidia_gpus "${TMP_DIR}" || true
+        setup_nvidia_gpus "${TMP_DIR}" "${GPU_MODE}"
         setup_cx7_bridge_vfio "intel_iommu=on"
         verify_cx7_vfio_setup
     else
@@ -62,9 +112,9 @@ bootstrap() {
     rm -rf "${TMP_DIR}"
 
     print_section_header "Installation Status"
-    echo "Official TDX installation complete."
+    echo "TDX host installation complete."
     echo "System reboot required to activate TDX."
-    echo "After reboot, use official tools to create and run TDs."
+    echo "After reboot, re-run this bootstrap to finish validation."
 }
 
 source_common

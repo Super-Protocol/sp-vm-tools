@@ -8,10 +8,10 @@
 #   - each VM gets its address from provider_config/swarm/config.yaml spnet
 #   - external ingress (host WAN) DNAT only to bootstrap: 80/443/9443 tcp, 53 tcp+udp
 #   - join nodes fetch PKI (9443) from bootstrap over the LOCAL address 10.0.0.10 (no hairpin)
-#   - each VM runs in its own tmux session
+#   - each VM runs as a transient qemu:///system libvirt domain
 #
-# Requires a patched start_super_protocol.sh (see network-tap.patch.md):
-# support for --netdev_mode tap --bridge <name>.
+# Requires start_super_protocol_libvirt.sh and a working qemu:///system
+# connection. tmux is used only for the launcher/serial-console process.
 #
 # Usage:
 #   sudo ./swarm-cluster.sh up        --provider-config-template ./provider-template [opts]
@@ -52,16 +52,15 @@ CID_JOIN=(123 124)
 STATE_DISK_SIZE=""             # empty = auto (proportional to cores); set to override
 HOST_DISK_RESERVE_PCT=10        # % of free disk left for the host
 
-# Host reserve — left for host OS, kernel, and QEMU per-VM overhead.
+# Host reserve — shared by the host OS, kernel, and all QEMU process overhead.
 # CC-VMs (TDX/SEV-SNP) reserve memory HARD (no swap, no overcommit), so
 # under-reserving here causes VM launch FAILURE, not slowdown. Be generous.
 HOST_RESERVE_CORES=4         # cores left for the host OS / kernel / qemu threads
-HOST_RESERVE_MEM=8           # GB left for the host OS
-QEMU_MEM_OVERHEAD_PER_VM=1   # GB headroom per VM (firmware, device model)
+HOST_RESERVE_MEM=32          # GB shared by the host OS and QEMU processes
 
 # Join-node minimums (auto-used when not overridden by --join-cores/--join-mem)
 JOIN_CORES=4
-JOIN_MEM=4
+JOIN_MEM=16
 
 # Computed at runtime by compute_allocation(); do not set by hand.
 BOOTSTRAP_CORES=""
@@ -77,7 +76,8 @@ VM_MODE=""                     # empty = auto-detect (tdx/sev-snp) in start scri
 RELEASE=""                     # empty = latest; pin a working build, e.g. build-358
 LOCAL_BUILD_DIR=""             # empty = use release; otherwise pass local build dir to start script
 CACHE="/data/sp-vm/cache"
-START_SCRIPT="${SCRIPT_DIR}/start_super_protocol.sh"
+START_SCRIPT="${SCRIPT_DIR}/start_super_protocol_libvirt.sh"
+LIBVIRT_URI="qemu:///system"
 PROVIDER_TEMPLATE=""           # provider config template dir (--provider-config-template)
 WORKDIR="/data/sp-vm/cluster"  # per-node provider configs are generated here
 WAN_IFACE=""                   # empty = auto-detect from ip route
@@ -94,9 +94,12 @@ DEBUG_MODE="false"
 SSH_PORT_BOOTSTRAP=2210
 SSH_PORT_JOIN=(2211 2212)
 
-# tmux sessions
-TMUX_BOOTSTRAP="swarm-bootstrap"
-TMUX_JOIN=("swarm-join-1" "swarm-join-2")
+# Domain names are also used as tmux launcher/console session names.
+DOMAIN_BOOTSTRAP="swarm-bootstrap"
+DOMAIN_JOIN=("swarm-join-1" "swarm-join-2")
+CLUSTER_DOMAINS=("${DOMAIN_BOOTSTRAP}" "${DOMAIN_JOIN[@]}")
+TMUX_BOOTSTRAP="${DOMAIN_BOOTSTRAP}"
+TMUX_JOIN=("${DOMAIN_JOIN[@]}")
 
 # ----------------------------------------------------------------------------
 # Helpers
@@ -107,6 +110,36 @@ die()  { err "$*"; exit 1; }
 
 require_root() {
     [[ "$EUID" -eq 0 ]] || die "Must be run as root (use sudo)."
+}
+
+virsh_cluster() {
+    LC_ALL=C virsh --connect "${LIBVIRT_URI}" "$@"
+}
+
+require_libvirt() {
+    command -v virsh >/dev/null 2>&1 || die "virsh is required (install libvirt-clients)."
+    virsh_cluster list --name >/dev/null 2>&1 \
+        || die "Cannot connect to ${LIBVIRT_URI}. Check the libvirt daemon and permissions."
+}
+
+domain_exists() {
+    local domain="$1"
+    virsh_cluster dominfo "${domain}" >/dev/null 2>&1
+}
+
+domain_alive() {
+    local domain="$1" state
+    state=$(virsh_cluster domstate "${domain}" 2>/dev/null) || return 1
+    [[ "${state}" != "shut off" && "${state}" != "crashed" ]]
+}
+
+ensure_cluster_domains_available() {
+    local domain
+    for domain in "${CLUSTER_DOMAINS[@]}"; do
+        if domain_exists "${domain}"; then
+            die "libvirt domain ${domain} already exists. Run 'down' or remove it explicitly."
+        fi
+    done
 }
 
 detect_wan_iface() {
@@ -149,14 +182,14 @@ detect_host_disk() {
     log "Host disk detected: ${HOST_AVAIL_DISK}GB free (total: ${HOST_TOTAL_DISK}GB) on ${CACHE}"
 }
 
-# Bootstrap = host_total - host_reserve - (join nodes) - (qemu overhead).
+# Bootstrap = host_total - host_reserve - join nodes. QEMU process overhead is
+# intentionally covered by the host reserve instead of being deducted again.
 # Join nodes use the fixed minimums (JOIN_CORES/JOIN_MEM), which are either the
 # built-in defaults or whatever was passed via --join-cores/--join-mem.
 compute_allocation() {
     detect_host_resources
 
     local num_join="${#JOIN_IPS[@]}"
-    local num_vms=$(( num_join + 1 ))
 
     # --- cores ---
     local join_cores_total=$(( JOIN_CORES * num_join ))
@@ -167,8 +200,7 @@ compute_allocation() {
 
     # --- memory ---
     local join_mem_total=$(( JOIN_MEM * num_join ))
-    local qemu_overhead=$(( QEMU_MEM_OVERHEAD_PER_VM * num_vms ))
-    local reserved_mem=$(( HOST_RESERVE_MEM + join_mem_total + qemu_overhead ))
+    local reserved_mem=$(( HOST_RESERVE_MEM + join_mem_total ))
     BOOTSTRAP_MEM=$(( HOST_TOTAL_MEM - reserved_mem ))
 
     # --- sanity checks ---
@@ -176,7 +208,7 @@ compute_allocation() {
         die "Not enough cores: host=${HOST_TOTAL_CORES}, reserve=${HOST_RESERVE_CORES}, join=${join_cores_total} (${JOIN_CORES}x${num_join}) -> bootstrap would get ${BOOTSTRAP_CORES}. Lower --join-cores or --host-reserve-cores."
     fi
     if (( BOOTSTRAP_MEM < JOIN_MEM )); then
-        die "Not enough RAM: host=${HOST_TOTAL_MEM}GB, reserve=${HOST_RESERVE_MEM}GB, join=${join_mem_total}GB (${JOIN_MEM}x${num_join}), qemu=${qemu_overhead}GB -> bootstrap would get ${BOOTSTRAP_MEM}GB. Lower --join-mem or --host-reserve-mem."
+        die "Not enough RAM: host=${HOST_TOTAL_MEM}GB, host+QEMU reserve=${HOST_RESERVE_MEM}GB, join=${join_mem_total}GB (${JOIN_MEM}x${num_join}) -> bootstrap would get ${BOOTSTRAP_MEM}GB. Lower --join-mem or --host-reserve-mem."
     fi
 
     # --- disk (auto or manual) ---
@@ -209,7 +241,7 @@ compute_allocation() {
     log "Resource allocation:"
     log "  bootstrap : ${BOOTSTRAP_CORES} cores, ${BOOTSTRAP_MEM}GB RAM, ${BOOTSTRAP_DISK}GB disk (+GPU)"
     log "  join x${num_join}    : ${JOIN_CORES} cores, ${JOIN_MEM}GB RAM, ${JOIN_DISK}GB disk each"
-    log "  host kept : ${HOST_RESERVE_CORES} cores, ${HOST_RESERVE_MEM}GB + ${qemu_overhead}GB qemu overhead"
+    log "  host kept : ${HOST_RESERVE_CORES} cores, ${HOST_RESERVE_MEM}GB shared by host + QEMU overhead"
 }
 
 # ----------------------------------------------------------------------------
@@ -223,7 +255,15 @@ reset_vfio_devices() {
     local drv="/sys/bus/pci/drivers/vfio-pci"
     [[ -d "${drv}" ]] || { log "vfio-pci driver not loaded — nothing to reset"; return 0; }
 
-    # Refuse to reset devices under a live QEMU
+    # Refuse to reset devices assigned to a live cluster domain.
+    local domain
+    for domain in "${CLUSTER_DOMAINS[@]}"; do
+        if domain_alive "${domain}"; then
+            die "libvirt domain ${domain} is still running — refusing to reset devices. Run 'down' first."
+        fi
+    done
+
+    # Also protect unrelated QEMU processes that currently hold VFIO devices.
     if pgrep -f 'qemu-system-x86_64.*vfio' >/dev/null 2>&1; then
         die "QEMU with VFIO still running — refusing to reset devices. Run 'down' first."
     fi
@@ -291,18 +331,19 @@ reset_vfio_devices() {
 }
 
 # ----------------------------------------------------------------------------
-# VM liveness check: the runner does `exec qemu | tee`, so if QEMU dies for
-# any reason the tmux session collapses. Detect that instead of waiting blind.
+# VM liveness is owned by libvirt. In release mode the launcher and its tmux
+# session exit immediately after createXML(), while the transient domain keeps
+# running, so tmux is not a valid VM health signal.
 # ----------------------------------------------------------------------------
 vm_alive() {
-    local session="$1"
-    tmux has-session -t "${session}" 2>/dev/null
+    local domain="$1"
+    domain_alive "${domain}"
 }
 
 report_vm_death() {
-    local session="$1" node_ip="$2"
+    local domain="$1" node_ip="$2"
     local logf="${CACHE}/log-${node_ip##*.}.txt"
-    err "VM session '${session}' has exited — QEMU failed."
+    err "libvirt domain '${domain}' is not running."
     err "Last lines of ${logf}:"
     tail -n 25 "${logf}" 2>/dev/null | sed 's/^/    /' >&2 || true
     # Common failure hint
@@ -619,10 +660,11 @@ inject_spnet_config() {
 }
 
 # ----------------------------------------------------------------------------
-# 3. Start a single VM in tmux
+# 3. Start a single libvirt domain through a tmux launcher
 # ----------------------------------------------------------------------------
 start_vm() {
-    local session="$1"
+    local domain="$1"
+    local session="${domain}"
     local node_ip="$2"
     local cid="$3"
     local provider_dir="$4"
@@ -634,9 +676,11 @@ start_vm() {
     local tap_iface="sw-tap-${node_ip##*.}"
     local mac; mac="$(mac_for_ip "${node_ip}")"
 
+    if domain_exists "${domain}"; then
+        die "libvirt domain ${domain} already exists. Run 'down' or remove it explicitly."
+    fi
     if tmux has-session -t "${session}" 2>/dev/null; then
-        err "tmux session ${session} already exists. Skipping (run 'down' to clean up)."
-        return 0
+        die "stale tmux launcher session ${session} already exists. Run 'down' first."
     fi
 
     local gpu_args=()
@@ -655,20 +699,19 @@ start_vm() {
     local build_args=()
     [[ -n "${LOCAL_BUILD_DIR}" ]] && build_args=(--build_dir "${LOCAL_BUILD_DIR}")
 
-    # Debug mode: verbose boot log + per-node SSH port. start_super_protocol.sh
-    # requires --log_file when --debug true. NOTE: the script forwards SSH via
-    # hostfwd (user-mode) only; in tap mode that hostfwd is inactive, so SSH must
-    # go to the VM's bridge IP (ssh ubuntu@<node_ip>). The main value of debug
-    # here is the verbose serial/boot log written to the log file.
+    # Debug mode keeps the libvirt serial console attached in tmux and writes a
+    # per-node boot log. With tap networking the launcher adds a second passt
+    # NIC for the requested localhost SSH forwarding.
     local debug_args=()
     if [[ "${DEBUG_MODE}" == "true" ]]; then
         debug_args=(--debug true --log_file "${CACHE}/boot-${node_ip##*.}.log")
         [[ -n "${ssh_port}" ]] && debug_args+=(--ssh_port "${ssh_port}")
     fi
 
-    # build the patched start-script command line in tap mode
+    # Build the libvirt start-script command line in tap mode.
     local cmd=(
         "${START_SCRIPT}"
+        --name "${domain}"
         --netdev_mode tap
         --bridge "${BRIDGE}"
         --tap_iface "${tap_iface}"
@@ -688,7 +731,7 @@ start_vm() {
         "${debug_args[@]}"
     )
 
-    log "Starting ${session}: ip=${node_ip} cid=${cid} tap=${tap_iface} gpu=${with_gpu} cores=${node_cores} mem=${node_mem}GB disk=${node_disk}GB debug=${DEBUG_MODE}"
+    log "Starting domain ${domain}: ip=${node_ip} cid=${cid} tap=${tap_iface} gpu=${with_gpu} cores=${node_cores} mem=${node_mem}GB disk=${node_disk}GB debug=${DEBUG_MODE}"
 
     # Safety net: drop any empty array elements before building the runner.
     # An empty positional arg would shift the start-script's two-step arg parser
@@ -715,17 +758,32 @@ start_vm() {
 
     tmux new-session -d -s "${session}" "${runner}"
 
-    # Fail fast: if the command dies immediately (bad flags, missing release, etc.),
-    # the tmux session collapses and we must not proceed into a blind wait.
-    # The image download alone takes a while, so we only check that the session
-    # survives the first few seconds — enough to catch instant failures.
-    sleep 6
-    if ! tmux has-session -t "${session}" 2>/dev/null; then
-        err "Session ${session} exited immediately — startup failed."
-        err "Last lines of ${CACHE}/log-${node_ip##*.}.txt:"
-        tail -n 20 "${CACHE}/log-${node_ip##*.}.txt" 2>/dev/null | sed 's/^/    /' >&2 || true
-        die "Aborting. Fix the error above (often: wrong --release, or start script not patched)."
-    fi
+    # The launcher may spend time downloading/preparing images before it creates
+    # the domain. In release mode it then exits successfully, so wait for libvirt
+    # rather than requiring the tmux session to remain after startup.
+    local startup_timeout=1000 waited=0
+    while (( waited < startup_timeout )); do
+        if domain_alive "${domain}"; then
+            log "Domain ${domain} is running"
+            return 0
+        fi
+        if ! tmux has-session -t "${session}" 2>/dev/null; then
+            # The release-mode launcher may exit immediately after createXML().
+            if domain_alive "${domain}"; then
+                log "Domain ${domain} is running"
+                return 0
+            fi
+            err "Launcher session ${session} exited before the domain started."
+            err "Last lines of ${CACHE}/log-${node_ip##*.}.txt:"
+            tail -n 25 "${CACHE}/log-${node_ip##*.}.txt" 2>/dev/null | sed 's/^/    /' >&2 || true
+            die "Domain ${domain} failed to start."
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+
+    tmux kill-session -t "${session}" 2>/dev/null || true
+    die "Timed out after ${startup_timeout}s waiting for libvirt domain ${domain}."
 }
 
 # ----------------------------------------------------------------------------
@@ -741,9 +799,9 @@ wait_bootstrap() {
 
     while (( waited < timeout )); do
         # Fail fast: QEMU crashed (vfio bind error, OOM, bad flags, ...)
-        if ! vm_alive "${TMUX_BOOTSTRAP}"; then
+        if ! vm_alive "${DOMAIN_BOOTSTRAP}"; then
             echo >&2
-            report_vm_death "${TMUX_BOOTSTRAP}" "${BOOTSTRAP_IP}"
+            report_vm_death "${DOMAIN_BOOTSTRAP}" "${BOOTSTRAP_IP}"
             die "Bootstrap VM died while waiting — aborting cluster startup."
         fi
 
@@ -771,7 +829,7 @@ wait_bootstrap() {
         sleep 5; waited=$(( waited + 5 ))
     done
     echo >&2
-    die "Bootstrap did not come up within ${timeout}s. Check: tmux attach -t ${TMUX_BOOTSTRAP}"
+    die "Bootstrap did not come up within ${timeout}s. Check ${CACHE}/log-${BOOTSTRAP_IP##*.}.txt and /var/log/libvirt/qemu/${DOMAIN_BOOTSTRAP}-serial.log"
 }
 
 # ----------------------------------------------------------------------------
@@ -803,6 +861,8 @@ fetch_ca_bundle() {
 # ----------------------------------------------------------------------------
 cmd_up() {
     require_root
+    require_libvirt
+    ensure_cluster_domains_available
     [[ -n "${PROVIDER_TEMPLATE}" ]] || die "Specify --provider-config-template <dir>"
     [[ -d "${PROVIDER_TEMPLATE}" ]] || die "Template ${PROVIDER_TEMPLATE} not found"
     [[ -x "${START_SCRIPT}" ]] || die "start script not found/executable: ${START_SCRIPT}"
@@ -822,6 +882,11 @@ cmd_up() {
     command -v nc &>/dev/null   || die "nc is required (apt install netcat-openbsd)"
     command -v curl &>/dev/null || die "curl is required (apt install curl)"
     command -v tmux &>/dev/null || die "tmux is required (apt install tmux)"
+    local session
+    for session in "${TMUX_BOOTSTRAP}" "${TMUX_JOIN[@]}"; do
+        tmux has-session -t "${session}" 2>/dev/null \
+            && die "stale tmux launcher session ${session} already exists. Run 'down' first."
+    done
     if [[ -n "${RELEASE}" && -n "${LOCAL_BUILD_DIR}" ]]; then
         die "Use either --release or --build-dir, not both."
     fi
@@ -866,7 +931,7 @@ cmd_up() {
 
     local boot_gpu=false
     [[ "${GPU_TARGET}" == "bootstrap" ]] && boot_gpu=true
-    start_vm "${TMUX_BOOTSTRAP}" "${BOOTSTRAP_IP}" "${CID_BOOTSTRAP}" "${boot_dir}" \
+    start_vm "${DOMAIN_BOOTSTRAP}" "${BOOTSTRAP_IP}" "${CID_BOOTSTRAP}" "${boot_dir}" \
         "${boot_gpu}" "${BOOTSTRAP_CORES}" "${BOOTSTRAP_MEM}" "${BOOTSTRAP_DISK}" "${SSH_PORT_BOOTSTRAP}"
 
     wait_bootstrap 1000
@@ -883,9 +948,9 @@ cmd_up() {
     join1_dir="$(prepare_config join1 "${JOIN_IPS[0]}" "swarm-join-1" "${BOOTSTRAP_IP}:${GOSSIP_PORT}" "${ca_bundle}" "${network_id}")"
     join2_dir="$(prepare_config join2 "${JOIN_IPS[1]}" "swarm-join-2" "${BOOTSTRAP_IP}:${GOSSIP_PORT}" "${ca_bundle}" "${network_id}")"
 
-    start_vm "${TMUX_JOIN[0]}" "${JOIN_IPS[0]}" "${CID_JOIN[0]}" "${join1_dir}" \
+    start_vm "${DOMAIN_JOIN[0]}" "${JOIN_IPS[0]}" "${CID_JOIN[0]}" "${join1_dir}" \
         false "${JOIN_CORES}" "${JOIN_MEM}" "${JOIN_DISK}" "${SSH_PORT_JOIN[0]}"
-    start_vm "${TMUX_JOIN[1]}" "${JOIN_IPS[1]}" "${CID_JOIN[1]}" "${join2_dir}" \
+    start_vm "${DOMAIN_JOIN[1]}" "${JOIN_IPS[1]}" "${CID_JOIN[1]}" "${join2_dir}" \
         false "${JOIN_CORES}" "${JOIN_MEM}" "${JOIN_DISK}" "${SSH_PORT_JOIN[1]}"
 
     # external ingress
@@ -898,17 +963,20 @@ cmd_up() {
 
     log "Cluster started. Ingress: gw.dyn.${GLOBAL_ID}.${BASE_DOMAIN} -> 80/443"
 
-    log "Cluster started. Sessions: tmux ls"
-    log "  bootstrap: tmux attach -t ${TMUX_BOOTSTRAP}"
-    log "  join:      tmux attach -t ${TMUX_JOIN[0]} | ${TMUX_JOIN[1]}"
+    log "Cluster started. Domains: virsh -c ${LIBVIRT_URI} list"
+    log "  bootstrap serial:  tail -f /var/log/libvirt/qemu/${DOMAIN_BOOTSTRAP}-serial.log"
+    log "  join serials:      /var/log/libvirt/qemu/{${DOMAIN_JOIN[0]},${DOMAIN_JOIN[1]}}-serial.log"
+    if [[ "${DEBUG_MODE}" == "true" ]]; then
+        log "  attached debug consoles are in tmux: ${TMUX_BOOTSTRAP}, ${TMUX_JOIN[0]}, ${TMUX_JOIN[1]}"
+    fi
 
     # Verify join VMs survived startup (they can hit the same vfio error
     # if GPU_TARGET is ever changed, or die on bad config / OOM).
     sleep 10
     local i
     for i in 0 1; do
-        if ! vm_alive "${TMUX_JOIN[$i]}"; then
-            report_vm_death "${TMUX_JOIN[$i]}" "${JOIN_IPS[$i]}"
+        if ! vm_alive "${DOMAIN_JOIN[$i]}"; then
+            report_vm_death "${DOMAIN_JOIN[$i]}" "${JOIN_IPS[$i]}"
             die "Join node ${JOIN_IPS[$i]} died right after start — aborting."
         fi
     done
@@ -924,7 +992,17 @@ cmd_status() {
         echo "  host: ${_c} cores, ${_m}GB"
         echo "  plan: bootstrap=remainder+GPU, join=${JOIN_CORES}c/${JOIN_MEM}g each, reserve=${HOST_RESERVE_CORES}c/${HOST_RESERVE_MEM}g"
     fi
-    echo "=== tmux ==="
+    echo "=== libvirt domains (${LIBVIRT_URI}) ==="
+    if command -v virsh >/dev/null 2>&1 && virsh_cluster list --name >/dev/null 2>&1; then
+        local domain state
+        for domain in "${CLUSTER_DOMAINS[@]}"; do
+            state=$(virsh_cluster domstate "${domain}" 2>/dev/null || true)
+            echo "  ${domain}: ${state:-absent}"
+        done
+    else
+        echo "  unavailable"
+    fi
+    echo "=== tmux launcher/console sessions ==="
     tmux ls 2>/dev/null | grep -E 'swarm-' || echo "  no sessions"
     echo "=== bridge ==="
     ip -br addr show "${BRIDGE}" 2>/dev/null || echo "  no bridge ${BRIDGE}"
@@ -943,21 +1021,53 @@ cmd_status() {
         | sed 's/^/  /' || echo "  network script unavailable"
 }
 
-wait_qemu_gone() {
-    local timeout="${1:-90}" waited=0
-    log "Waiting for QEMU processes to exit (up to ${timeout}s)..."
-    while pgrep -f 'qemu-system-x86_64.*sw-tap-' >/dev/null 2>&1; do
-        if (( waited >= timeout )); then
-            err "QEMU still alive after ${timeout}s, sending SIGKILL"
-            pkill -9 -f 'qemu-system-x86_64.*sw-tap-' 2>/dev/null || true
-            timeout=$(( timeout + 120 ))
+wait_domains_stopped() {
+    local timeout="${1:-90}" waited=0 domain active
+    log "Waiting for libvirt domains to stop (up to ${timeout}s)..."
+    while (( waited < timeout )); do
+        active=""
+        for domain in "${CLUSTER_DOMAINS[@]}"; do
+            if domain_alive "${domain}"; then
+                active="${domain}"
+                break
+            fi
+        done
+        if [[ -z "${active}" ]]; then
+            log "All cluster domains stopped (${waited}s)"
+            return 0
         fi
-        printf '\r[%s]   qemu still running... %ss\033[K' "$(date +%H:%M:%S)" "${waited}" >&2
-        sleep 2; waited=$(( waited + 2 ))
-        (( waited >= 300 )) && { echo >&2; die "QEMU did not exit in 300s — check dmesg (stuck unpinning?)"; }
+        printf '\r[%s]   %s still running... %ss\033[K' "$(date +%H:%M:%S)" "${active}" "${waited}" >&2
+        sleep 2
+        waited=$((waited + 2))
     done
     echo >&2
-    log "All QEMU processes gone (${waited}s)"
+    return 1
+}
+
+stop_cluster_domains() {
+    local domain
+
+    for domain in "${CLUSTER_DOMAINS[@]}"; do
+        if domain_alive "${domain}"; then
+            log "  shutdown ${domain}"
+            virsh_cluster shutdown "${domain}" >/dev/null 2>&1 \
+                || err "Failed to request shutdown for ${domain}"
+        fi
+    done
+
+    if wait_domains_stopped 30; then
+        return 0
+    fi
+
+    err "Graceful shutdown timed out; destroying remaining cluster domains"
+    for domain in "${CLUSTER_DOMAINS[@]}"; do
+        if domain_alive "${domain}"; then
+            log "  destroy ${domain}"
+            virsh_cluster destroy "${domain}" >/dev/null 2>&1 \
+                || err "Failed to destroy ${domain}"
+        fi
+    done
+    wait_domains_stopped 90 || die "Some libvirt domains did not stop; refusing to tear down networking."
 }
 
 wait_vfio_free() {
@@ -986,6 +1096,7 @@ wait_vfio_free() {
 
 cmd_down() {
     require_root
+    require_libvirt
 
     local answer
     while true; do
@@ -1005,15 +1116,15 @@ cmd_down() {
 
     log "Stopping cluster..."
 
-    pkill -TERM -f 'qemu-system-x86_64.*sw-tap-' 2>/dev/null || true
-
-    wait_qemu_gone 90
-
-    wait_vfio_free 120 || err "GPU may still be busy — next 'up' can fail; check 'fuser -v /dev/vfio/*'"
-
+    # Stop launchers first so a domain still being prepared cannot appear after
+    # the shutdown pass. Killing an attached debug console only detaches it.
     for s in "${TMUX_BOOTSTRAP}" "${TMUX_JOIN[@]}"; do
         tmux kill-session -t "${s}" 2>/dev/null || true
     done
+
+    stop_cluster_domains
+
+    wait_vfio_free 120 || err "GPU may still be busy — next 'up' can fail; check 'fuser -v /dev/vfio/*'"
 
     for ip in "${BOOTSTRAP_IP}" "${JOIN_IPS[@]}"; do
         local tap="sw-tap-${ip##*.}"

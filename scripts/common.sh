@@ -14,27 +14,247 @@ print_section_header() {
     echo -e "${BLUE}$(printf '=%.0s' {1..40})${NC}"
 }
 
+# Shared Ubuntu 24.04 confidential-computing stack. Both Intel TDX and AMD
+# SEV-SNP use the same signed Canonical kernel and the same upstream QEMU
+# binary. The concrete versions and every downloaded artifact are pinned.
+NOBLE_KERNEL_ABI="7.0.0-31-generic"
+NOBLE_KERNEL_PACKAGE_VERSION="7.0.0-31.31~24.04.1"
+NOBLE_QEMU_RELEASE_REPO="Super-Protocol/sp-vm-tools"
+NOBLE_QEMU_RELEASE_TAG="46-qemu-ubuntu24"
+NOBLE_QEMU_RELEASE_ASSET="qemu-ubuntu24.tar.gz"
+NOBLE_QEMU_RELEASE_ASSET_SHA256="12e571708fbd6b77d4dbe526313252f7c3c4e4d6a9bfc829ea9d2ecf4519cbfa"
+NOBLE_QEMU_INSTALL_PREFIX="/opt/sp-qemu-tdx-10.2"
+
+download_pinned_package() {
+    local output="$1"
+    local url="$2"
+    local expected_sha256="$3"
+    local actual_sha256
+
+    wget -O "${output}" "${url}"
+    actual_sha256=$(sha256sum "${output}" | awk '{print $1}')
+    if [ "${actual_sha256}" != "${expected_sha256}" ]; then
+        echo "ERROR: SHA-256 mismatch for $(basename "${output}")" >&2
+        echo "Expected: ${expected_sha256}" >&2
+        echo "Actual:   ${actual_sha256}" >&2
+        rm -f "${output}"
+        return 1
+    fi
+}
+
+install_noble_stable_kernel() {
+    local work="$1"
+    local archive="https://archive.ubuntu.com/ubuntu"
+    local pinned_libc_version="6.8.0-139.139"
+    local installed_libc_version=""
+    local candidate_libc_version=""
+    local libc_package="${work}/linux-libc-dev_${pinned_libc_version}_amd64.deb"
+    local kernel_packages=()
+
+    mkdir -p "${work}"
+    installed_libc_version=$(dpkg-query -W -f='${Version}' linux-libc-dev 2>/dev/null || true)
+    # apt-cache policy treats a manually installed higher version as Candidate
+    # even when no configured repository provides it. madison lists repository
+    # versions only, which lets us distinguish Ubuntu packages from old custom
+    # kernel builds.
+    candidate_libc_version=$(apt-cache madison linux-libc-dev 2>/dev/null | awk 'NR == 1 {print $3; exit}')
+
+    # linux-libc-dev is produced by Noble's GA kernel source and therefore has
+    # an independent 6.8 package version even though the installed HWE ABI is 7.0.
+    download_pinned_package \
+        "${work}/linux-image-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+        "${archive}/pool/main/l/linux-signed-hwe-7.0/linux-image-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+        "df803cb70c2a3b0899987390cf6483fbeb05c3610855d10d3a7050a01eeecd19"
+    download_pinned_package \
+        "${work}/linux-modules-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+        "${archive}/pool/main/l/linux-hwe-7.0/linux-modules-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+        "45f19f8e9aec61b57236925b9db5ee14469a854b1f631004443aa453880124ce"
+    download_pinned_package \
+        "${work}/linux-hwe-7.0-headers-7.0.0-31_${NOBLE_KERNEL_PACKAGE_VERSION}_all.deb" \
+        "${archive}/pool/main/l/linux-hwe-7.0/linux-hwe-7.0-headers-7.0.0-31_${NOBLE_KERNEL_PACKAGE_VERSION}_all.deb" \
+        "3b2e3548a42e29e64f277e42e9248557f3cbb65071de6c384a4514145a1ab4a2"
+    download_pinned_package \
+        "${work}/linux-headers-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+        "${archive}/pool/main/l/linux-hwe-7.0/linux-headers-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+        "b4bff6ea35a6432482508908af5da5f35171a914cb31dcac5beecef19b81afd2"
+    CURRENT_KERNEL=$(uname -r)
+    NEW_KERNEL_VERSION="${NOBLE_KERNEL_ABI}"
+
+    # linux-libc-dev provides userspace UAPI headers and does not have to match
+    # the booted kernel ABI. Keep a newer package only when it is also the
+    # version selected by the configured Ubuntu repositories. A foreign/custom
+    # package (for example the legacy 6.9.0-rc7 build) is replaced with our
+    # pinned Ubuntu package; downgrade permission is scoped to this one package.
+    if [ -n "${installed_libc_version}" ] && \
+       [ "${installed_libc_version}" = "${candidate_libc_version}" ] && \
+       dpkg --compare-versions "${installed_libc_version}" ge "${pinned_libc_version}"; then
+        echo "Keeping repository linux-libc-dev ${installed_libc_version} (validated minimum: ${pinned_libc_version})"
+    else
+        download_pinned_package \
+            "${libc_package}" \
+            "${archive}/pool/main/l/linux/linux-libc-dev_${pinned_libc_version}_amd64.deb" \
+            "f8292b3414cac372ec28ba484a45e3f18b3ac5fc7872ca82661835286f1c5865"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades "${libc_package}"
+    fi
+
+    kernel_packages+=( \
+        "${work}/linux-hwe-7.0-headers-7.0.0-31_${NOBLE_KERNEL_PACKAGE_VERSION}_all.deb" \
+        "${work}/linux-headers-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+        "${work}/linux-modules-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+        "${work}/linux-image-${NOBLE_KERNEL_ABI}_${NOBLE_KERNEL_PACKAGE_VERSION}_amd64.deb" \
+    )
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "${kernel_packages[@]}"
+
+    [ -s "/boot/vmlinuz-${NEW_KERNEL_VERSION}" ] || {
+        echo "ERROR: installed kernel image /boot/vmlinuz-${NEW_KERNEL_VERSION} is missing" >&2
+        return 1
+    }
+    [ -d "/lib/modules/${NEW_KERNEL_VERSION}" ] || {
+        echo "ERROR: installed kernel modules /lib/modules/${NEW_KERNEL_VERSION} are missing" >&2
+        return 1
+    }
+    [ -d "/usr/src/linux-headers-${NEW_KERNEL_VERSION}" ] || {
+        echo "ERROR: installed kernel headers for ${NEW_KERNEL_VERSION} are missing" >&2
+        return 1
+    }
+}
+
+install_noble_coco_qemu() {
+    local work="$1"
+    local url="https://github.com/${NOBLE_QEMU_RELEASE_REPO}/releases/download/${NOBLE_QEMU_RELEASE_TAG}/${NOBLE_QEMU_RELEASE_ASSET}"
+    local qemu_deb qemu_binary
+
+    mkdir -p "${work}"
+    echo "Installing QEMU from ${NOBLE_QEMU_RELEASE_REPO}@${NOBLE_QEMU_RELEASE_TAG}..."
+    download_pinned_package \
+        "${work}/${NOBLE_QEMU_RELEASE_ASSET}" "${url}" \
+        "${NOBLE_QEMU_RELEASE_ASSET_SHA256}"
+    tar -xzf "${work}/${NOBLE_QEMU_RELEASE_ASSET}" -C "${work}"
+
+    if [ ! -s "${work}/SHA256SUMS" ]; then
+        echo "ERROR: ${NOBLE_QEMU_RELEASE_ASSET} does not contain SHA256SUMS" >&2
+        return 1
+    fi
+    (
+        cd "${work}"
+        sha256sum --check SHA256SUMS
+    ) || {
+        echo "ERROR: QEMU package checksum validation failed" >&2
+        return 1
+    }
+
+    # Release 46 retains the historical sp-qemu-tdx package name, but the
+    # installed upstream binary is verified below for both TDX and SEV-SNP.
+    qemu_deb=$(find "${work}" -maxdepth 1 -type f -name 'sp-qemu-tdx*.deb' -print -quit)
+    if [ -z "${qemu_deb}" ]; then
+        echo "ERROR: ${NOBLE_QEMU_RELEASE_ASSET} does not contain sp-qemu-tdx" >&2
+        return 1
+    fi
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "${qemu_deb}"
+
+    qemu_binary="${NOBLE_QEMU_INSTALL_PREFIX}/bin/qemu-system-x86_64"
+    [ -x "${qemu_binary}" ] || {
+        echo "ERROR: installed QEMU binary is missing: ${qemu_binary}" >&2
+        return 1
+    }
+    "${qemu_binary}" -object help | grep -q 'tdx-guest' || {
+        echo "ERROR: installed QEMU does not provide tdx-guest" >&2
+        return 1
+    }
+    "${qemu_binary}" -object help | grep -q 'sev-snp-guest' || {
+        echo "ERROR: installed QEMU does not provide sev-snp-guest" >&2
+        return 1
+    }
+}
+
+detect_nvidia_cc_mode() {
+  local requested_mode="${1:-auto}"
+  local pci_root="${PCI_SYSFS_ROOT:-/sys/bus/pci/devices}"
+  local dev_path vendor device vpd_file
+
+  DETECTED_NVSWITCH_BDFS=()
+  DETECTED_CX7_BRIDGE_BDFS=()
+
+  for dev_path in "${pci_root}"/*/; do
+    [[ -d "${dev_path}" ]] || continue
+    [[ -r "${dev_path}vendor" && -r "${dev_path}device" ]] || continue
+
+    vendor=$(<"${dev_path}vendor")
+    device=$(<"${dev_path}device")
+    vendor="${vendor,,}"
+    device="${device,,}"
+
+    # Hopper HGX exposes its third-generation NVSwitches as NVIDIA PCI
+    # devices.  PPCIe mode is required for confidential multi-GPU use.
+    if [[ "${vendor}" == "0x10de" && "${device}" == "0x22a3" ]]; then
+      DETECTED_NVSWITCH_BDFS+=("$(basename "${dev_path}")")
+      continue
+    fi
+
+    # HGX B200 exposes four ConnectX-7 switch-management PFs.  The SW_MNG
+    # VPD marker distinguishes them from ordinary ConnectX-7 NICs.  Blackwell
+    # uses encrypted NVLink and must remain in regular CC mode, not PPCIe.
+    vpd_file="${dev_path}vpd"
+    if [[ "${vendor}" == "0x15b3" && "${device}" == "0x1021" && -f "${vpd_file}" ]] \
+      && grep -a -q "SW_MNG" "${vpd_file}" 2>/dev/null; then
+      DETECTED_CX7_BRIDGE_BDFS+=("$(basename "${dev_path}")")
+    fi
+  done
+
+  case "${requested_mode}" in
+    auto)
+      if (( ${#DETECTED_NVSWITCH_BDFS[@]} > 0 && ${#DETECTED_CX7_BRIDGE_BDFS[@]} > 0 )); then
+        echo "ERROR: Both Hopper NVSwitch and Blackwell CX7 fabric devices were detected."
+        echo "Re-run with --gpu-mode cc or --gpu-mode ppcie after verifying the platform."
+        return 1
+      elif (( ${#DETECTED_NVSWITCH_BDFS[@]} > 0 )); then
+        NVIDIA_CC_MODE="ppcie"
+        NVIDIA_FABRIC_TYPE="hopper-nvswitch"
+      elif (( ${#DETECTED_CX7_BRIDGE_BDFS[@]} > 0 )); then
+        NVIDIA_CC_MODE="cc"
+        NVIDIA_FABRIC_TYPE="blackwell-cx7"
+      else
+        NVIDIA_CC_MODE="cc"
+        NVIDIA_FABRIC_TYPE="none"
+      fi
+      ;;
+    cc|ppcie)
+      NVIDIA_CC_MODE="${requested_mode}"
+      if (( ${#DETECTED_NVSWITCH_BDFS[@]} > 0 )); then
+        NVIDIA_FABRIC_TYPE="hopper-nvswitch"
+      elif (( ${#DETECTED_CX7_BRIDGE_BDFS[@]} > 0 )); then
+        NVIDIA_FABRIC_TYPE="blackwell-cx7"
+      else
+        NVIDIA_FABRIC_TYPE="none"
+      fi
+      ;;
+    *)
+      echo "ERROR: Invalid GPU mode '${requested_mode}'. Expected auto, cc, or ppcie."
+      return 1
+      ;;
+  esac
+
+  echo "Detected NVIDIA fabric: ${NVIDIA_FABRIC_TYPE}"
+  echo "Selected confidential GPU mode: ${NVIDIA_CC_MODE} (requested: ${requested_mode})"
+
+  if [[ "${requested_mode}" != "auto" ]]; then
+    if [[ "${NVIDIA_FABRIC_TYPE}" == "blackwell-cx7" && "${NVIDIA_CC_MODE}" == "ppcie" ]]; then
+      echo "WARNING: PPCIe was forced on a Blackwell/CX7 platform; NVIDIA recommends regular CC mode."
+    elif [[ "${NVIDIA_FABRIC_TYPE}" == "hopper-nvswitch" && "${NVIDIA_CC_MODE}" == "cc" ]]; then
+      echo "WARNING: Regular CC mode was forced on a Hopper NVSwitch platform; multi-GPU requires PPCIe."
+    fi
+  fi
+}
+
 setup_nvidia_gpus() {
-  TMP_DIR=$1
+  local TMP_DIR=$1
+  local requested_mode="${2:-auto}"
 
   echo "Checking for NVIDIA GPUs..."
   if ! command -v lspci >/dev/null; then
     echo "lspci not found, skipping NVIDIA GPU configuration"
     return 0
   fi
-
-  # Blacklist both NVIDIA and Nouveau drivers
-  echo "Blacklisting NVIDIA and Nouveau drivers..."
-  tee /etc/modprobe.d/blacklist-nvidia.conf << EOF
-blacklist nvidia
-blacklist nvidia_drm
-blacklist nouveau
-blacklist nvidia_uvm
-blacklist nvidia_modeset
-EOF
-
-  # Remove Nouveau from modules if present
-  sed -i '/nouveau/d' /etc/modules
 
   echo "Determining PCI IDs for your NVIDIA GPU(s)..."
   
@@ -60,49 +280,81 @@ EOF
   echo "GPU details:"
   echo "$gpu_list"
 
+  detect_nvidia_cc_mode "${requested_mode}" || return 1
+
+  # Do not modify the host until GPU mode selection has been validated.
+  echo "Blacklisting NVIDIA and Nouveau drivers..."
+  tee /etc/modprobe.d/blacklist-nvidia.conf << EOF
+blacklist nvidia
+blacklist nvidia_drm
+blacklist nouveau
+blacklist nvidia_uvm
+blacklist nvidia_modeset
+EOF
+
+  # Remove Nouveau from modules if present
+  sed -i '/nouveau/d' /etc/modules
+
   # Clone gpu-admin-tools
   sudo rm -rf "${TMP_DIR}/gpu-admin-tools" 2>/dev/null || true
   git clone -b v2026.06.05 --single-branch --depth 1 --no-tags https://github.com/NVIDIA/gpu-admin-tools.git "${TMP_DIR}/gpu-admin-tools"
   pushd "${TMP_DIR}/gpu-admin-tools"
 
-  # Step 1: Disable PPCIe mode on GPUs only (using BDF addresses)
-  echo "Disabling PPCIe mode on GPU devices..."
-  if [ "$gpu_count" -gt 0 ]; then
-    gpu_bdfs=$(echo "$gpu_list" | awk '{print $1}')
+  local gpu_bdfs gpu_bdf device_bdf
+  gpu_bdfs=$(echo "$gpu_list" | awk '{print $1}')
+
+  if [[ "${NVIDIA_CC_MODE}" == "ppcie" ]]; then
+    # Hopper PPCIe and regular CC are mutually exclusive.  Disable CC on the
+    # GPUs first, then enable PPCIe on every GPU and Hopper NVSwitch.
+    echo "Configuring Hopper GPUs and NVSwitches for Protected PCIe mode..."
     for gpu_bdf in $gpu_bdfs; do
-      echo "Disabling PPCIe mode for GPU ${gpu_bdf}"
-      python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu_bdf} --set-ppcie-mode=off --reset-after-ppcie-mode-switch
-      if [ $? -ne 0 ]; then
-        echo "Warning: Failed to disable PPCIe mode for GPU ${gpu_bdf} (this may be normal)"
-      fi
+      echo "Disabling regular CC mode for GPU ${gpu_bdf}"
+      python3 ./nvidia_gpu_tools.py --gpu-bdf="${gpu_bdf}" \
+        --set-cc-mode=off --reset-after-cc-mode-switch || {
+          echo "ERROR: Failed to disable regular CC mode for GPU ${gpu_bdf}"
+          popd
+          return 1
+        }
+    done
+
+    for device_bdf in $gpu_bdfs "${DETECTED_NVSWITCH_BDFS[@]}"; do
+      echo "Enabling PPCIe mode for NVIDIA device ${device_bdf}"
+      python3 ./nvidia_gpu_tools.py --devices="${device_bdf}" \
+        --set-ppcie-mode=on --reset-after-ppcie-mode-switch || {
+          echo "ERROR: Failed to enable PPCIe mode for NVIDIA device ${device_bdf}"
+          popd
+          return 1
+        }
+      python3 ./nvidia_gpu_tools.py --devices="${device_bdf}" --query-ppcie-settings
     done
   else
-    echo "No GPUs found to configure"
-    popd
-    return 0
+    # Single-GPU, PCIe-only multi-GPU, and Blackwell NVLink systems use
+    # regular CC mode.  Clear stale PPCIe state before enabling CC.
+    echo "Configuring GPUs for regular Confidential Computing mode..."
+    for device_bdf in $gpu_bdfs "${DETECTED_NVSWITCH_BDFS[@]}"; do
+      echo "Disabling PPCIe mode for NVIDIA device ${device_bdf}"
+      if ! python3 ./nvidia_gpu_tools.py --devices="${device_bdf}" \
+        --set-ppcie-mode=off --reset-after-ppcie-mode-switch; then
+        if [[ "${NVIDIA_FABRIC_TYPE}" == "hopper-nvswitch" ]]; then
+          echo "ERROR: Failed to disable PPCIe mode for Hopper device ${device_bdf}"
+          popd
+          return 1
+        fi
+        echo "WARNING: Failed to disable PPCIe mode for ${device_bdf}; the device may not support PPCIe"
+      fi
+    done
+
+    for gpu_bdf in $gpu_bdfs; do
+      echo "Enabling CC mode for GPU ${gpu_bdf}"
+      python3 ./nvidia_gpu_tools.py --gpu-bdf="${gpu_bdf}" \
+        --set-cc-mode=on --reset-after-cc-mode-switch || {
+          echo "ERROR: Failed to enable CC mode for GPU ${gpu_bdf}"
+          popd
+          return 1
+        }
+      python3 ./nvidia_gpu_tools.py --gpu-bdf="${gpu_bdf}" --query-cc-settings
+    done
   fi
-
-  # Step 2: Configure GPUs for CC mode
-  echo "Configuring GPUs for Confidential Computing mode..."
-  
-  gpu_bdfs=$(echo "$gpu_list" | awk '{print $1}')
-  
-  for gpu_bdf in $gpu_bdfs; do
-    echo "Setting CC mode for GPU ${gpu_bdf}"
-    python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu_bdf} --set-cc-mode=on --reset-after-cc-mode-switch
-    if [ $? -ne 0 ]; then
-      echo "ERROR: Failed to enable CC mode for GPU ${gpu_bdf}"
-      echo "This is critical for confidential computing functionality"
-      exit 1
-    fi
-    
-    # Verify the mode was set correctly
-    echo "Verifying CC mode for GPU ${gpu_bdf}"
-    python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu_bdf} --query-cc-settings
-  done
-
-  # Note: We don't need to handle NVSwitches separately as nvidia_gpu_tools
-  # will handle all necessary infrastructure automatically
 
   popd
 
@@ -151,23 +403,29 @@ EOF
   sudo update-initramfs -u
 
   echo "NVIDIA GPU configuration completed successfully"
-  echo "GPUs configured for CC mode: $gpu_count"
+  echo "GPUs configured for ${NVIDIA_CC_MODE} mode: $gpu_count"
   echo "Total NVIDIA devices in system: $all_nvidia_devices"
   echo "VFIO-PCI configured with IDs: $combined_pci_ids"
   
   echo ""
   echo "GPU Status Summary:"
   for gpu_bdf in $(echo "$gpu_list" | awk '{print $1}'); do
-    echo "- $gpu_bdf: CC mode enabled, VFIO ready"
+    echo "- $gpu_bdf: ${NVIDIA_CC_MODE} mode enabled, VFIO ready"
   done
 
   echo ""
   echo "IMPORTANT: GPU configuration is persistent across reboots."
   echo "To revert changes, run the following commands:"
   echo "cd ${TMP_DIR}/gpu-admin-tools"
-  for gpu_bdf in $(echo "$gpu_list" | awk '{print $1}'); do
-    echo "sudo python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu_bdf} --set-cc-mode=off --reset-after-cc-mode-switch"
-  done
+  if [[ "${NVIDIA_CC_MODE}" == "ppcie" ]]; then
+    for device_bdf in $gpu_bdfs "${DETECTED_NVSWITCH_BDFS[@]}"; do
+      echo "sudo python3 ./nvidia_gpu_tools.py --devices=${device_bdf} --set-ppcie-mode=off --reset-after-ppcie-mode-switch"
+    done
+  else
+    for gpu_bdf in $gpu_bdfs; do
+      echo "sudo python3 ./nvidia_gpu_tools.py --gpu-bdf=${gpu_bdf} --set-cc-mode=off --reset-after-cc-mode-switch"
+    done
+  fi
   
   return 0
 }
@@ -557,6 +815,17 @@ ensure_cmdline_param() {
 setup_grub() {
     local new_kernel="$1"
     local type=$2
+    local grub_entry="Advanced options for Ubuntu>Ubuntu, with Linux ${new_kernel}"
+    local ubuntu_version=""
+
+    if [ -r /etc/os-release ]; then
+        ubuntu_version=$(. /etc/os-release && printf '%s' "${VERSION_ID:-}")
+    fi
+
+    if [ -z "$ubuntu_version" ]; then
+        echo "Unable to determine the Ubuntu version for GRUB setup" >&2
+        return 1
+    fi
 
     if [[ "$type" != "tdx" && "$type" != "snp" ]]; then
         echo "Invalid type: $type. Must be 'tdx' or 'snp'." >&2
@@ -573,7 +842,8 @@ setup_grub() {
         cp /etc/default/grub "/etc/default/grub.backup.$(date +%Y%m%d_%H%M%S)"
     fi
 
-    # Directly set the first menuentry as default since it's our new kernel
+    # Keep the base default release-neutral. The drop-in below selects the
+    # requested custom kernel only while this Ubuntu release is installed.
     sed -i '/^GRUB_DEFAULT=/d' /etc/default/grub
     echo 'GRUB_DEFAULT=0' > /etc/default/grub.new
     cat /etc/default/grub >> /etc/default/grub.new
@@ -603,14 +873,26 @@ setup_grub() {
         echo 'GRUB_RECORDFAIL_TIMEOUT=5' >> /etc/default/grub
     fi
 
-    # Create a custom configuration file to ensure our kernel is first
+    # Select the exact kernel instead of assuming it sorts as menu entry zero.
+    # Limit the override to this Ubuntu release so a future release upgrade
+    # automatically returns to its newer distro kernel.
     mkdir -p /etc/default/grub.d
-    echo "# Custom kernel order configuration" > "/etc/default/grub.d/99-${type}-kernel.cfg"
-    echo "GRUB_DEFAULT=0" >> "/etc/default/grub.d/99-${type}-kernel.cfg"
+    {
+        echo "# Custom kernel selection for Ubuntu ${ubuntu_version}"
+        echo '[ -r /etc/os-release ] && . /etc/os-release'
+        echo "if [ \"\${VERSION_ID:-}\" = \"${ubuntu_version}\" ]; then"
+        echo "    GRUB_DEFAULT=\"${grub_entry}\""
+        echo 'fi'
+    } > "/etc/default/grub.d/99-${type}-kernel.cfg"
     
     # Force regeneration of grub.cfg and initramfs
     update-initramfs -u -k "${new_kernel}"
     update-grub2 || update-grub
+
+    if ! grep -Fq "menuentry 'Ubuntu, with Linux ${new_kernel}'" /boot/grub/grub.cfg; then
+        echo "Failed to find the requested kernel in GRUB: ${new_kernel}" >&2
+        return 1
+    fi
 
     # For UEFI systems, ensure the boot entry is updated
     if [ -d /sys/firmware/efi ]; then
@@ -631,14 +913,14 @@ setup_grub() {
         fi
     fi
 
-    # Use both grub-set-default and grub-reboot for maximum reliability
+    # Use the exact submenu entry for both persistent and one-shot selection.
     if command -v grub-set-default >/dev/null 2>&1; then
-        grub-set-default 0
+        grub-set-default "${grub_entry}"
         echo "Set default boot entry using grub-set-default"
     fi
 
     if command -v grub-reboot >/dev/null 2>&1; then
-        grub-reboot 0
+        grub-reboot "${grub_entry}"
         echo "Set next boot entry using grub-reboot"
     fi
 

@@ -68,6 +68,7 @@ ACME_URL: https://acme.zerossl.com/v2/DV90
 **You also need:**
 - A host already bootstrapped for confidential computing (TDX or SEV-SNP) — see the [main README](../README.md).
 - `tmux`, `nftables`, `curl`, `nc` installed: `apt install tmux nftables curl netcat-openbsd`
+- Ubuntu 24.04 or 26.04 with `qemu:///system`, libvirt 12.1+, `python3-libvirt`, `passt`, and `acl` configured as described in the [libvirt launcher section](../README.md#libvirt-launcher-ubuntu-2404-and-2604).
 
 > Keep `provider-template/` in its own folder — not inside `sp-vm-tools` and not inside any cache folder.
 
@@ -78,7 +79,7 @@ ACME_URL: https://acme.zerossl.com/v2/DV90
 sudo ./scripts/swarm-cluster.sh up --provider-config-template ./provider-template
 
 # Check status
-./scripts/swarm-cluster.sh status
+sudo ./scripts/swarm-cluster.sh status
 
 # Stop everything
 sudo ./scripts/swarm-cluster.sh down
@@ -95,16 +96,16 @@ That's it — the script generates per-node configs, starts the VMs, and sets up
 |---|---|---|
 | `--provider-config-template` | _(required)_ | Template directory containing a `swarm/` subdirectory with `config.yaml` (and `openresty.yaml`, optionally `auth-service.yaml`). |
 | `--join-cores` | `4` | vCPUs per join node. |
-| `--join-mem` | `4` | RAM (GiB) per join node. |
+| `--join-mem` | `16` | RAM (GiB) per join node. |
 | `--host-reserve-cores` | `4` | Cores left for the host OS. |
-| `--host-reserve-mem` | `8` | RAM (GiB) left for the host OS. |
+| `--host-reserve-mem` | `32` | RAM (GiB) shared by the host OS and QEMU process overhead. |
 | `--state-disk-size` | auto (proportional) | State disk size per node in GiB. Auto-split from 90% of free space if omitted. |
 | `--release` | latest | Pin a specific `Super-Protocol/sp-vm` release. |
 | `--mode` | auto-detect | `tdx`, `sev-snp`, or `untrusted`. |
 | `--debug` | `false` | Enable verbose boot log + SSH port forwards per node. |
 | `--gpu-target` | `bootstrap` | Where to pass the GPU: `bootstrap` or `none`. |
 
-The bootstrap node gets all remaining host resources after subtracting the host reserve and join nodes. Join nodes get the fixed minimums above.
+The bootstrap node gets all remaining host resources after subtracting the host reserve and join nodes. Join nodes get the fixed minimums above. QEMU process overhead is included in the host memory reserve and is not deducted separately.
 
 ### What happens under the hood
 
@@ -114,13 +115,13 @@ The bootstrap node gets all remaining host resources after subtracting the host 
 4. Generates per-node provider configs:
    - **Bootstrap**: `join_addresses: []`, `pki_authority.servers: []`.
    - **Join nodes**: `join_addresses: ["10.0.0.10:7946"]`, `caBundle` fetched automatically from bootstrap PKI.
-5. Starts each VM in its own `tmux` session (`swarm-bootstrap`, `swarm-join-1`, `swarm-join-2`), attached to the bridge via tap interfaces.
+5. Starts transient libvirt domains named `swarm-bootstrap`, `swarm-join-1`, and `swarm-join-2`, attached to the bridge via tap interfaces. In debug mode their attached serial consoles run in matching `tmux` sessions.
 6. Waits for bootstrap gossip (7946) and PKI (9443) to become ready.
 7. Fetches the CA bundle from bootstrap and injects it into join-node configs.
 8. Launches join nodes.
 9. Sets up HAProxy ingress: `gw.dyn.<global_id>.superprotocol.io` → bootstrap ports 80/443.
 
-Attach to any VM's console with `tmux attach -t swarm-bootstrap` (or `swarm-join-1` / `swarm-join-2`).
+Follow a VM's boot output with `tail -f /var/log/libvirt/qemu/swarm-bootstrap-serial.log` (or `swarm-join-1` / `swarm-join-2`); libvirt records it from the first byte, whether or not anything is attached. In debug mode, use the matching `tmux attach -t <domain>` session instead.
 
 </details>
 
