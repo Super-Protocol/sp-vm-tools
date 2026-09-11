@@ -96,16 +96,16 @@ That's it — the script generates per-node configs, starts the VMs, and sets up
 |---|---|---|
 | `--provider-config-template` | _(required)_ | Template directory containing a `swarm/` subdirectory with `config.yaml` (and `openresty.yaml`, optionally `auth-service.yaml`). |
 | `--join-cores` | `4` | vCPUs per join node. |
-| `--join-mem` | `4` | RAM (GiB) per join node. |
+| `--join-mem` | `16` | RAM (GiB) per join node. |
 | `--host-reserve-cores` | `4` | Cores left for the host OS. |
-| `--host-reserve-mem` | `8` | RAM (GiB) left for the host OS. |
+| `--host-reserve-mem` | `32` | RAM (GiB) shared by the host OS and QEMU process overhead. |
 | `--state-disk-size` | auto (proportional) | State disk size per node in GiB. Auto-split from 90% of free space if omitted. |
 | `--release` | latest | Pin a specific `Super-Protocol/sp-vm` release. |
 | `--mode` | auto-detect | `tdx`, `sev-snp`, or `untrusted`. |
 | `--debug` | `false` | Enable verbose boot log + SSH port forwards per node. |
 | `--gpu-target` | `bootstrap` | Where to pass the GPU: `bootstrap` or `none`. |
 
-The bootstrap node gets all remaining host resources after subtracting the host reserve and join nodes. Join nodes get the fixed minimums above.
+The bootstrap node gets all remaining host resources after subtracting the host reserve and join nodes. Join nodes get the fixed minimums above. QEMU process overhead is included in the host memory reserve and is not deducted separately.
 
 ### What happens under the hood
 
