@@ -12,6 +12,21 @@ exit_handler() {
     exit $exit_code
 }
 
+# Partially written decompression output. Tracked globally so that an interrupt
+# or an early exit does not leave a stale multi-gigabyte .part file behind.
+DECOMPRESS_TMP_FILE=""
+
+cleanup_decompress_tmp() {
+    if [[ -n "${DECOMPRESS_TMP_FILE}" ]]; then
+        rm -f "${DECOMPRESS_TMP_FILE}"
+        DECOMPRESS_TMP_FILE=""
+    fi
+}
+
+trap 'cleanup_decompress_tmp' EXIT
+trap 'cleanup_decompress_tmp; exit 130' INT
+trap 'cleanup_decompress_tmp; exit 143' TERM
+
 # Default values
 SCRIPT_DIR=$( cd "$( dirname "$0" )" && pwd )
 
@@ -383,6 +398,96 @@ download_release() {
     RELEASE_FILEPATH="${TARGET_DIR}/${ASSET_NAME}"
 }
 
+# Verify a file against an expected sha256 and, optionally, an expected size.
+# Returns non-zero on mismatch instead of exiting, so callers can re-download.
+verify_file() {
+    local path=$1
+    local expected_sha256=$2
+    local expected_size=$3
+
+    if [[ -n "${expected_size}" ]]; then
+        local actual_size
+        actual_size=$(stat -c%s "$path")
+        if [[ "${actual_size}" != "${expected_size}" ]]; then
+            echo "Size mismatch for $(basename "$path"): expected ${expected_size}, got ${actual_size}."
+            return 1
+        fi
+    fi
+
+    local actual_sha256
+    actual_sha256=$(sha256sum "$path" | awk '{print $1}')
+    if [[ "${actual_sha256}" != "${expected_sha256}" ]]; then
+        echo "Checksum mismatch for $(basename "$path"): expected ${expected_sha256}, got ${actual_sha256}."
+        return 1
+    fi
+
+    return 0
+}
+
+# Fail early if a directory cannot hold the given number of bytes.
+# A missing or unknown size is treated as "nothing to check".
+check_free_space() {
+    local directory=$1
+    local needed=$2
+    local what=$3
+
+    [[ -n "${needed}" ]] || return 0
+
+    local available
+    available=$(df --output=avail -B1 "${directory}" | tail -n1 | tr -d ' ')
+    [[ -n "${available}" ]] || return 0
+
+    if (( available < needed )); then
+        echo "Error: not enough free space in ${directory} to ${what}: need ${needed} bytes, have ${available}."
+        exit 1
+    fi
+}
+
+# Stream-decompress an archive into its target path, verifying the result.
+# Nothing is written to the final path until the checks pass.
+decompress_release_file() {
+    local archive=$1
+    local target=$2
+    local compression=$3
+    local expected_sha256=$4
+    local expected_size=$5
+    local tmp_target="${target}.part"
+
+    if [[ "${compression}" != "zstd" ]]; then
+        echo "Error: unsupported compression '${compression}' (supported: zstd)"
+        exit 1
+    fi
+
+    if ! command -v zstd &> /dev/null; then
+        echo "Error: zstd is required to unpack $(basename "$archive") but is not installed."
+        exit 1
+    fi
+
+    # Re-checked here because the archive itself now occupies part of the space
+    # that the earlier pre-download check saw as free.
+    check_free_space "$(dirname "$target")" "${expected_size}" "unpack $(basename "$archive")"
+
+    echo "Unpacking $(basename "$archive") to ${target}..."
+    # Also clears a .part left over by a previous run that was killed outright.
+    rm -f "$tmp_target"
+    DECOMPRESS_TMP_FILE="$tmp_target"
+    if ! zstd -dc -- "$archive" > "$tmp_target"; then
+        echo "Error: Failed to unpack $(basename "$archive")"
+        cleanup_decompress_tmp
+        exit 1
+    fi
+
+    if ! verify_file "$tmp_target" "$expected_sha256" "$expected_size"; then
+        echo "Error: Verification failed for $(basename "$target") after unpacking."
+        cleanup_decompress_tmp
+        exit 1
+    fi
+
+    mv "$tmp_target" "$target"
+    DECOMPRESS_TMP_FILE=""
+    echo "Successfully unpacked and verified $(basename "$target")."
+}
+
 parse_and_download_release_files() {
     RELEASE_JSON=$1
     DOWNLOAD_DIR=$(dirname ${RELEASE_JSON})
@@ -412,31 +517,54 @@ parse_and_download_release_files() {
         prefix=$(echo "$entry" | jq -r '.value.prefix')
         filename=$(echo "$entry" | jq -r '.value.filename')
         sha256=$(echo "$entry" | jq -r '.value.sha256')
+        compression=$(echo "$entry" | jq -r '.value.compression // empty')
+        unc_filename=$(echo "$entry" | jq -r '.value.uncompressed_filename // empty')
+        unc_sha256=$(echo "$entry" | jq -r '.value.uncompressed_sha256 // empty')
+        unc_size=$(echo "$entry" | jq -r '.value.uncompressed_size // empty')
 
         echo "Processing entry - key: ${key}, filename: ${filename}"
 
         local_path="$DOWNLOAD_DIR/$filename"
 
+        # The format is taken from the release JSON, never guessed from the file name.
+        case "${compression}" in
+            "")
+                # Legacy build: the downloaded file is used as is.
+                target_path="$local_path"
+                ;;
+            zstd)
+                if [[ -z "${unc_filename}" ]] || [[ -z "${unc_sha256}" ]]; then
+                    echo "Error: entry '${key}': compression=zstd but uncompressed_filename/uncompressed_sha256 is missing"
+                    exit 1
+                fi
+                target_path="$DOWNLOAD_DIR/$unc_filename"
+                ;;
+            *)
+                echo "Error: entry '${key}': unsupported compression '${compression}' (supported: zstd)"
+                exit 1
+                ;;
+        esac
+
         case $key in
-            image) IMAGE_PATH=$local_path; echo "Set IMAGE_PATH to ${local_path}" ;;
-            kernel) KERNEL_PATH=$local_path; echo "Set KERNEL_PATH to ${local_path}" ;;
-            rootfs_hash) ROOTFS_HASH_PATH=$local_path; echo "Set ROOTFS_HASH_PATH to ${local_path}" ;;
+            image) IMAGE_PATH=$target_path; echo "Set IMAGE_PATH to ${target_path}" ;;
+            kernel) KERNEL_PATH=$target_path; echo "Set KERNEL_PATH to ${target_path}" ;;
+            rootfs_hash) ROOTFS_HASH_PATH=$target_path; echo "Set ROOTFS_HASH_PATH to ${target_path}" ;;
             bios)
                 if [[ "${VM_MODE}" != "sev-snp" ]] && [[ "${TDX_MODERN_STACK}" != true ]]; then
-                    BIOS_PATH=$local_path
-                    echo "Set BIOS_PATH to ${local_path} (QEMU ${QEMU_MAJOR_VERSION})"
+                    BIOS_PATH=$target_path
+                    echo "Set BIOS_PATH to ${target_path} (QEMU ${QEMU_MAJOR_VERSION})"
                 fi
                 ;;
             bios_tdx)
                 if [[ "${VM_MODE}" != "sev-snp" ]] && [[ "${TDX_MODERN_STACK}" == true ]]; then
-                    BIOS_PATH=$local_path
-                    echo "Set BIOS_PATH to ${local_path} (QEMU ${QEMU_MAJOR_VERSION})"
+                    BIOS_PATH=$target_path
+                    echo "Set BIOS_PATH to ${target_path} (QEMU ${QEMU_MAJOR_VERSION})"
                 fi
                 ;;
             bios_amd)
                 if [[ "${VM_MODE}" == "sev-snp" ]]; then
-                    BIOS_PATH=$local_path
-                    echo "Set BIOS_PATH to ${local_path}"
+                    BIOS_PATH=$target_path
+                    echo "Set BIOS_PATH to ${target_path}"
                 fi
                 ;;
             *) echo "Warning: Unknown key ${key} in release JSON" ;;
@@ -456,12 +584,35 @@ parse_and_download_release_files() {
             continue
         fi
 
-        # Check existing file
-        if [[ -f "$local_path" ]]; then
-            computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
-            if [[ "$computed_sha256" == "$sha256" ]]; then
-                echo "File $filename already exists and checksum is valid. Skipping download."
+        # For compressed entries: a valid decompressed file means nothing has to be fetched at all
+        if [[ -n "${compression}" ]] && [[ -f "$target_path" ]]; then
+            if verify_file "$target_path" "$unc_sha256" "$unc_size"; then
+                echo "File $unc_filename already exists and checksum is valid. Skipping download."
                 continue
+            fi
+            if [[ -n "${LOCAL_BUILD_DIR}" ]]; then
+                echo "Error: Checksum mismatch for existing file $unc_filename builded locally."
+                exit 1
+            fi
+            echo "Warning: Checksum mismatch for existing file $unc_filename. Unpacking again."
+            rm -f "$target_path"
+        fi
+
+        # Fail before spending bandwidth on an archive that cannot be unpacked here.
+        if [[ -n "${compression}" ]]; then
+            check_free_space "$DOWNLOAD_DIR" "$unc_size" "download and unpack $filename"
+        fi
+
+        # Check existing downloaded file
+        need_download=true
+        if [[ -f "$local_path" ]]; then
+            if verify_file "$local_path" "$sha256" ""; then
+                if [[ -z "${compression}" ]]; then
+                    echo "File $filename already exists and checksum is valid. Skipping download."
+                    continue
+                fi
+                echo "File $filename already exists and checksum is valid. Skipping download."
+                need_download=false
             else
                 if [[ -z "${LOCAL_BUILD_DIR}" ]]; then
                     echo "Warning: Checksum mismatch for existing file $filename. Downloading again."
@@ -473,20 +624,24 @@ parse_and_download_release_files() {
             fi
         fi
 
-        echo "Downloading $filename from sj://$bucket/$prefix/$filename to $local_path..."
-        uplink cp --parallelism 16 --interactive=false --analytics=false --progress --access ${STORJ_TOKEN} "sj://$bucket/$prefix/$filename" "$local_path"
+        if [[ "${need_download}" == true ]]; then
+            echo "Downloading $filename from sj://$bucket/$prefix/$filename to $local_path..."
+            uplink cp --parallelism 16 --interactive=false --analytics=false --progress --access ${STORJ_TOKEN} "sj://$bucket/$prefix/$filename" "$local_path"
 
-        if [ $? -ne 0 ]; then
-            echo "Error: Failed to download $filename"
-            exit 1
+            computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
+            if [[ "$computed_sha256" != "$sha256" ]]; then
+                echo "Error: Checksum mismatch for $filename after download. Expected $sha256, got $computed_sha256."
+                exit 1
+            else
+                echo "Successfully downloaded and verified $filename."
+            fi
         fi
 
-        computed_sha256=$(sha256sum "$local_path" | awk '{print $1}')
-        if [[ "$computed_sha256" != "$sha256" ]]; then
-            echo "Error: Checksum mismatch for $filename after download. Expected $sha256, got $computed_sha256."
-            exit 1
-        else
-            echo "Successfully downloaded and verified $filename."
+        if [[ -n "${compression}" ]]; then
+            decompress_release_file "$local_path" "$target_path" "$compression" "$unc_sha256" "$unc_size"
+            if [[ -z "${LOCAL_BUILD_DIR}" ]]; then
+                rm -f "$local_path"
+            fi
         fi
     done 3< <(jq -c 'to_entries[]' "$RELEASE_JSON")
 
@@ -523,6 +678,12 @@ check_packages() {
     if ! command -v nc &> /dev/null; then
         echo "nc is not installed. Installing..."
         apt update && apt install -y netcat-openbsd;
+    fi
+
+    # Check zstd (needed to unpack compressed VM images)
+    if ! command -v zstd &> /dev/null; then
+        echo "zstd is not installed. Installing..."
+        apt update && apt install -y zstd;
     fi
 
 }

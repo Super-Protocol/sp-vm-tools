@@ -96,6 +96,7 @@ check_libvirt_dependencies() {
     command -v virsh >/dev/null 2>&1 || missing+=(libvirt-clients)
     command -v setfacl >/dev/null 2>&1 || missing+=(acl)
     command -v runuser >/dev/null 2>&1 || missing+=(util-linux)
+    command -v zstd >/dev/null 2>&1 || missing+=(zstd)
     if ! python3 -c 'import libvirt' >/dev/null 2>&1; then
         missing+=(python3-libvirt)
     fi
@@ -104,7 +105,7 @@ check_libvirt_dependencies() {
     fi
     if [[ ${#missing[@]} -gt 0 ]]; then
         echo "Error: missing libvirt runtime dependencies: ${missing[*]}" >&2
-        echo "Install them with: apt-get install libvirt-daemon-system libvirt-clients python3-libvirt passt acl" >&2
+        echo "Install them with: apt-get install libvirt-daemon-system libvirt-clients python3-libvirt passt acl zstd" >&2
         echo "GPU passthrough additionally requires libvirt >= 12.1.0." >&2
         exit 1
     fi

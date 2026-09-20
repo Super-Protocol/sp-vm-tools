@@ -423,6 +423,8 @@ docker buildx build -t sp-vm-swarm-test \
 
 Takes 5–15 minutes. `./out/` will contain `sp-vm-build-1.img` (~11 GB), `vmlinuz`, `OVMF.fd` / `OVMF_AMD.fd`, `vm.json`, `rootfs_hash.txt`.
 
+Published builds ship the image as a zstd archive (`sp-vm-build-1.img.zst`); the raw `.img` is no longer uploaded. The launch script decides by the `compression` field in `vm.json` — when it is `zstd` the archive is verified against `sha256`, unpacked into the cache next to itself, checked against `uncompressed_sha256` / `uncompressed_size`, and then deleted. Builds without that field are used as is. Unpacking requires the `zstd` package and ~4.2 GB of free space in the cache directory; on a repeat launch an already unpacked, valid image is reused without touching Storj.
+
 Use it with `--build_dir ~/projects/sp-vm/out` on the launch command from step 3.
 
 </details>
