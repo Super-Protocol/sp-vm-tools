@@ -6,12 +6,15 @@ on:
       build_type:
         description: "Select build type"
         required: true
-        default: "BOTH"
+        default: "SEV+TDX"
         type: choice
         options:
           - TDX
           - SNP
-          - BOTH
+          - SEV+TDX
+          - libvirt-ubuntu24
+          - libvirt-ubuntu26
+          - qemu-ubuntu24
 
 jobs:
   build:
@@ -23,7 +26,7 @@ jobs:
       - name: Setup clean workspace
         run: |
           WORK_DIR="/home/gh-runner/builds/run-${{ github.run_number }}"
-          echo "WORK_DIR=$WORK_DIR" >> $GITHUB_ENV
+          echo "WORK_DIR=$WORK_DIR" >> "$GITHUB_ENV"
 
           mkdir -p /home/gh-runner/builds
           
@@ -35,72 +38,143 @@ jobs:
           cd "$WORK_DIR"
           
           git init .
-          git remote add origin https://github.com/${{ github.repository }}.git
-          git fetch --depth 1 origin ${{ github.sha }}
-          git checkout ${{ github.sha }}
+          git remote add origin "https://github.com/${{ github.repository }}.git"
+          git fetch --depth 1 origin "${{ github.sha }}"
+          git checkout "${{ github.sha }}"
           
       - name: Set build type and runner ID
         working-directory: ${{ env.WORK_DIR }}
         run: | 
-          echo "BUILD_TYPE=${{ github.event.inputs.build_type }}" >> $GITHUB_ENV
-          echo "RUNNER_ID=${{ github.run_number }}" >> $GITHUB_ENV
+          echo "BUILD_TYPE=${{ github.event.inputs.build_type }}" >> "$GITHUB_ENV"
+          echo "RUNNER_ID=${{ github.run_number }}" >> "$GITHUB_ENV"
         
       - name: Run TDX docker build
-        if: ${{ github.event.inputs.build_type == 'TDX' || github.event.inputs.build_type == 'BOTH' }}
+        if: ${{ github.event.inputs.build_type == 'TDX' || github.event.inputs.build_type == 'SEV+TDX' }}
         working-directory: ${{ env.WORK_DIR }}
         run: |
           NON_INTERACTIVE=1 FORCE_REBUILD_CONTAINER=1 ./build/build_in_docker.sh tdx
           
       - name: Run SNP docker build
-        if: ${{ github.event.inputs.build_type == 'SNP' || github.event.inputs.build_type == 'BOTH' }}
+        if: ${{ github.event.inputs.build_type == 'SNP' || github.event.inputs.build_type == 'SEV+TDX' }}
         working-directory: ${{ env.WORK_DIR }}
         run: |
           NON_INTERACTIVE=1 FORCE_REBUILD_CONTAINER=1 ./build/build_in_docker.sh snp
+
+      - name: Build libvirt packages
+        if: ${{ startsWith(github.event.inputs.build_type, 'libvirt-ubuntu') }}
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          case "${BUILD_TYPE}" in
+            libvirt-ubuntu24)
+              target="ubuntu24"
+              output_directory="ubuntu-24.04"
+              ;;
+            libvirt-ubuntu26)
+              target="ubuntu26"
+              output_directory="ubuntu-26.04"
+              ;;
+            *)
+              echo "Error: unsupported libvirt build type: ${BUILD_TYPE}" >&2
+              exit 1
+              ;;
+          esac
+
+          archive_name="${BUILD_TYPE}.tar.gz"
+          archive_path="${RUNNER_TEMP}/${archive_name}"
+
+          ./build/libvirt/build.sh \
+            "${target}" \
+            --spvm-revision "${RUNNER_ID}"
+
+          tar \
+            --create \
+            --gzip \
+            --file "${archive_path}" \
+            --directory "${WORK_DIR}/build/libvirt/out" \
+            "${output_directory}"
+
+          tar --list --gzip --file "${archive_path}" >/dev/null
+          echo "LIBVIRT_ARCHIVE_NAME=${archive_name}" >> "$GITHUB_ENV"
+          echo "LIBVIRT_ARCHIVE_PATH=${archive_path}" >> "$GITHUB_ENV"
+
+      - name: Build QEMU packages for Ubuntu 24.04
+        if: ${{ github.event.inputs.build_type == 'qemu-ubuntu24' }}
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          ./build/qemu/build.sh \
+            --spvm-revision "${RUNNER_ID}" \
+            --output "${RUNNER_TEMP}/qemu"
+
+          archive_path="${RUNNER_TEMP}/qemu/ubuntu-24.04/qemu-ubuntu24.tar.gz"
+          checksum_path="${archive_path}.sha256"
+          tar --list --gzip --file "${archive_path}" >/dev/null
+          (
+            cd "$(dirname "${checksum_path}")"
+            sha256sum --check "$(basename "${checksum_path}")"
+          )
+          echo "QEMU_ARCHIVE_PATH=${archive_path}" >> "$GITHUB_ENV"
+          echo "QEMU_CHECKSUM_PATH=${checksum_path}" >> "$GITHUB_ENV"
           
       - name: Set release name
         id: release-name
         run: |
-          if [[ "${BUILD_TYPE}" == "BOTH" ]]; then
-            echo "RELEASE_NAME=${RUNNER_ID}-tdx+snp" >> $GITHUB_ENV
+          if [[ "${BUILD_TYPE}" == "SEV+TDX" ]]; then
+            echo "RELEASE_NAME=${RUNNER_ID}-sev+tdx" >> "$GITHUB_ENV"
           elif [[ "${BUILD_TYPE}" == "TDX" ]]; then
-            echo "RELEASE_NAME=${RUNNER_ID}-tdx" >> $GITHUB_ENV
+            echo "RELEASE_NAME=${RUNNER_ID}-tdx" >> "$GITHUB_ENV"
           elif [[ "${BUILD_TYPE}" == "SNP" ]]; then
-            echo "RELEASE_NAME=${RUNNER_ID}-snp" >> $GITHUB_ENV
+            echo "RELEASE_NAME=${RUNNER_ID}-snp" >> "$GITHUB_ENV"
+          elif [[ "${BUILD_TYPE}" == libvirt-ubuntu* ]]; then
+            echo "RELEASE_NAME=${RUNNER_ID}-${BUILD_TYPE}" >> "$GITHUB_ENV"
+          elif [[ "${BUILD_TYPE}" == "qemu-ubuntu24" ]]; then
+            echo "RELEASE_NAME=${RUNNER_ID}-${BUILD_TYPE}" >> "$GITHUB_ENV"
           else
             echo "Error: Unknown BUILD_TYPE ${BUILD_TYPE}" >&2
             exit 1
           fi
 
-      - name: Create GitHub Release
-        id: create_release
-        uses: actions/create-release@v1
+      - name: Publish TDX Release Asset
+        if: ${{ github.event.inputs.build_type == 'TDX' || github.event.inputs.build_type == 'SEV+TDX' }}
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
         with:
-          tag_name: "${{ env.RELEASE_NAME }}"
-          release_name: "Release ${{ env.RELEASE_NAME }}"
-          draft: false
+          tag_name: ${{ env.RELEASE_NAME }}
+          name: Release ${{ env.RELEASE_NAME }}
           prerelease: true
-
-      - name: Upload TDX Release Asset
-        if: ${{ github.event.inputs.build_type == 'TDX' || github.event.inputs.build_type == 'BOTH' }}
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ${{ env.WORK_DIR }}/build/out/tdx/package-tdx.tar.gz
-          asset_name: package-tdx.tar.gz
-          asset_content_type: application/gzip
+          files: ${{ env.WORK_DIR }}/build/out/tdx/package-tdx.tar.gz
       
-      - name: Upload SNP Release Asset
-        if: ${{ github.event.inputs.build_type == 'SNP' || github.event.inputs.build_type == 'BOTH' }}
-        uses: actions/upload-release-asset@v1
+      - name: Publish SNP Release Asset
+        if: ${{ github.event.inputs.build_type == 'SNP' || github.event.inputs.build_type == 'SEV+TDX' }}
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ${{ env.WORK_DIR }}/build/out/snp/package-snp.tar.gz
-          asset_name: package-snp.tar.gz
-          asset_content_type: application/gzip
+          tag_name: ${{ env.RELEASE_NAME }}
+          name: Release ${{ env.RELEASE_NAME }}
+          prerelease: true
+          files: ${{ env.WORK_DIR }}/build/out/snp/package-snp.tar.gz
+
+      - name: Publish libvirt Release Asset
+        if: ${{ startsWith(github.event.inputs.build_type, 'libvirt-ubuntu') }}
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.RELEASE_NAME }}
+          name: Release ${{ env.RELEASE_NAME }}
+          prerelease: true
+          files: ${{ env.LIBVIRT_ARCHIVE_PATH }}
+
+      - name: Publish QEMU Ubuntu 24.04 Release Asset
+        if: ${{ github.event.inputs.build_type == 'qemu-ubuntu24' }}
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.RELEASE_NAME }}
+          name: Release ${{ env.RELEASE_NAME }}
+          prerelease: true
+          files: |
+            ${{ env.QEMU_ARCHIVE_PATH }}
+            ${{ env.QEMU_CHECKSUM_PATH }}

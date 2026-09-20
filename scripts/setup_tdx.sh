@@ -2,8 +2,8 @@
 
 set -e
 
-# Pull in shared helpers (install_debs, setup_grub, install_tdx_release_packages,
-# update_tdx_module, ...). bootstrap_tdx.sh copies common.sh next to this script.
+# Pull in shared helpers (setup_grub and host setup helpers).
+# bootstrap_tdx.sh copies common.sh next to this script.
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 source "${SCRIPT_DIR}/common.sh"
 
@@ -17,6 +17,7 @@ NC='\033[0m' # No Color
 # Modify status indicators:
 SUCCESS="[${GREEN}✓${NC}]"
 FAILURE="[${RED}✗${NC}]"
+WARNING="[${YELLOW}!${NC}]"
 
 print_section_header() {
     echo -e "\n${BLUE}=== $1 ===${NC}"
@@ -29,6 +30,23 @@ check_error() {
         echo -e "${RED}Error: $1${NC}"
         exit 1
     fi
+}
+
+get_current_kernel_log() {
+    local kernel_log=""
+
+    # The live dmesg ring buffer can wrap on noisy hardware (for example when
+    # an HBA repeatedly logs errors).  Journald keeps the early boot messages
+    # that contain the TDX/PAMT initialization result.
+    if command -v journalctl >/dev/null 2>&1; then
+        kernel_log=$(journalctl -k -b --no-pager 2>/dev/null \
+            | grep -E 'virt/tdx|PAMT' || true)
+    fi
+    if [ -z "${kernel_log}" ]; then
+        kernel_log=$(dmesg 2>/dev/null | grep -E 'virt/tdx|PAMT' || true)
+    fi
+
+    printf '%s\n' "${kernel_log}"
 }
 
 # Configuration variables
@@ -45,6 +63,15 @@ USER_TOKEN=$(echo -n "${PCCS_PASSWORD}" | sha512sum | awk '{print $1}')
 check_all_bios_settings() {
     local results=()
     local all_passed=true
+    local kernel_log
+    local tdx_enabled=false
+
+    kernel_log=$(get_current_kernel_log)
+    if [ "$(cat /sys/module/kvm_intel/parameters/tdx 2>/dev/null)" = "Y" ]; then
+        # This is the authoritative runtime signal: kvm_intel exposes Y only
+        # after host TDX initialization has succeeded.
+        tdx_enabled=true
+    fi
     
     print_section_header "BIOS Configuration Check Results"
     echo "Checking all settings..."
@@ -84,7 +111,7 @@ check_all_bios_settings() {
     
     # Check if TME is actually enabled via TDX initialization
     # (Modern TDX systems don't show direct TME messages, TME status is confirmed via TDX)
-    if dmesg | grep -q "virt/tdx.*module initialized"; then
+    if $tdx_enabled || grep -q "virt/tdx.*module initialized" <<< "${kernel_log}"; then
         tme_active=true
     fi
     
@@ -107,19 +134,19 @@ check_all_bios_settings() {
     # Check if TME-MT is active via TDX module initialization and PAMT allocation
     # In modern TDX implementations, PAMT allocation indicates TME-MT is working
     tme_mt_active=false
-    tdx_enabled=false
-    
-    # Check if TDX is enabled in KVM (indicates TME-MT capability)
-    if [ -f /sys/module/kvm_intel/parameters/tdx ] && [ "$(cat /sys/module/kvm_intel/parameters/tdx)" = "Y" ]; then
-        tdx_enabled=true
-    fi
     
     # Check if PAMT is allocated (confirms TME-MT is working)
-    if dmesg | grep -q "virt/tdx.*KB allocated for PAMT"; then
+    if grep -q "virt/tdx.*KB allocated for PAMT" <<< "${kernel_log}"; then
         tme_mt_active=true
         # Extract PAMT allocation info
-        pamt_info=$(dmesg | grep "virt/tdx.*KB allocated for PAMT" | head -1 | sed 's/.*virt\/tdx: //' | sed 's/ KB allocated for PAMT//')
+        pamt_info=$(grep "virt/tdx.*KB allocated for PAMT" <<< "${kernel_log}" | head -1 | sed 's/.*virt\/tdx: //' | sed 's/ KB allocated for PAMT//')
         results+=("  PAMT allocation: ${pamt_info} KB")
+    elif $tdx_enabled; then
+        # PAMT and TME-MT are prerequisites for successful host TDX
+        # initialization.  The detailed allocation line may have aged out of
+        # dmesg and may be unavailable when journald is not persistent.
+        tme_mt_active=true
+        results+=("  PAMT allocation: active TDX confirms initialization (boot message unavailable)")
     fi
     
     # Final TME-MT assessment
@@ -146,53 +173,48 @@ check_all_bios_settings() {
         all_passed=false
     fi
 
-    results+=("TXT Settings:")
-    
+    # Intel TXT is useful for TXT/tboot measured-launch workflows, but it is
+    # not a prerequisite for Intel TDX. Always report its status without
+    # making the TDX host validation fail.
+    results+=("TXT Settings (optional for TDX):")
+
     local sinit_base=""
-    
+    local senter_en=""
+
     # 0) Does the CPU support SMX/TXT at all?
     if ! grep -qw smx /proc/cpuinfo; then
-        results+=("${FAILURE} CPU does not support SMX/TXT${NC}")
-        all_passed=false
+        results+=("${WARNING} CPU does not support SMX/TXT${NC}")
+        results+=("  TXT is not required for TDX; continuing")
     else
         # 1) Read SINIT.BASE directly from TXT public config space:
         #    0xFED30000 + 0x270 (this is what txt-stat used to do)
-        sinit_base=$(od -An -tx4 -j $((0xFED30270)) -N4 /dev/mem 2>/dev/null | tr -d ' ')
+        sinit_base=$(od -An -tx4 -j $((0xFED30270)) -N4 /dev/mem 2>/dev/null | tr -d ' ' || true)
         [ -n "$sinit_base" ] && sinit_base="0x${sinit_base}"
-    
-        # 2) Fallback: IA32_FEATURE_CONTROL MSR (0x3A), bit 15 = SENTER global enable.
-        #    Set by BIOS when TXT is enabled. Used when /dev/mem is unavailable
-        #    (e.g. kernel lockdown).
-        if [ -z "$sinit_base" ] && command -v rdmsr >/dev/null 2>&1; then
-            modprobe msr 2>/dev/null
-            local senter_en
-            senter_en=$(rdmsr -f 15:15 0x3a 2>/dev/null)
+
+        if [ -n "$sinit_base" ] && [ "$sinit_base" != "0x0" ] && \
+           [ "$sinit_base" != "0x00000000" ] && [ "$sinit_base" != "0xffffffff" ]; then
+            results+=("${SUCCESS} TXT enabled (SINIT.BASE = $sinit_base)${NC}")
+        else
+            # 2) Fallback: IA32_FEATURE_CONTROL MSR (0x3A), bit 15 = SENTER
+            #    global enable. Check it for every invalid/unavailable
+            #    SINIT.BASE value, not only when /dev/mem returned no output.
+            modprobe msr 2>/dev/null || true
+            if command -v rdmsr >/dev/null 2>&1; then
+                senter_en=$(rdmsr -f 15:15 0x3a 2>/dev/null || true)
+            fi
+
             if [ "$senter_en" = "1" ]; then
                 results+=("${SUCCESS} TXT enabled (SENTER enabled in IA32_FEATURE_CONTROL)${NC}")
             else
-                results+=("${FAILURE} TXT not enabled in BIOS${NC}")
-                results+=("  Required: Enable TXT in BIOS")
-                all_passed=false
-            fi
-            sinit_base="__msr_checked__"
-        fi
-    
-        if [ "$sinit_base" != "__msr_checked__" ]; then
-            # 0xffffffff means the chipset does not decode the TXT region => TXT disabled.
-            # Empty value means we could not read /dev/mem at all.
-            if [ -n "$sinit_base" ] && [ "$sinit_base" != "0x0" ] && \
-               [ "$sinit_base" != "0x00000000" ] && [ "$sinit_base" != "0xffffffff" ]; then
-                results+=("${SUCCESS} TXT enabled (SINIT.BASE = $sinit_base)${NC}")
-            else
-                results+=("${FAILURE} TXT not enabled in BIOS${NC}")
-                results+=("  Required: Enable TXT in BIOS")
-                all_passed=false
+                results+=("${WARNING} TXT not enabled or could not be verified${NC}")
+                results+=("  SINIT.BASE: ${sinit_base:-unavailable}")
+                results+=("  IA32_FEATURE_CONTROL.SENTER: ${senter_en:-unavailable}")
+                results+=("  TXT is not required for TDX; continuing")
             fi
         fi
     fi
     results+=("SEAM Settings:")
-    if dmesg | grep -q "virt/tdx: module initialized" && \
-       dmesg | grep -q "virt/tdx: BIOS enabled"; then
+    if $tdx_enabled; then
         results+=("${SUCCESS} SEAM loader enabled and functioning${NC}")
         local tdx_cap_msr=$(rdmsr -X 0x982 2>/dev/null || echo "0")
         results+=("  MSR 0x982: ${tdx_cap_msr} (for reference only)")
@@ -203,16 +225,19 @@ check_all_bios_settings() {
     fi
 
     results+=("TDX Settings:")
-    if dmesg | grep -q "virt/tdx: BIOS enabled"; then
+    if $tdx_enabled; then
         results+=("${SUCCESS} TDX supported and initialized${NC}")
         
-        local pamt_alloc=$(dmesg | grep -i "KB allocated for PAMT" || echo "")
+        local pamt_alloc
+        pamt_alloc=$(grep -i "KB allocated for PAMT" <<< "${kernel_log}" || true)
         if [ ! -z "$pamt_alloc" ]; then
             results+=("${SUCCESS} PAMT allocation successful: $(echo $pamt_alloc | grep -o '[0-9]* KB')${NC}")
         fi
         
-        if dmesg | grep -q "virt/tdx: module initialized"; then
+        if grep -q "virt/tdx: module initialized" <<< "${kernel_log}"; then
             results+=("${SUCCESS} TDX module initialized${NC}")
+        else
+            results+=("${SUCCESS} TDX module active (confirmed by kvm_intel.tdx=Y)${NC}")
         fi
     else
         results+=("${FAILURE} TDX not properly configured on host${NC}")
@@ -226,11 +251,11 @@ check_all_bios_settings() {
         all_passed=false
     fi
         
-    # Configuration requirements section remains unchanged
+    # List only settings that can fail the TDX validation. TXT is intentionally
+    # omitted because it is diagnostic-only for this setup.
     results+=("${YELLOW}Required BIOS Configuration:${NC}")
     results+=("• Core Security:")
     results+=("  - CPU PA: Limit to 46 bits Disable")
-    results+=("  - TXT: Enable")
     results+=("  - SGX: Enable")
     results+=("  - SMT: Enable")
     results+=("• Memory Protection:")
@@ -368,7 +393,7 @@ EOL
     # package was installed with DEBIAN_FRONTEND=noninteractive, so its interactive
     # install.sh was skipped. Reproduce here what install.sh would have done:
     # install the Node.js dependencies and generate the HTTPS SSL keys. The
-    # Canonical PPA path (< 25.10) does this via setup-attestation-host.sh.
+    # Ubuntu 24.04 receives the same setting from its attestation packages.
     if [ "$USE_INTEL_REPO" -eq 1 ]; then
         # Install PCCS Node.js dependencies. Without node_modules pccs_server.js
         # fails to start with "Cannot find package 'config'".
@@ -399,26 +424,29 @@ EOL
     chmod -R 750 /opt/intel/sgx-dcap-pccs/
 }
 
-# Configure QGS transport. Our stack talks to the Quote Generation Service over
-# vsock, but newer tdx-qgs packages (Ubuntu 26.04+) ship /etc/qgs.conf with the
-# port commented out (defaulting to a Unix domain socket). Just write the config
-# we need: vsock on port 4050.
+# Libvirt's native TDX launch security connects QEMU to QGS through the standard
+# Unix socket. Leaving "port" unset selects this transport on the QGS packages
+# used by both supported Ubuntu releases. Both launchers use the same socket.
 configure_qgs() {
-    print_section_header "Configuring QGS (vsock port 4050)..."
+    print_section_header "Configuring QGS (Unix socket)..."
     cat > /etc/qgs.conf << EOL
-port = 4050
 number_threads = 4
 EOL
-}
 
-# On Ubuntu 24.04 the matched TDX kernel + QEMU are installed from the
-# sp-vm-tools release archive (package-tdx.tar.gz): a custom kernel plus
-# sp-qemu-tdx (QEMU 9.x + Intel TDX device-passthrough patches, with iommufd).
-# They share the same TDX KVM ABI; the stock 24.04 kernel + PPA QEMU (8.2.2) do
-# not provide iommufd / a compatible interface.
-QEMU_RELEASE_REPO="Super-Protocol/sp-vm-tools"
-QEMU_RELEASE_TAG="38-tdx+snp"          # tag carrying package-tdx.tar.gz
-QEMU_RELEASE_ASSET="package-tdx.tar.gz"
+    install -d -m 0755 /etc/systemd/system/qgsd.service.d
+    cat > /etc/systemd/system/qgsd.service.d/socket.conf << EOL
+[Service]
+RuntimeDirectory=tdx-qgs
+RuntimeDirectoryMode=0755
+# qgs creates the socket using its process umask.  The package default is
+# commonly 0755, which leaves libvirt-qemu unable to connect even when it is a
+# member of the qgsd group.  /run is recreated on every boot, so enforce the
+# access mode after every qgsd start instead of relying on a one-off chmod.
+ExecStartPost=/bin/chown qgsd:qgsd /run/tdx-qgs/qgs.socket
+ExecStartPost=/bin/chmod 0660 /run/tdx-qgs/qgs.socket
+EOL
+    systemctl daemon-reload
+}
 
 # Resolve the TDX SEAM module version to install for the host CPU.
 # Prints the version string (e.g. "2.0.14") to stdout; all human-readable
@@ -495,39 +523,27 @@ update_tdx_module() {
 install_tdx_release_packages() {
   local tmp_dir="$1"
 
-  # The bundled debs (custom TDX kernel + sp-qemu-tdx, with iommufd / device
-  # passthrough) are built for Ubuntu 24.04 (Noble), whose stock kernel + PPA
-  # QEMU (8.2.2) lack what we need. The kernel and QEMU are a matched pair (same
-  # TDX KVM ABI). Newer Ubuntu (24.10 / 25.04+) already ship a suitable kernel
-  # and QEMU >= 9 with iommufd, so the bundle is neither needed nor
-  # binary-compatible there -- install it only on 24.04.
+  # Noble gets its signed, pinned HWE kernel from Ubuntu and sp-qemu-tdx from
+  # the dedicated Ubuntu 24.04 project release. Newer Ubuntu releases use their
+  # complete distro kernel/QEMU stack instead.
   local ubuntu_version=""
   [ -f /etc/os-release ] && ubuntu_version=$(. /etc/os-release && echo "$VERSION_ID")
   if [ "$ubuntu_version" != "24.04" ]; then
-    echo "Ubuntu ${ubuntu_version:-unknown}: skipping bundled TDX kernel/QEMU (distro stack is used)"
+    echo "Ubuntu ${ubuntu_version:-unknown}: skipping pinned Noble kernel/QEMU setup (distro stack is used)"
     return 0
   fi
 
   local work="${tmp_dir}/tdx-pkg"
-  # URL-encode the '+' in the tag for the direct download URL.
-  local tag_enc="${QEMU_RELEASE_TAG//+/%2B}"
-  local url="https://github.com/${QEMU_RELEASE_REPO}/releases/download/${tag_enc}/${QEMU_RELEASE_ASSET}"
+  local kernel_work="${work}/kernel"
+  local qemu_work="${work}/qemu"
 
-  echo "Installing TDX kernel + QEMU from ${QEMU_RELEASE_REPO}@${QEMU_RELEASE_TAG}..."
-  mkdir -p "${work}"
-  echo "Downloading ${QEMU_RELEASE_ASSET} (~160 MB), this may take a while..."
-  wget -O "${work}/${QEMU_RELEASE_ASSET}" "${url}"
-  echo "Download complete: ${work}/${QEMU_RELEASE_ASSET}"
-  tar -xzf "${work}/${QEMU_RELEASE_ASSET}" -C "${work}"
+  echo "Installing Canonical Noble kernel ${NOBLE_KERNEL_ABI}..."
+  install_noble_stable_kernel "${kernel_work}"
 
-  # Install ALL packages from the archive: custom kernel, headers, sp-qemu-tdx.
-  # install_debs (common.sh) installs libslirp0, the kernel and the remaining
-  # debs, and sets NEW_KERNEL_VERSION.
-  install_debs "${work}"
+  install_noble_coco_qemu "${qemu_work}"
 }
 
 TMP_DIR=$1
-TDX_REF="3.3"
 
 check_tdx_os_version() {
     local min_version="24.04"
@@ -561,7 +577,20 @@ check_tdx_os_version() {
     fi
 }
 
+cleanup_legacy_canonical_apt_policy() {
+    # Older bootstrap revisions ran canonical/tdx helpers, which left a global
+    # priority-4000 pin and enabled unattended package downgrades. Remove those
+    # settings before any package operation. Repository entries may remain at
+    # normal APT priority for the attestation packages used below.
+    rm -f \
+        /etc/apt/preferences.d/kobuk-tdx-kobuk-team-tdx-release-pin-4000 \
+        /etc/apt/preferences.d/kobuk-tdx-kobuk-team-tdx-attestation-release-pin-4000 \
+        /etc/apt/apt.conf.d/99unattended-upgrades-kobuk-tdx-release \
+        /etc/apt/apt.conf.d/99unattended-upgrades-kobuk-tdx-attestation-release
+}
+
 check_tdx_os_version
+cleanup_legacy_canonical_apt_policy
 
 # Determine package source based on Ubuntu version
 UBUNTU_VERSION=$(. /etc/os-release && echo "$VERSION_ID")
@@ -573,7 +602,7 @@ if [ "$UBUNTU_NUM" -ge 2510 ]; then
     echo "Ubuntu ${UBUNTU_VERSION}: using Intel SGX repository"
 else
     USE_INTEL_REPO=0
-    echo "Ubuntu ${UBUNTU_VERSION}: using Canonical kobuk-team PPA"
+    echo "Ubuntu ${UBUNTU_VERSION}: using pinned Canonical HWE kernel, project TDX QEMU, and the Canonical attestation PPA"
 fi
 
 if [ "$USE_INTEL_REPO" -eq 1 ]; then
@@ -589,34 +618,10 @@ if [ "$USE_INTEL_REPO" -eq 1 ]; then
     DEBIAN_FRONTEND=noninteractive apt-get install -y qemu-system-x86 qemu-utils
     check_error "Failed to install QEMU"
 else
-    # Ubuntu < 25.10: TDX host support is not in the stock kernel, so use the
-    # canonical/tdx host setup (kobuk PPA + -intel kernel). The clone is also
-    # reused below for attestation (setup-attestation-host.sh).
-    if [ -d "${TMP_DIR}/tdx-cannonical" ]; then
-        echo -e "${YELLOW}Directory ${TMP_DIR}/tdx-cannonical already exists${NC}"
-        echo -e "Removing existing directory..."
-        rm -rf "${TMP_DIR}/tdx-cannonical"
-    fi
-
-    git clone https://github.com/canonical/tdx.git "${TMP_DIR}/tdx-cannonical"
-    if [ $? -ne 0 ]; then
-        echo "Failed to download the canonical/tdx repository."
-        exit 1
-    fi
-    SCRIPT_PATH=${TMP_DIR}/tdx-cannonical/setup-tdx-host.sh
-
-    git -C "${TMP_DIR}/tdx-cannonical" checkout --detach "${TDX_REF}"
-    if [ $? -ne 0 ]; then
-        echo "Failed to checkout tdx ref ${TDX_REF}."
-        exit 1
-    fi
-
-    print_section_header "Installing hypervisor and kernel..."
-    echo "Running setup-tdx-host.sh..."
-    chmod +x "${SCRIPT_PATH}"
-    "${SCRIPT_PATH}"
-
-    # On 24.04 install our matched custom kernel + sp-qemu-tdx bundle on top.
+    # Ubuntu 24.04 uses the pinned Canonical HWE kernel and project QEMU. Do not
+    # run Canonical's setup-tdx-host.sh: it globally pins its PPA at priority
+    # 4000 and explicitly permits downgrades of QEMU and libvirt.
+    print_section_header "Installing TDX kernel and QEMU..."
     install_tdx_release_packages "${TMP_DIR}"
 fi
 
@@ -628,9 +633,9 @@ update_tdx_module "${TMP_DIR}"
 # and add nohibernate, then regenerate grub.cfg/initramfs. Canonical's stock
 # generic kernel (25.10+) does not enable tdx in kvm_intel by default, and the
 # -intel kernel does -- but setting the flag is harmless either way. The kernel
-# whose initramfs we regenerate / make default is the bundled custom kernel on
-# 24.04 (NEW_KERNEL_VERSION, set by install_debs) and the running distro kernel
-# elsewhere.
+# whose initramfs we regenerate / make default is the pinned HWE kernel on 24.04
+# (NEW_KERNEL_VERSION, set by install_noble_stable_kernel) and the running
+# distro kernel elsewhere.
 print_section_header "Configuring GRUB for TDX..."
 setup_grub "${NEW_KERNEL_VERSION:-$(uname -r)}" tdx
 
@@ -647,10 +652,15 @@ if [ "$USE_INTEL_REPO" -eq 1 ]; then
 deb [signed-by=/etc/apt/keyrings/intel-sgx-keyring.asc arch=amd64] https://download.01.org/intel-sgx/sgx_repo/ubuntu ${CODENAME} main
 EOF
 else
-    # Ensure kobuk-team PPA is present
-    if ! grep -rq "kobuk-team" /etc/apt/sources.list.d/ 2>/dev/null; then
-        add-apt-repository -y ppa:kobuk-team/tdx-release
-        check_error "Failed to add kobuk-team PPA"
+    apt-get install -y software-properties-common
+    if grep -Rqs 'kobuk-team/tdx-release' /etc/apt/sources.list.d/; then
+        echo "Removing obsolete kobuk-team/tdx-release PPA"
+        add-apt-repository -y --remove ppa:kobuk-team/tdx-release
+        check_error "Failed to remove the obsolete TDX host PPA"
+    fi
+    if ! grep -Rqs 'kobuk-team/tdx-attestation-release' /etc/apt/sources.list.d/; then
+        add-apt-repository -y ppa:kobuk-team/tdx-attestation-release
+        check_error "Failed to add the TDX attestation PPA"
     fi
 fi
 
@@ -873,15 +883,14 @@ if [ "$USE_INTEL_REPO" -eq 1 ]; then
         sgx-pck-id-retrieval-tool
     check_error "Failed to install packages"
 else
-    # Canonical PPA: install attestation packages via the official script
-    # from canonical/tdx.
-    ATTEST_SCRIPT="${TMP_DIR}/tdx-cannonical/attestation/setup-attestation-host.sh"
-    if [ ! -f "$ATTEST_SCRIPT" ]; then
-        echo -e "${RED}ERROR: attestation setup script not found at ${ATTEST_SCRIPT}${NC}"
-        exit 1
-    fi
-    chmod +x "$ATTEST_SCRIPT"
-    "$ATTEST_SCRIPT"
+    # Install the same host attestation components used by Canonical, but do it
+    # directly and without their global PPA pin or --allow-downgrades.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-remove \
+        sgx-dcap-pccs \
+        tdx-qgs \
+        libsgx-dcap-default-qpl \
+        sgx-ra-service \
+        sgx-pck-id-retrieval-tool
     check_error "Failed to install attestation packages"
 fi
 
@@ -918,9 +927,19 @@ check_error "Failed to register platform"
 # written config: qgsd re-reads /etc/sgx_default_qcnl.conf, and the one-shot
 # mpa_registration_tool re-runs the registration flow.
 print_section_header "Starting remaining services..."
-configure_qgs   # patch /etc/qgs.conf for vsock before (re)starting qgsd
+configure_qgs   # select the Unix socket before (re)starting qgsd
 systemctl restart qgsd
 wait_for_service qgsd
+if [ ! -S /run/tdx-qgs/qgs.socket ]; then
+    echo -e "${RED}Error: QGS Unix socket was not created${NC}" >&2
+    exit 1
+fi
+if [ "$(stat -Lc '%a %U:%G' /run/tdx-qgs/qgs.socket)" != "660 qgsd:qgsd" ]; then
+    echo -e "${RED}Error: QGS Unix socket must be mode 0660 and owned by qgsd:qgsd${NC}" >&2
+    stat -Lc 'Actual QGS socket: mode=%a owner=%U:%G path=%n' \
+        /run/tdx-qgs/qgs.socket >&2
+    exit 1
+fi
 systemctl restart mpa_registration_tool
 
 # Check services status

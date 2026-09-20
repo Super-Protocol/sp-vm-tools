@@ -1,0 +1,35 @@
+From: Super Protocol VM Tools <devnull@superprotocol.com>
+Subject: qemu: provide TDX VM type UAPI constants for older build headers
+
+Ubuntu 24.04 build environments can provide linux-libc-dev headers that do
+not define the KVM VM-types capability or the x86 TDX VM type.  libvirt then
+compiles virQEMUCapsKVMSupportsVMTypeTDX() as an unconditional false result,
+even when the runtime kernel advertises TDX through KVM_CAP_VM_TYPES.
+
+Keep the runtime capability check enabled when building on x86_64.  Kernels
+that do not implement KVM_CAP_VM_TYPES safely return zero for the unknown
+KVM_CHECK_EXTENSION capability.
+
+--- a/src/qemu/qemu_capabilities.c
++++ b/src/qemu/qemu_capabilities.c
+@@ -56,6 +56,20 @@
+ #ifdef WITH_LINUX_KVM_H
+ # include <linux/kvm.h>
+ # include <sys/ioctl.h>
++/*
++ * KVM_CAP_VM_TYPES and KVM_X86_TDX_VM are runtime ABI values.  Some older
++ * distro linux-libc-dev packages omit them even though the libvirt package is
++ * intended to run with a newer, TDX-capable kernel.  Without both macros the
++ * TDX probe below is compiled into the "KVM not compiled" fallback.
++ */
++# if defined(__x86_64__)
++#  ifndef KVM_CAP_VM_TYPES
++#   define KVM_CAP_VM_TYPES 235
++#  endif
++#  ifndef KVM_X86_TDX_VM
++#   define KVM_X86_TDX_VM 5
++#  endif
++# endif
+ #endif
+ 
+ #define VIR_FROM_THIS VIR_FROM_QEMU

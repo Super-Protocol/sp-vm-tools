@@ -1,0 +1,48 @@
+# syntax=docker/dockerfile:1
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        dpkg-dev \
+        file \
+        libaio-dev \
+        libattr1-dev \
+        libcap-ng-dev \
+        libcurl4-gnutls-dev \
+        libfdt-dev \
+        libglib2.0-dev \
+        libgnutls28-dev \
+        libibverbs-dev \
+        libiscsi-dev \
+        libnfs-dev \
+        libnuma-dev \
+        libpam0g-dev \
+        libpixman-1-dev \
+        librbd-dev \
+        librdmacm-dev \
+        libseccomp-dev \
+        libslirp-dev \
+        libssh-dev \
+        liburing-dev \
+        libusb-1.0-0-dev \
+        libusbredirparser-dev \
+        ninja-build \
+        pkg-config \
+        python3 \
+        python3-venv \
+        xz-utils \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/build-package.sh /usr/local/bin/build-sp-qemu
+
+ENTRYPOINT ["/usr/local/bin/build-sp-qemu"]
+
