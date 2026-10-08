@@ -14,6 +14,10 @@ Usage: sudo $0 [--gpu-mode auto|cc|ppcie]
   auto    Detect the platform from PCI/VPD data (default).
   cc      Force regular CC mode (standalone/PCIe GPUs and Blackwell NVLink).
   ppcie   Force Protected PCIe mode (Hopper NVSwitch multi-GPU only).
+
+Intel PCS uses anonymous access by default. To use your own subscription key:
+  export PCCS_API_KEY=<your-key>
+  sudo --preserve-env=PCCS_API_KEY $0 [--gpu-mode auto|cc|ppcie]
 EOF
 }
 

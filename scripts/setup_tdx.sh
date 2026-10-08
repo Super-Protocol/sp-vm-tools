@@ -50,7 +50,9 @@ get_current_kernel_log() {
 }
 
 # Configuration variables
-PCCS_API_KEY="aecd5ebb682346028d60c36131eb2d92"
+# Intel PCS supports anonymous requests. A private subscription key is optional
+# (dedicated quota); never ship a shared key that may expire and cause HTTP 401.
+PCCS_API_KEY="${PCCS_API_KEY:-}"
 PCCS_PORT="8081"
 PCCS_URL="https://localhost:${PCCS_PORT}"
 # Intel PCS (upstream), used to tell a PCCS-side problem from a real
@@ -418,10 +420,49 @@ EOL
         check_error "Failed to generate PCCS SSL keys"
     fi
 
+    configure_pccs_anonymous_access
+
     # Set correct permissions
     print_section_header "Setting permissions..."
     chown -R pccs:pccs /opt/intel/sgx-dcap-pccs/
     chmod -R 750 /opt/intel/sgx-dcap-pccs/
+}
+
+# Older PCCS versions send an empty subscription header when ApiKey is empty.
+# Intel rejects that header with 401; anonymous access requires omitting it.
+# Normalize headers centrally so both pckcert and pckcerts requests work.
+configure_pccs_anonymous_access() {
+    print_section_header "Configuring optional Intel PCS authentication..."
+    python3 - <<'PY'
+from pathlib import Path
+import shutil
+
+path = Path('/opt/intel/sgx-dcap-pccs/pcs_client/pcs_client.js')
+source = path.read_text()
+marker = '// SPVM: omit empty PCS subscription headers for anonymous access'
+anchor = '        const response = await got(url, options);'
+if marker not in source:
+    if source.count(anchor) != 1:
+        raise SystemExit('Unsupported PCCS client: cannot safely patch request headers')
+    replacement = '''        // SPVM: omit empty PCS subscription headers for anonymous access
+        if (options.headers) {
+            for (const name of Object.keys(options.headers)) {
+                if (name.toLowerCase() === 'ocp-apim-subscription-key' &&
+                    !options.headers[name]) {
+                    delete options.headers[name];
+                }
+            }
+        }
+
+''' + anchor
+    backup = path.with_suffix('.js.before-spvm-anonymous')
+    if not backup.exists():
+        shutil.copy2(path, backup)
+    path.write_text(source.replace(anchor, replacement))
+PY
+    check_error "Failed to configure anonymous Intel PCS requests"
+    node --check /opt/intel/sgx-dcap-pccs/pcs_client/pcs_client.js
+    check_error "PCCS client syntax check failed"
 }
 
 # Libvirt's native TDX launch security connects QEMU to QGS through the standard
@@ -729,10 +770,14 @@ pccs_pckcert_code() {
 
 # HTTP code from Intel PCS directly, using the configured ApiKey. This bypasses
 # PCCS, so it tells us whether the platform is actually registered (200), the
-# ApiKey is invalid (401), or the platform is not registered (404).
+# authentication was rejected (401), or the platform was not found (404).
 intel_pcs_pckcert_code() {
+    local headers=()
+    if [ -n "${PCCS_API_KEY}" ]; then
+        headers=(-H "Ocp-Apim-Subscription-Key: ${PCCS_API_KEY}")
+    fi
     curl -s -o /dev/null -w '%{http_code}' \
-        -H "Ocp-Apim-Subscription-Key: ${PCCS_API_KEY}" \
+        "${headers[@]}" \
         "${INTEL_PCS_URL}/pckcert?qeid=${QEID}&encrypted_ppid=${EPPID}&cpusvn=${CPUSVN}&pcesvn=${PCESVN}&pceid=${PCEID}"
 }
 
@@ -775,8 +820,13 @@ ensure_platform_registered() {
             echo "  - ApiKey in /opt/intel/sgx-dcap-pccs/config/default.json"
             ;;
         401)
-            echo -e "${FAILURE} PCCS problem: Intel PCS rejects the ApiKey (401 — invalid/expired subscription key).${NC}"
-            echo "Set a valid key (PCCS_API_KEY / default.json ApiKey), then: sudo systemctl restart pccs"
+            echo -e "${FAILURE} Intel PCS rejected authentication (HTTP 401).${NC}"
+            if [ -n "${PCCS_API_KEY}" ]; then
+                echo "Remove the invalid PCCS_API_KEY to use anonymous access, or supply a valid private subscription key."
+            else
+                echo "Anonymous access was rejected; check the Intel PCS endpoint/proxy or supply a valid private subscription key."
+            fi
+            echo "Re-run bootstrap_tdx to update PCCS configuration."
             ;;
         404)
             echo -e "${FAILURE} Registration error: the platform is NOT registered (Intel PCS returned 404).${NC}"
