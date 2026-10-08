@@ -781,7 +781,11 @@ verify_libvirt_host() {
             libvirt_host_error "QGS Unix socket must be owned by qgsd:qgsd: /var/run/tdx-qgs/qgs.socket"
             return 1
         fi
-        if ! runuser -u libvirt-qemu -- test -w /var/run/tdx-qgs/qgs.socket; then
+        # Ubuntu's Rust coreutils test can report a false negative for socket
+        # access granted by a supplementary group. Bash's builtin test handles
+        # this correctly (verified with an actual AF_UNIX connect as libvirt-qemu).
+        if ! runuser -u libvirt-qemu -- /bin/bash -c \
+            'test -w "$1"' -- /var/run/tdx-qgs/qgs.socket; then
             local qgs_socket_mode
             qgs_socket_mode=$(stat -Lc '%a' /var/run/tdx-qgs/qgs.socket 2>/dev/null || echo unknown)
             libvirt_host_error "libvirt-qemu cannot connect to the QGS Unix socket (mode ${qgs_socket_mode}); rerun bootstrap_tdx.sh"
