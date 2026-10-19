@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "hosts": {
+    "compute01": "/root/compute01-helper-request.json",
+    "compute02": "/root/compute02-helper-request.json"
+  }
+}

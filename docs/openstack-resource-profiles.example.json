@@ -1,0 +1,4 @@
+[
+  {"vcpus": 16, "ram_gib": 64, "state_gib": 300, "gpu": {"count": 1, "profile": "spvm-10de-2321"}},
+  {"vcpus": 8, "ram_gib": 32, "state_gib": 300, "gpu": {"count": 0}}
+]

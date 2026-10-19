@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "projects": {
+    "REPLACE_WITH_KEYSTONE_PROJECT_ID": {
+      "publisher_user_ids": ["REPLACE_WITH_PUBLISHER_USER_ID"],
+      "reader_user_ids": ["REPLACE_WITH_READER_USER_ID"],
+      "network_ids": ["REPLACE_WITH_SHARED_NEUTRON_NETWORK_UUID"],
+      "releases": ["build-449-release"]
+    }
+  }
+}

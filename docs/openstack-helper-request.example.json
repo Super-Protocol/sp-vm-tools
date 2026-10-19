@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "machine_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "compute_uuid": "REPLACE_WITH_NEW_COMPUTE_UUID",
+  "release": "build-449-release",
+  "allow_debug": false,
+  "tools": "/opt/sp-vm-tools",
+  "cache": "/data/spvm-runtime-cache/build-449-release",
+  "pools": [
+    {
+      "id": "data",
+      "root": "/data/spvm-state",
+      "mount": "/data",
+      "budget_gib": 2000,
+      "reserve_gib": 200
+    }
+  ],
+  "gpus": []
+}

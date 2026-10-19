@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "machine_sha256": "REPLACE_WITH_SHA256_OF_STRIPPED_MACHINE_ID",
+  "bind_address": "203.0.113.10",
+  "allowed_cidr": "10.77.0.0/24",
+  "base_config_sha256": "REPLACE_WITH_REVIEWED_EMPTY_HAPROXY_CONFIG_SHA256",
+  "publisher": {
+    "run_as": "spvm-publisher",
+    "auth_script": "/etc/spvm-publisher/openrc.sh",
+    "auth_args": [],
+    "ca_bundle": "/etc/ssl/certs/ca-certificates.crt",
+    "openstack_cli": "/opt/spvm-client/bin/openstack"
+  }
+}

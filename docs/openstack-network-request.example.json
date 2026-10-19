@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "hosts": {
+    "super7": {
+      "machine_sha256": "REPLACE_WITH_AUDITED_64_HEX_MACHINE_SHA256",
+      "tunnel_ip": "192.0.2.10"
+    },
+    "super6": {
+      "machine_sha256": "REPLACE_WITH_A_DIFFERENT_AUDITED_64_HEX_MACHINE_SHA256",
+      "tunnel_ip": "192.0.2.11"
+    }
+  }
+}

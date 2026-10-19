@@ -11,6 +11,7 @@ Utilities for bootstrapping a Confidential Computing host (Intel **TDX** or AMD 
   - [3. Reboot](#3-reboot)
   - [4. Verify the host](#4-verify-the-host)
 - [Running a Swarm cluster](#running-a-swarm-cluster)
+- [OpenStack deployment guide](docs/OPENSTACK_DEPLOYMENT.md) — prerequisites, driver sources, preflight, resource budgets and current limitations
 - [Requirements](#requirements) — OS, CPU, BIOS, GPU
 - [Roadmap](#roadmap)
 - [License](#license)
@@ -24,6 +25,7 @@ Utilities for bootstrapping a Confidential Computing host (Intel **TDX** or AMD 
 | `scripts/start_super_protocol.sh` | Start a confidential VM (TDX / SEV-SNP / untrusted) from a Super Protocol release image. |
 | `scripts/start_super_protocol_libvirt.sh` | Start the same VM as a transient `qemu:///system` domain through libvirt-python (Ubuntu 24.04 or 26.04). |
 | `scripts/swarm-cluster.sh` | Bring up a 3-node Swarm cluster on a single host. |
+| `scripts/install-openstack.sh` | OpenStack preflight/render, Kolla Docker preparation, isolated passwords/TLS inputs, task parsing and root-local fresh SPVM helper provisioning; full fresh deploy remains gated. |
 | `scripts/check_configuration.sh`, `get_super_running_vms.sh` | Auxiliary tooling. |
 
 ---
@@ -32,7 +34,7 @@ Utilities for bootstrapping a Confidential Computing host (Intel **TDX** or AMD 
 
 This is the main path: take a bare Ubuntu host, turn it into a confidential hypervisor, and launch your first VM. Before you begin, confirm your hardware and BIOS match the [Requirements](#requirements) — the bootstrap scripts enforce the supported OS versions and will check CPU/BIOS settings for you.
 
-> All scripts run as `root` and need an internet connection. A reboot is required partway through.
+> Hardware bootstrap scripts run as `root` and need an internet connection. A reboot is required partway through. The OpenStack deployment wrapper is separate: controller phases run as the deploy user after bootstrap; the explicitly marked root-local helper provisioning phase runs as root on a fresh compute. See the [OpenStack guide](docs/OPENSTACK_DEPLOYMENT.md).
 
 For the exact commands to clone the repository, run the bootstrap scripts, and launch a VM, see [docs/swarm.md](docs/swarm.md).
 
