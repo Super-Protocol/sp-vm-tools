@@ -160,6 +160,8 @@ def main(argv=None):
         'Prepared empty compute: plan-compute-activation, activate-compute. '
         'Scoped compute image: plan-kolla-compute-container, reconcile-kolla-compute-container. '
         'Read-only aggregate and next stage: initial-host-status. '
+        'Occupied Kolla cloud, scoped read-only verification: verify-kolla-existing. '
+        'Explicit scenario coordinator: plan-openstack, apply-openstack. '
         'Root-local registered-host Geneve firewall: plan-geneve-guard, prepare-geneve-guard. '
         'Existing private management and isolated host-NAT: plan/prepare-management, plan/prepare-nat. '
         'Dependency-only preparation: plan-base-packages, prepare-base-packages. '
@@ -184,6 +186,12 @@ def main(argv=None):
         parser.error('backend command required after --; use -- --help to list commands')
     try:
         path = select(args)
+        if remaining[0] in ('plan-openstack','apply-openstack'):
+            from openstack_workflow import main as workflow_coordinator
+            return workflow_coordinator(path,remaining)
+        if remaining[0]=='verify-kolla-existing':
+            from openstack_kolla_existing import main as existing_kolla
+            return existing_kolla(path,remaining)
         if remaining[0] in ('plan-kolla-compute-container','reconcile-kolla-compute-container'):
             from openstack_kolla_compute_scope import main as compute_scope
             return compute_scope(remaining)

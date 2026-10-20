@@ -5,7 +5,24 @@ here; hardware bootstrap and VM launcher scripts remain separate in `scripts/`.
 Keep these modules together: they use sibling imports and source-hash bindings.
 No compatibility copies are maintained in the parent directory.
 
+`openstack_workflow.py` provides the common `plan-openstack` / `apply-openstack`
+entry points: explicit fresh installation, existing scoped NOOP, or prepared
+add-compute NOOP/initial enrollment. Source/input-bound approval, durable parent
+journal, explicit mutation opt-in and child recovery guards are retained.
+It never guesses a scenario or silently redeploys a working cloud. See guide
+§10.28 for schemas, completion semantics and the separate preparation/enrollment
+phases; bare-host provisioning and general upgrades are not implied.
+
 Operator guide: [`../../docs/OPENSTACK_DEPLOYMENT.md`](../../docs/OPENSTACK_DEPLOYMENT.md).
+
+`openstack_kolla_existing.py` implements `verify-kolla-existing` for an occupied
+cloud: bound config/source checks, host/cloud accounting, guarded compute-only
+NOOPs and before/after runtime continuity. Exactly one verify-only request per
+compute and explicit private SSH/auth inputs are required. No repair, restart,
+fresh bootstrap or general deploy/reconfigure is performed. Success is explicitly
+scoped; full control-plane config/functionality and installer idempotency remain
+outside its acceptance. See guide §10.27. Old backend `verify-existing` remains
+DevStack-only.
 
 `openstack_container_engine.py` fingerprints the local Docker daemon, selected
 host services and sanitized container lifecycle state. PRESERVE never runs

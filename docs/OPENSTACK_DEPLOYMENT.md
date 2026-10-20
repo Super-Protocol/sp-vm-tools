@@ -1,14 +1,60 @@
 # OpenStack with the SPVM Nova driver: deployment and operations
 
-Updated: 2026-10-19. Read the implementation status before running commands.
+Updated: 2026-10-20. Read the implementation status before running commands.
+
+Current lab checkpoint: published driver 0.2.22, source commit
+`6ccc872b7a66079d18a8590cee7061275e0ed9c4`, is installed on both computes.
+Its separate Swarm create/UI/delete lifecycle and subsequent input rebinding
+passed. The original three-node Swarm remains running. New
+`verify-kolla-existing` aggregates bound-input checks, resource accounting,
+native compute-only NOOPs and runtime continuity. It is deliberately **scoped**:
+it does not certify every control-plane configuration or full installer
+idempotency. See §10.27 below. Earlier candidate/0.2.21 observations below are
+historical checkpoints, not the current compute version.
+
+Candidate pins (tested on the existing two-host lab; **not** clean-OS acceptance):
+
+| Component | Accepted identifier |
+| --- | --- |
+| Driver/CLI | `0.2.22`, source `6ccc872b7a66079d18a8590cee7061275e0ed9c4` |
+| Published driver archive SHA256 | `130aa628e9886df955c432548cfc7f40ed15e1b726a50c00a0bf4d57b5719e1a` |
+| Published wheel SHA256 | `57c845fa5927da768314653ca484a616d4aded768d77d1fac2c43ee34f6ec0ec` |
+| Kolla-Ansible source | `4b493ef36ace2b90257ecf94feb00e2c6e8014c9` (2026.2) |
+| Custom compute image | `spvm/nova-compute:published-0.2.22-6ccc872b-20261019` |
+| Exact compute image ID | `sha256:6a20494b7994defe6f9130d8ae757fe8c8d52b12372643706dabb23ec8a2b664` |
+| Image-context SHA256 | `f79d0d291acca50447bcb1254fbc94d0855f45c3c88c57a62af67f1945dab48b` |
+| Kolla compute base | `quay.io/openstack.kolla/nova-compute@sha256:0e6a281d09f5841eb04154a19d2e1784580dd85646604b26e9c48ba7ef1e0cac` |
+| Release guest used for live acceptance | `build-449-release` |
+
+The rolling branch release name is a discovery channel, not an immutable pin.
+For a private GitHub repository, obtain its asset using an already authenticated
+`gh` or another approved delivery method and verify the archive checksum before
+using `--driver-archive`. The frontend's `--driver-release` downloader targets
+public GitHub releases; do not assume it inherits `gh` authentication. Never put
+tokens into command arguments, git or the bundle.
+
+Record the installer checkout separately with `git rev-parse HEAD`; this guide
+and its sibling Python modules must be delivered from the same reviewed commit.
+The `sp-vm-tools` base before the new verifier/coordinator is
+`6d50f04` (historical base, **not** the completed candidate revision).
+The corresponding tools revision is pinned in the swarm-cloud deployment README;
+no release/tag/push is implied. Private lab journals are local evidence, not
+repository user documentation.
+
+Source staging is exclusive. If planning with `--driver-archive` or
+`--driver-release`, the first invocation creates a new private staging directory.
+For apply/repeat, select the already verified extracted bundle via `--driver-dir`;
+do **not** reuse that staging directory for a second extraction. Preserve its
+source receipt and checksum. The examples in §10.27–10.28 deliberately use an
+existing verified bundle directory for both plan and apply.
 
 Development checkpoint (2026-10-19): the unified driver/CLI source is now 0.2.22.
 It includes strict Nova-record disappearance checks in both cluster deletion and
 join retirement. The operator CLI candidate was built offline and installed
 without changing dependencies; the running compute image remains the previously
 accepted 0.2.21 image. Do not confuse the candidate CLI version with a completed
-compute-image rollout. Container-restart/live-retirement acceptance is recorded
-separately in the backend's `CONTAINER_RESTART_JOIN_RETIRE_ACCEPTANCE_RU.md`.
+compute-image rollout. The container-restart/live-retirement checks below are
+historical observations; preserve detailed lab evidence outside the repository.
 
 The selected live tests passed: an ordinary Ubuntu guest ran alongside two Swarms;
 `nova_compute` was restarted on each host, then `nova_api` and `placement_api` on
@@ -2625,11 +2671,11 @@ On the ingress host:
 ```bash
 sudo scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
   plan-spvm-publication --request /etc/spvm/ingress-request-my-cluster.json \
-  --timeout 900 --output /var/lib/spvm-publication/my-cluster-01
+  --timeout 1800 --output /var/lib/spvm-publication/my-cluster-01
 
 sudo scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
   publish-spvm-ui --request /etc/spvm/ingress-request-my-cluster.json \
-  --timeout 900 --output /var/lib/spvm-publication/my-cluster-01 \
+  --timeout 1800 --output /var/lib/spvm-publication/my-cluster-01 \
   --plan-sha256 <PLAN_SHA>
 ```
 
@@ -2653,6 +2699,18 @@ certificate issuance is added by this wrapper. Existing ingress reconcilers may
 reload **host** HAProxy for approved routes. Unknown SNI/Host do not fall back
 to another cluster or OpenStack API. Secrets remain in the existing provider
 config/Barbican boundary; a CA public chain is not the private signing key.
+
+Cold-start acceptance on 2026-10-19 with the published 0.2.22 driver and
+build-449-release took 1443 seconds (24 minutes 3 seconds) for publication after
+the three guests were ready. Both Swarm UIs then passed strict HTTPS UI/config/
+GraphQL checks, and the disposable cluster was removed without affecting the
+original cluster. The examples explicitly allow 1800 seconds; the command's
+default remains 900. This does not extend the separate 900-second plan-approval
+window: approve and start promptly, using the same timeout for plan and apply.
+Nova ACTIVE/READY confirms CA/core readiness, not UI readiness. Do not restart
+bootstrap, recreate guests, relax TLS checks or replay publication to speed up
+this wait. Gateway/TLS/UI became ready without such changes; the internal cause
+of the long Swarm startup was not established by this test.
 
 An ambiguous timeout or failed mutating call stops with `NEEDS_REVIEW`; there is
 no blind replay or automatic route rollback/deletion. A policy/registry may
@@ -3054,6 +3112,178 @@ network edits or restarts. Internal service root cause was not established.
 Clean-OS deployment and installing a missing Docker daemon on Ubuntu26 remain
 separate unaccepted tests. The roundtrip does not remove those limitations.
 
+### 10.27. Verify an occupied Kolla installation without changing it
+
+Use `verify-kolla-existing`, **not** the backend's `verify-existing` or
+`plan-existing` / `apply-existing`: those older commands target DevStack paths,
+repository pins and services. Do not run fresh-host preparation or replay
+deny-all bootstrap on an occupied cloud to make a verification pass.
+
+Run from the trusted deployment controller as the private workspace owner:
+
+```bash
+scripts/install-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
+  verify-kolla-existing \
+  --config /srv/private/deployment.yaml \
+  --workspace /srv/private/bound-workspace \
+  --known-hosts /srv/private/known_hosts \
+  --controller control01 \
+  --controller-python /opt/spvm-client/bin/python \
+  --openrc /srv/private/admin-openrc.sh \
+  --compute-request /srv/private/compute01-verify.json \
+  --compute-request /srv/private/compute02-verify.json \
+  --output /srv/private/existing-verification-01
+```
+
+`controller` is a host key in the normalized deployment config, with the control
+role. Supply exactly one §10.26 compute request per compute inventory alias,
+including an all-in-one controller if it also has the compute role. Every request
+must explicitly select `mode: verify`; `replace-empty` is refused. Requests must
+point to this workspace's inventory/configdir and the same pinned Kolla source,
+Python, collections, machine identities and image reference/ID. Existing compute
+UUIDs remain explicit and are checked by native admission and accounting.
+
+The runtime profile must preserve the bound host profile, with changes allowed
+only for an explicit absolute existing host Python interpreter and this exact
+strict transport (substitute the same `--known-hosts` path):
+
+```yaml
+ansible_python_interpreter: /opt/kolla-host-venv/bin/python
+ansible_ssh_common_args: '-F /dev/null -o IdentityAgent=none -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/srv/private/known_hosts'
+```
+
+This does not install the interpreter/SDK or create SSH trust. Keep the bound
+workspace immutable. The tool validates its receipt, rendered configuration,
+image binding, clean pinned Kolla checkout and collections. It checks physical
+host identity/reserves, native Nova PCI accounting, Placement/state allocations,
+local claims/disks and registered compute services through the existing read-only
+accounting collector. That collector needs controller OpenStackSDK/current admin
+auth and sudo access to the existing `nova_conductor` container for Nova PCI
+observations. The non-root operator needs strict SSH and sudo on all configured
+hosts, and existing Ansible/Kolla dependencies for native compute comparison.
+
+For each compute the tool creates a fresh §10.26 `verify` plan and runs only
+guarded `nova-cell-deploy` container comparison. Restart, recreation and implicit
+pull remain forbidden before the Docker worker. It never repairs drift, changes
+service scheduling state, installs packages, creates guests, or runs a global
+deploy/reconfigure. Full runtime snapshots before/after cover container identities,
+start times/configuration, protected service identities, domains, QEMU process
+identities and installed compute configuration hashes. Local private evidence,
+Ansible temporary files and a read-only Nova-conductor observation process are
+expected; this is not a zero-process/zero-local-write command.
+
+Success is exit 0 / `EXISTING_KOLLA_SCOPED_VERIFIED`. Exit 2 / `NEEDS_REVIEW`
+contains the failing stage and sanitized error type, with accounting blockers and
+private native logs where available. Do not publish raw logs. Inspect
+`existing-kolla.json`, `runtime-before.json`, `runtime-after.json`, `accounting/`
+and per-compute transaction directories. Failure is never automatic repair
+authority. Initial source/output admission failures may leave no final report;
+preserve any partial private directory for review.
+
+Use a **new** private output directory for every run, never overwrite an earlier
+transaction. The output must be separate from and outside the bound workspace.
+The command requires stable inputs and completes within a 900-second observation
+window; input/runtime drift fails closed. Administrators must serialize it with
+deployments, scheduling and other maintenance to avoid inconsistent observations.
+
+The report explicitly excludes full rendered-to-installed control-plane config
+comparison, every service/API's functional health, loaded Python code identity,
+Swarm UI/quorum acceptance, full deployment idempotency and clean-OS installation.
+Run separate UI/CA/readiness probes when appropriate. Do not interpret the scoped
+success status as blanket permission to run Kolla deploy on occupied SPVM hosts.
+
+### 10.28. Common scenario plan/apply
+
+`plan-openstack` / `apply-openstack` coordinate the guarded phases. Hardware
+bootstrap remains separate. Select the scenario explicitly; there is no auto
+mode, implicit upgrade or fallback from an occupied cloud to fresh deployment.
+
+| Request mode | Operation | Mutation boundary |
+| --- | --- | --- |
+| `fresh` | Fresh Kolla prechecks/deploy/post-deploy | Empty prepared cloud; explicit approval |
+| `existing` | Scoped verification at plan and apply | No repair or deployment |
+| `add-compute` | Prepared compute NOOP, otherwise initial enrollment | Only a prepared empty compute-only target |
+
+Write a private JSON request, for example:
+
+```json
+{
+  "schema_version": 1,
+  "mode": "existing",
+  "config": "/srv/private/deployment.yaml",
+  "workspace": "/srv/private/bound-workspace",
+  "known_hosts": "/srv/private/known_hosts",
+  "controller": "control01",
+  "controller_python": "/opt/spvm-client/bin/python",
+  "openrc": "/srv/private/admin-openrc.sh",
+  "compute_requests": ["/srv/private/compute01-verify.json", "/srv/private/compute02-verify.json"]
+}
+```
+
+Use the §10.27 verify-only requests/profiles and include all computes. Remote
+controller interpreter/OpenRC paths need not exist locally; normal venv Python
+symlinks are supported. Local inputs/workspace must be absolute canonical paths.
+Requests reference protected files, never contain secret payloads or shell code.
+
+```bash
+scripts/install-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
+  plan-openstack --request /srv/private/workflow.json \
+  --output /srv/private/workflow-01
+
+# Review workflow-plan.json and the private child plans; copy the printed SHA.
+scripts/install-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
+  apply-openstack --request /srv/private/workflow.json \
+  --output /srv/private/workflow-01 --plan-sha256 <REVIEWED_SHA256>
+```
+
+First apply requires a plan younger than 900 seconds. Approval binds request,
+config/workspace, SSH trust, runtime profiles/enrollment input, installer/backend
+sources and child plan. Input/source/child-plan drift and mode/action mismatch
+are refused. A private transaction lock protects this output; serialize different
+controllers/transactions externally. Never overwrite an old plan directory.
+
+For `fresh`, retain only the common fields `schema_version`, `mode`, `config`,
+`workspace`, `known_hosts`, and add boolean fields `ack_new_cloud: true`,
+`allow_experimental_ubuntu26`, `use_testing_images`. Set the latter two explicitly
+for the chosen environment, not automatically. Existing-cloud auth/compute fields
+are not accepted in this schema. A prepared bound workspace and the documented
+fresh-host prerequisites remain mandatory. Apply additionally requires
+`--allow-changes`; blocked fresh plans cannot be approved. The child workflow
+retains empty-host, source, protected-runtime and phase-boundary checks.
+It never reruns hardware bootstrap or regenerates passwords/certificates.
+
+Fresh completion is `OPENSTACK_INSTALLED_NOT_SPVM_ENROLLED`, not full SPVM readiness.
+Project/network/Barbican enrollment and initial compute activation remain the
+explicit post-deploy phases documented above. They cannot be approved using
+unknown project/resource IDs before the cloud exists. Do not launch a Swarm until
+those phases pass. This coordinator is not an unattended bare-host provisioner.
+
+For `add-compute`, retain common and controller/auth fields; replace
+`compute_requests` with `host` (deployment config key) and `enrollment_request`
+(absolute path to the §10.21 staged runtime request, or null for an already-ready
+host). The config/workspace must already describe the intended inventory.
+An existing ready registered compute selects NOOP without restart, even if occupied.
+Otherwise initial activation requires an empty compute-only target, exact matching
+bootstrap/runtime request and `--allow-changes`. Hardware/libvirt, helper, image,
+Kolla containers/OVN and initial registration must already be prepared.
+The child workflow quarantines/enrolls/starts/accepts/enables that compute only;
+no control-plane reconfiguration, guest drain or resource upgrade is included.
+Missing preparation is refusal, never a reason to bypass a guard.
+
+`workflow-transaction.json` records RUNNING before delegation, COMPLETE only after
+child success and unchanged inputs, NEEDS_REVIEW on failure/interruption.
+Inspect parent and child journals before explicit `--resume`. Resume cannot waive
+child ambiguous/lost-ack guards; fresh Kolla resumes only at confirmed boundaries.
+
+Repeating a completed `existing` apply performs another read-only verification
+and returns `OPENSTACK_NOOP_COMPLETE`. Completed fresh/add-compute apply returns
+`ALREADY_APPLIED_NOT_REVERIFIED` and its historical result without repeating
+mutation. This is not a health claim: use a new `existing` plan to check the live
+cloud. A new add-compute plan for an already-ready host also selects NOOP.
+The scenarios do not certify generic Kolla reconfigure idempotency or clean-OS
+installation; fresh and mutating compute paths still require separate live
+acceptance on suitable empty hosts.
+
 ## 11. Add a compute to an existing cloud
 
 Required inputs are the existing Kolla deployment directory/inventory/profile,
@@ -3148,8 +3378,7 @@ for explicit reconciliation. Never hard-delete SQL records or force-clear port
 bindings to bypass this wait. This hardening applies to cluster cleanup; do not
 infer acceptance of other node-retirement/replacement workflows from it.
 
-The live failure-test campaign is recorded in swarm-cloud backend
-`RESOURCE_FAILURE_RECOVERY_RU.md`. It did not change project quotas, fill physical
+The live failure-test campaign did not change project quotas, fill physical
 RAM/disks, reboot guests or restart Nova/API containers. Oversized requests were
 chosen above one host's remaining capacity but below its full configured budget
 and below project quotas. A busy-GPU request was pinned to the occupied host
@@ -3206,7 +3435,7 @@ only the disposable second cluster, its Nova/libvirt/storage/lease/TAP/OVS/
 Neutron/Barbican/DNS resources were absent, its GPU was available again and the
 first cluster's CA, Nova launch times and QEMU PID/start times were unchanged.
 The completed root retirement repeated as `ALREADY_RETIRED`. Keep the corresponding
-`KOLLA_MULTI_CLUSTER_ISOLATION_RU.md` acceptance receipt from the swarm-cloud backend.
+machine-specific acceptance receipt in the protected local evidence store.
 This does not accept resource-exhaustion, service failover or clean-OS installation.
 
 | Symptom | What to inspect |
