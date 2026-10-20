@@ -3284,6 +3284,54 @@ The scenarios do not certify generic Kolla reconfigure idempotency or clean-OS
 installation; fresh and mutating compute paths still require separate live
 acceptance on suitable empty hosts.
 
+### 10.29. Skyline pre-login domain compatibility
+
+Some Skyline 9.0.0 console assets call the authenticated `/contrib/domains` API
+before login. With an API that requires a session on that route, the domain
+selector displays `No data` even though Keystone and credentials are correct.
+Do not remove authentication from administrative domain enumeration.
+
+The offline `scripts/openstack/skyline_login_compat.py` helper changes only the
+login store to read the public `/api/openstack/skyline/api/v1/config` endpoint
+and use its configured `default_domain`. It validates HTTP/config responses,
+requires an approved source checksum and exactly one recognized old call site,
+and refuses unknown/already-patched assets. It never changes the API or guests.
+
+The observed asset is `auth.bundle.1663167892.js`, original SHA256
+`ef2c124f46c9cfc2058adecddad203b1ec1df76ca62ce13f683eb3a0f70d8189`;
+patched SHA256 `543c714c8526a7efaff660afe8ff4b383aa2ee54a2f3b4851dea491f13416662`.
+Extract it from the approved console image into a private workspace, then run:
+
+```bash
+python3 scripts/openstack/skyline_login_compat.py \
+  --asset /srv/private/original-auth.js \
+  --sha256 ef2c124f46c9cfc2058adecddad203b1ec1df76ca62ce13f683eb3a0f70d8189 \
+  --output /srv/private/console-context/auth.bundle.1663167892.js
+```
+
+Build a derivative of the same pinned, already-cached console base. Copy only
+that asset to `/var/lib/kolla/venv/lib/python3/site-packages/skyline_console/static/`,
+preserving all runtime defaults. Regenerate any compressed copies; never serve
+stale `.gz`/`.br` alongside the patched asset. Use `--pull=false --network=none`,
+record the result's exact image ID, and retain the old image/container for rollback.
+Browser clients must hard-refresh cached JS after replacement.
+
+The updated backend accepts paired `kolla.skyline_console_image` and
+`kolla.skyline_console_image_id` fields. It rejects incomplete/floating values
+and renders `skyline_console_image_full` without changing the compute image.
+These optional fields require the updated backend; the previously published
+0.2.22 bundle predates them. Do not edit immutable existing workspaces in place;
+regenerate reviewed inputs when adopting this override for a new deployment.
+For an existing deployment retain a private Kolla override with
+`skyline_console_image_full` so a later planned reconfiguration does not restore
+the incompatible image. Merely saving that override does not automatically
+reconfigure the running stack.
+
+Acceptance: public config/regions succeed, anonymous administrative domains
+remain 401, login/profile succeed, and Nova instances are accessible through the
+console proxy. A container health check alone does not prove the login form works.
+Change only the console for this workaround; no Nova/libvirt/guest restart is needed.
+
 ## 11. Add a compute to an existing cloud
 
 Required inputs are the existing Kolla deployment directory/inventory/profile,
