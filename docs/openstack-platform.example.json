@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "controller": "super7",
+  "sdk_venv": "/srv/operator/client-venv",
+  "network": "/srv/operator/platform-network.json",
+  "profiles": "/srv/operator/resource-profiles.json",
+  "provider_directory": "/srv/operator/provider-config",
+  "template_name": "default",
+  "web_user": "spvm-web",
+  "operator_user": "petr",
+  "runtime_dir": "/srv/spvm-web-runtime",
+  "state_dir": "/var/lib/spvm-web-state",
+  "origins": ["https://localhost:9999", "https://10.90.0.2:9999"],
+  "host_sources": ["10.90.0.1/32", "10.90.0.3/32"],
+  "ingress_address": "192.0.2.10",
+  "base_haproxy_config": "/srv/operator/haproxy-base.cfg",
+  "console_manifest": "/srv/operator/console-context/console-context.json",
+  "quota_from_host_budgets": true
+}

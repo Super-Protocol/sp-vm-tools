@@ -1,30 +1,53 @@
 # OpenStack with the SPVM Nova driver: deployment and operations
 
-Updated: 2026-10-20. Read the implementation status before running commands.
+Updated: 2026-10-21. Read the implementation status before running commands.
 
-Current lab checkpoint: published driver 0.2.22, source commit
-`6ccc872b7a66079d18a8590cee7061275e0ed9c4`, is installed on both computes.
-Its separate Swarm create/UI/delete lifecycle and subsequent input rebinding
-passed. The original three-node Swarm remains running. New
-`verify-kolla-existing` aggregates bound-input checks, resource accounting,
-native compute-only NOOPs and runtime continuity. It is deliberately **scoped**:
-it does not certify every control-plane configuration or full installer
-idempotency. See §10.27 below. Earlier candidate/0.2.21 observations below are
-historical checkpoints, not the current compute version.
+Current lab checkpoint: OpenStack was cleared and redeployed on both prepared
+hosts without reinstalling their operating systems or changing libvirt/QEMU/CC.
+Published driver 0.2.22, source commit
+`23ad534f64209a4ff5779315a9a2dea12b1b0431`, is installed on both computes.
+Kolla prechecks/deploy/post-deploy, strict-TLS API checks, both initial compute
+enrollments, shared Neutron topology, private flavors/release marker, Barbican
+probe, ingress scaffold and authenticated Skyline Swarm catalogs passed.
+The `default` provider template is available in Barbican. **No Swarm is running;
+no guest was launched in this redeployment.** Static/proxy/login checks are not
+a headed-browser or end-to-end guest-launch test.
+
+This run still required operator sequencing and manual prerequisite/identity
+repairs. It is not proof of unattended installation, clean-OS acceptance or
+fully cold-cache reproducibility. See
+[the automation backlog](OPENSTACK_AUTOMATION_BACKLOG.md) for exact remaining
+work, pins and acceptance boundaries. Historical Swarm lifecycle observations
+below describe earlier deployments, not guests currently running on these hosts.
+`verify-kolla-existing` is also deliberately scoped: it does not certify every
+control-plane configuration or full installer idempotency (see §10.27).
+
+Local follow-up implementation adds native compute identity generation, owned
+hostname/cache/network preparation and an optional complete fresh `platform`
+path in the common coordinator. See
+[the platform workflow](OPENSTACK_PLATFORM_WORKFLOW.md) for inputs and the
+explicit prepared-host/artifact boundary and the latest scoped-recovery results.
+The latest GUI acceptance used a separately recorded local publication-worker
+overlay; the published bundle and compute images were not edited. The next fresh
+platform deployment requires an updated bundle advertising
+`separate-web-ingress-identities` (introduced in 0.2.23). An uninterrupted common
+workflow run with those new artifacts remains pending. The installer snapshot
+listed below predates the new coordinator changes.
 
 Candidate pins (tested on the existing two-host lab; **not** clean-OS acceptance):
 
 | Component | Accepted identifier |
 | --- | --- |
-| Driver/CLI | `0.2.22`, source `6ccc872b7a66079d18a8590cee7061275e0ed9c4` |
-| Published driver archive SHA256 | `130aa628e9886df955c432548cfc7f40ed15e1b726a50c00a0bf4d57b5719e1a` |
-| Published wheel SHA256 | `57c845fa5927da768314653ca484a616d4aded768d77d1fac2c43ee34f6ec0ec` |
+| Driver/CLI | `0.2.22`, source `23ad534f64209a4ff5779315a9a2dea12b1b0431` |
+| Published driver archive SHA256 | `7a29a11ef9f365ef4f395600dd5b01ef6ca3783c6befa0bb90d8fb5b8dbf42e6` |
+| Published wheel SHA256 | `85ab1497053db5c18b0c7c27480ba1e59bd0039b1720d4a053386c6efdce134e` |
 | Kolla-Ansible source | `4b493ef36ace2b90257ecf94feb00e2c6e8014c9` (2026.2) |
-| Custom compute image | `spvm/nova-compute:published-0.2.22-6ccc872b-20261019` |
-| Exact compute image ID | `sha256:6a20494b7994defe6f9130d8ae757fe8c8d52b12372643706dabb23ec8a2b664` |
-| Image-context SHA256 | `f79d0d291acca50447bcb1254fbc94d0855f45c3c88c57a62af67f1945dab48b` |
-| Kolla compute base | `quay.io/openstack.kolla/nova-compute@sha256:0e6a281d09f5841eb04154a19d2e1784580dd85646604b26e9c48ba7ef1e0cac` |
-| Release guest used for live acceptance | `build-449-release` |
+| Custom compute image | `spvm/nova-compute:reinstall-20261021-23ad534f` |
+| Exact compute image ID | `sha256:1776e534de881dd584eacc798c2886892f7a10db9d59bead301919a832bbe928` |
+| Image-context SHA256 | `01ede96ecb2ea928b6c75943f38f74cb9ac4b7db6e2eeb7027e8bac2144a139f` |
+| Kolla compute base | `quay.io/openstack.kolla/nova-compute@sha256:f5aadb8b42f653403b4db2a4b2b68fafe132b9f57191c318237736df4df7ebae` |
+| Enrolled release; not launched in this redeployment | `build-449-release` |
+| Installer snapshot | `fbad0699a298bfa9dd5ba3e401139c9949638483` |
 
 The rolling branch release name is a discovery channel, not an immutable pin.
 For a private GitHub repository, obtain its asset using an already authenticated

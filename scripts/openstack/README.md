@@ -28,6 +28,15 @@ installation, and merely staging an override does not make an existing Kolla
 workspace consume it. See the selected bundle's Skyline README for exact commands,
 template handling and the opt-in root-delegated publication worker.
 
+`openstack_compute_identity.py` adds native Kolla/Ansible helper-request UUID
+generation (`stage-kolla-identities`), using audited kernel nodenames, not aliases.
+`openstack_hostnames.py` adds the owned `plan-hostnames` / `prepare-hostnames`
+phase. Fresh `plan-openstack` / `apply-openstack` may include a `platform` file
+to drive new-cloud enrollment through verified Skyline Swarm management, with an
+optional hostname/Geneve/management/NAT preparation recipe. No guest is created.
+See `docs/OPENSTACK_PLATFORM_WORKFLOW.md` for the exact prerequisite boundary and
+pending combined live acceptance. Existing/adoption modes are not widened.
+
 `openstack_skyline_runtime.py` adds `plan-skyline-runtime` /
 `install-skyline-runtime` for fresh web/capacity/publisher services. It requires
 root-protected staged inputs, hashes the copied dependency environment, refuses

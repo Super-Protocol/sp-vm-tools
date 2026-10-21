@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "auth_url": "https://10.90.0.2:5000/v3",
+  "region_name": "RegionOne",
+  "external": {
+    "network_name": "spvm-transit",
+    "subnet_name": "spvm-transit",
+    "cidr": "172.30.79.0/24",
+    "gateway_ip": "172.30.79.1",
+    "allocation_pool": {"start": "172.30.79.10", "end": "172.30.79.200"},
+    "physical_network": "physnet1"
+  },
+  "guest": {
+    "network_name": "spvm-shared",
+    "subnet_name": "spvm-shared",
+    "cidr": "10.77.0.0/24",
+    "gateway_ip": "10.77.0.1",
+    "allocation_pool": {"start": "10.77.0.10", "end": "10.77.0.250"},
+    "dns_nameservers": ["1.1.1.1", "8.8.8.8"]
+  },
+  "router": {"name": "spvm-router", "external_ip": "172.30.79.10", "is_ha": true}
+}

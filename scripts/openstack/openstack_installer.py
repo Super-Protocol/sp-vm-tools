@@ -164,7 +164,8 @@ def main(argv=None):
         'Scoped compute image: plan-kolla-compute-container, reconcile-kolla-compute-container. '
         'Read-only aggregate and next stage: initial-host-status. '
         'Occupied Kolla cloud, scoped read-only verification: verify-kolla-existing. '
-        'Explicit scenario coordinator: plan-openstack, apply-openstack. '
+        'Explicit scenario coordinator: plan-openstack, apply-openstack (optional fresh platform completion). '
+        'Native fresh identities: stage-kolla-identities. Management DNS names: plan-hostnames, prepare-hostnames. '
         'Root-local registered-host Geneve firewall: plan-geneve-guard, prepare-geneve-guard. '
         'Existing private management and isolated host-NAT: plan/prepare-management, plan/prepare-nat. '
         'Dependency-only preparation: plan-base-packages, prepare-base-packages. '
@@ -189,6 +190,12 @@ def main(argv=None):
         parser.error('backend command required after --; use -- --help to list commands')
     try:
         path = select(args)
+        if remaining[0]=='stage-kolla-identities':
+            from openstack_compute_identity import main as compute_identity
+            return compute_identity(path,remaining)
+        if remaining[0] in ('plan-hostnames','prepare-hostnames'):
+            from openstack_hostnames import main as hostnames
+            return hostnames(remaining)
         if remaining[0] in ('plan-skyline-preparation','prepare-skyline'):
             from openstack_skyline_prepare import main as skyline_prepare
             return skyline_prepare(path, remaining)

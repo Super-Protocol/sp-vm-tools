@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "hosts": {"super7": "10.90.0.1", "super6": "10.90.0.3"},
+  "network_request": "/srv/operator/host-network.json",
+  "geneve_request": "/srv/operator/geneve-request.json",
+  "repair_stale_networkd_cache": false
+}

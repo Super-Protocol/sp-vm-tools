@@ -20,6 +20,7 @@ import openstack_kolla_existing as existing
 import openstack_kolla_workspace as workspace
 import openstack_kolla_workflow as fresh
 import openstack_workflow_skyline as skyline
+import openstack_platform as platform
 
 
 def request(filename):
@@ -31,8 +32,13 @@ def request(filename):
         'add-compute':{'controller','controller_python','openrc','host','enrollment_request'}}
     if (not isinstance(value,dict) or type(value.get('schema_version')) is not int
             or value['schema_version']!=1 or value.get('mode') not in modes
-            or set(value)-{'skyline'}!=common|modes[value['mode']]):
+            or set(value)-{'skyline','platform','preparation'}!=common|modes[value['mode']]):
         raise ValueError('exact explicit workflow request required')
+    if 'platform' in value or 'preparation' in value:
+        if value['mode']!='fresh' or 'skyline' in value or 'preparation' in value and 'platform' not in value:
+            raise ValueError('platform completion/preparation require fresh mode; not staged Skyline adoption')
+        literal_path(value['platform']);platform.specification(value['platform'])
+        if 'preparation' in value:literal_path(value['preparation'])
     if 'skyline' in value:
         literal_path(value['skyline'])
         skyline.specification(value['skyline'], value['mode'])
@@ -81,6 +87,16 @@ def fingerprint(value,path,module):
     receipt=workspace.check(value['workspace'])
     if receipt['config_sha256']!=digest(cfg):raise ValueError('workspace/config mismatch')
     paths=[value['config'],value['known_hosts']]
+    platform_inputs={}
+    if 'platform' in value:
+        platform_inputs=platform.input_files(value['platform'])
+        platform_inputs['sdk-environment-sha256']=platform.sdk_digest(value['platform'])
+        if 'preparation' in value:
+            paths.append(value['preparation'])
+            prep=json.loads(read(value['preparation']))
+            paths.extend(prep[k] for k in ('network_request','geneve_request') if k in prep)
+        for p in [Path(path).parent.parent/'manifest.json',*sorted((Path(path).parent.parent/'wheels').glob('*.whl'))]:
+            if p.is_file():platform_inputs[str(p)]=file_hash(p)
     if 'skyline' in value:
         paths.append(value['skyline'])
         if value['mode']=='fresh':
@@ -100,7 +116,7 @@ def fingerprint(value,path,module):
             sources.extend((package_root/package).rglob('*.py'))
     # Secrets are represented by hashes only, never copied into public output.
     return {'request':value,'workspace_sha256':digest(receipt),
-            'files':{p:file_hash(p) for p in paths},
+            'files':{**{p:file_hash(p) for p in paths},**platform_inputs},
             'installer_sources':{p.name:file_hash(p) for p in Path(__file__).parent.glob('*.py')},
             'backend_sources':{str(p.relative_to(source_root)):file_hash(p) for p in sources}}
 
@@ -140,6 +156,9 @@ def plan_operation(value,path,module,output):
         if 'skyline' in value:result['skyline']=skyline.verify(value,path,module)
         return result
     if value['mode']=='fresh':
+        if 'platform' in value:
+            reviewed=platform.preflight(value,path,module)
+            return {'kind':'fresh-platform-install','changes':True,'platform_intent_sha256':digest(reviewed),'reviewed_platform':reviewed}
         if 'skyline' in value:
             # Validate the exact staged files, environment, vacant targets and
             # existing publication prerequisites without starting services.
@@ -160,6 +179,30 @@ def plan_operation(value,path,module,output):
 
 
 def apply_operation(value,path,module,output,operation, *, resume=False):
+    if operation['kind']=='fresh-platform-install':
+        if resume:raise ValueError('platform resume is not an ambiguous child replay; review journals first')
+        if digest(platform.preflight(value,path,module))!=operation['platform_intent_sha256']:
+            raise ValueError('platform host/identity intent drift')
+        platform.prepare_account(platform.specification(value['platform']),output)
+        if 'preparation' in value:platform.prepare_hostnames(value,path,module,output)
+        if 'preparation' in value:
+            from openstack_platform_network import prepare
+            prepare(value,path,module,output)
+        # Child plans are produced only once their prerequisites exist. Their
+        # policy/source/inputs are already bound by this approved parent plan.
+        from openstack_kolla_packages import execute as packages
+        cfg=module.deployment_config(value['config'])
+        with fresh.hold_libvirt(argparse.Namespace(known_hosts=value['known_hosts']),module,cfg):
+            for profile in ('base-packages','host-sdk','api-trust'):
+                args=fresh_args(value,output/profile,'plan-'+profile)
+                plan=packages(args,path,module)
+                if plan.get('blockers'):raise ValueError('host dependencies blocked; inspect child plan')
+                args.action='prepare-'+profile;args.plan_sha256=plan['plan_sha256'];packages(args,path,module)
+            plan=fresh.execute(fresh_args(value,output/'fresh','plan-kolla-install'),path,module)
+            if plan.get('blockers'):raise ValueError('fresh core preparation blocked')
+            result=fresh.execute(fresh_args(value,output/'fresh','run-kolla-install',plan['plan_sha256']),path,module)
+            if result['status']!='KOLLA_DEPLOYED_NOT_SPVM_ENROLLED':raise ValueError('core install incomplete')
+            return platform.post_install(value,path,module,output/'platform',output/'fresh')
     if operation['kind']=='existing-noop':
         report=existing.execute(verify_args(value,output/('existing-apply-'+uuid.uuid4().hex)),path)
         if report['status']!='EXISTING_KOLLA_SCOPED_VERIFIED':raise ValueError('fresh existing verification blocked')
@@ -217,14 +260,14 @@ def execute(args,path):
             if record and record.get('plan_sha256')!=args.plan_sha256:raise ValueError('foreign transaction')
             if record and record.get('status') not in ('COMPLETE','RUNNING','NEEDS_REVIEW'):
                 raise ValueError('invalid transaction state')
-            kinds={'existing':{'existing-noop':False},'fresh':{'fresh-install':True},
+            kinds={'existing':{'existing-noop':False},'fresh':{'fresh-install':True,'fresh-platform-install':True},
                    'add-compute':{'compute-noop':False,'compute-enrollment':True}}
             if (plan['operation']['kind'] not in kinds[value['mode']]
                     or type(plan['operation']['changes']) is not bool
                     or plan['operation']['changes']!=kinds[value['mode']][plan['operation']['kind']]):
                 raise ValueError('unsupported operation')
             # Bind the child approval bytes, not merely the parent's reference.
-            if plan['operation']['kind']!='existing-noop':
+            if plan['operation']['kind'] not in ('existing-noop','fresh-platform-install'):
                 child=output/('fresh/install-plan.json' if plan['operation']['kind']=='fresh-install' else 'compute-plan.json')
                 inner=json.loads(read(child))
                 # Preserve each delegated workflow's published digest ABI:
