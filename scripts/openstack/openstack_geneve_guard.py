@@ -16,6 +16,7 @@ from openstack_compute_image import read
 from openstack_container_engine import digest, file_hash, write
 import openstack_geneve_runtime as runtime
 import openstack_initial_probe as initial_probe
+from openstack_firewall_managers import require_unmanaged
 
 RUNTIME='/usr/local/libexec/spvm-geneve-guard.py'
 
@@ -46,7 +47,7 @@ def inputs(args,backend):
         'allow_ubuntu26':args.allow_experimental_ubuntu26,
         'sources':{n:file_hash(Path(__file__).with_name(n)) for n in
             ('openstack_geneve_guard.py','openstack_geneve_runtime.py','openstack_initial_probe.py',
-             'openstack_container_engine.py','openstack_compute_image.py')}}
+             'openstack_container_engine.py','openstack_compute_image.py','openstack_firewall_managers.py')}}
     backend_root=Path(backend.__file__).parent
     binding['backend_sources_sha256']=digest({p.relative_to(backend_root).as_posix():file_hash(p)
         for p in backend_root.rglob('*.py') if '__pycache__' not in p.parts})
@@ -93,9 +94,7 @@ class Host:
         if facts['blockers']:raise ValueError('fresh-host guard blocked network preparation')
         if 'compute' in wanted['roles'] and not {'/usr/bin/virsh','/usr/bin/qemu-system-x86_64'}<=set(facts['protected_package_files']):
             raise ValueError('prepare host QEMU/libvirt separately first')
-        for service in ('ufw.service','firewalld.service','nftables.service'):
-            state=runtime.command(['systemctl','show',service,'--property=ActiveState','--value'],self.runner).strip()
-            if state not in ('inactive','failed'):raise ValueError('active or unknown firewall manager requires manual integration')
+        require_unmanaged(lambda argv:runtime.command(argv,self.runner))
         for name,(body,mode) in files.items():
             path=self.trusted(name)
             if not installed:

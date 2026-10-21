@@ -17,6 +17,7 @@ from openstack_container_engine import digest, file_hash, write
 import openstack_geneve_guard as guard
 import openstack_initial_probe as probe
 import openstack_network_runtime as runtime
+from openstack_firewall_managers import require_unmanaged
 
 RUNTIME='/usr/local/libexec/spvm-host-network.py'
 
@@ -127,9 +128,8 @@ class Host(guard.Host):
         if facts['blockers']:raise ValueError('fresh-host guard blocked network changes')
         if 'compute' in wanted['roles'] and not {'/usr/bin/virsh','/usr/bin/qemu-system-x86_64'}<=set(facts['protected_package_files']):
             raise ValueError('hardware bootstrap required separately')
-        for manager in ('ufw.service','firewalld.service','nftables.service','netfilter-persistent.service'):
-            if runtime.run(['systemctl','show',manager,'--property=ActiveState','--value'],self.runner).strip() not in ('inactive','failed'):
-                raise ValueError('firewall-manager integration requires review')
+        require_unmanaged(lambda argv:runtime.run(argv,self.runner),
+            ('ufw.service','firewalld.service','nftables.service','netfilter-persistent.service'))
         if p['transport_unit'] and runtime.run(['systemctl','is-active',p['transport_unit']],self.runner).strip()!='active':
             raise ValueError('explicit existing WireGuard transport must already be active')
         if p['phase']=='nat':

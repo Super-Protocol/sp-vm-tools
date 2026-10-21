@@ -1795,6 +1795,14 @@ filter output is not accepted as proof of an absent chain.
 
 ### 10.14. Prepare existing private management transport and a static API VIP
 
+On Ubuntu, `ufw.service` may be `active (exited)` even with UFW disabled. The
+installer accepts that boot-hook state only when `ufw status` reports exactly
+`Status: inactive` and complete IPv4/IPv6 filter snapshots contain no UFW rules
+or jumps. It never disables/stops UFW, flushes firewall rules or accepts an active
+policy merely to pass preparation. Active firewalld/nftables/persistent managers,
+unknown status, partial observations and residual UFW rules remain blockers.
+This read-only distinction is shared by management/NAT and Geneve preparation.
+
 Installer implementation modules now live together in `scripts/openstack/`.
 `scripts/install-openstack.sh` remains the public entry point. Do not copy only
 the shell wrapper when staging tools, and do not restore old Python-module copies
