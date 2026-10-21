@@ -157,6 +157,9 @@ def main(argv=None):
         'Offline runtime: stage-runtime-enrollment, check-runtime-enrollment, plan-runtime-enrollment, install-runtime-enrollment. '
         'Initial host ingress: stage-ingress, check-ingress, plan-ingress, install-ingress, plan-ingress-activation, activate-ingress. '
         'Root-approved UI publication: plan-spvm-publication, publish-spvm-ui. '
+        'Complete offline Skyline preparation: plan-skyline-preparation, prepare-skyline. '
+        'Individual phases: stage-skyline-console, build-skyline-console, stage-skyline-runtime. '
+        'Fresh web services: plan-skyline-runtime, install-skyline-runtime (never overwrite occupied units). '
         'Prepared empty compute: plan-compute-activation, activate-compute. '
         'Scoped compute image: plan-kolla-compute-container, reconcile-kolla-compute-container. '
         'Read-only aggregate and next stage: initial-host-status. '
@@ -186,6 +189,15 @@ def main(argv=None):
         parser.error('backend command required after --; use -- --help to list commands')
     try:
         path = select(args)
+        if remaining[0] in ('plan-skyline-preparation','prepare-skyline'):
+            from openstack_skyline_prepare import main as skyline_prepare
+            return skyline_prepare(path, remaining)
+        if remaining[0] in ('plan-skyline-runtime', 'install-skyline-runtime'):
+            from openstack_skyline_runtime import main as skyline_runtime
+            return skyline_runtime(path, remaining)
+        if remaining[0] in ('stage-skyline-console', 'build-skyline-console', 'stage-skyline-runtime'):
+            from openstack_skyline import main as skyline
+            return skyline(path, remaining)
         if remaining[0] in ('plan-openstack','apply-openstack'):
             from openstack_workflow import main as workflow_coordinator
             return workflow_coordinator(path,remaining)

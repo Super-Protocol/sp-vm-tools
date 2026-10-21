@@ -15,6 +15,36 @@ phases; bare-host provisioning and general upgrades are not implied.
 
 Operator guide: [`../../docs/OPENSTACK_DEPLOYMENT.md`](../../docs/OPENSTACK_DEPLOYMENT.md).
 
+`openstack_skyline.py` provides `stage-skyline-console` / `build-skyline-console`
+and `stage-skyline-runtime` (matching source-verified client wheel, isolated SDK,
+web/capacity/publisher unit rendering; no live unit changes).
+Staging delegates the complete overlay to the selected swarm-cloud bundle's
+`deployment/skyline/build_context.py`; no branding/UI implementation is copied
+into this repository. The offline build requires a checksum-approved context,
+cached immutable base and new local tag, verifies upstream runtime defaults and
+emits the image ID plus persistent Kolla overrides. It never replaces containers
+or reconfigures Kolla. Matching web/client/capacity services still require reviewed
+installation, and merely staging an override does not make an existing Kolla
+workspace consume it. See the selected bundle's Skyline README for exact commands,
+template handling and the opt-in root-delegated publication worker.
+
+`openstack_skyline_runtime.py` adds `plan-skyline-runtime` /
+`install-skyline-runtime` for fresh web/capacity/publisher services. It requires
+root-protected staged inputs, hashes the copied dependency environment, refuses
+occupied targets/loaded units/listeners/non-empty state, binds approval to source
+and machine, and journals before mutations under a global install lock. It does
+not replace an occupied API or reconfigure Kolla/Nova. On failure it stops only
+the new units from its own attempt and retains files/journal for operator review.
+Full fresh-OS installation acceptance remains separate. The selected bundle's
+Skyline README provides commands, prerequisites and explicit acceptance boundaries.
+
+`init-kolla` adopts an approved complete Skyline proxy context when deployment
+config supplies paired `kolla.skyline_console_context` and
+`skyline_console_context_sha256` with the pinned console image. The initializer
+copies the template into the new workspace's actual `node_custom_config` and
+binds it in file checksums, rather than leaving a disconnected override nearby.
+Existing sealed workspaces are not edited.
+
 `openstack_kolla_existing.py` implements `verify-kolla-existing` for an occupied
 cloud: bound config/source checks, host/cloud accounting, guarded compute-only
 NOOPs and before/after runtime continuity. Exactly one verify-only request per
@@ -105,3 +135,11 @@ Verify mode refuses every mutation, even an unexpected handler. Replacement
 requires an empty quarantined registered compute and remains quarantined until
 separate runtime/Placement/network acceptance. See guide §10.26 for requests,
 approval/recovery and the precise live-NOOP versus fixture-replacement boundary.
+
+`openstack_skyline_prepare.py` owns `plan-skyline-preparation` / `prepare-skyline`:
+one approved offline transaction stages the selected bundle's complete overlay,
+builds a new immutable local image, clones/validates the matching client runtime
+and emits deployment.yaml plus the common workflow's Skyline input. Completed
+repeats verify rather than rebuild; failures preserve evidence and refuse replay.
+No services or guests are replaced. See the guide's common workflow section for
+the exact request and the remaining enrollment/clean-install boundaries.

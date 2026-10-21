@@ -172,6 +172,19 @@ def file_set(output):
     return result
 
 
+def skyline_override(cfg, output):
+    """Adopt approved console nginx into a new workspace, never mutate an old one."""
+    selected = cfg['kolla'].get('skyline_console_context')
+    if selected is None: return
+    from openstack_skyline import context
+    root = Path(selected)
+    expected = cfg['kolla']['skyline_console_context_sha256']
+    context(root, expected)
+    private_file(Path(output)/'kolla/config/skyline/nginx.conf',
+                 read(root/'kolla-custom/skyline/nginx.conf'))
+    private_file(Path(output)/'skyline-console-context.json', read(root/'console-context.json'))
+
+
 def init(args,backend):
     if not args.ack_new_cloud:
         raise ValueError('explicit new-cloud acknowledgement required; never use for add-compute')
@@ -198,6 +211,7 @@ def init(args,backend):
             elif name.startswith('config/'):
                 private_file(output/'kolla'/name,content)
         globals_=yaml.safe_load(files['globals.yml'])
+        skyline_override(cfg, output)
         if globals_.get('enable_nova_libvirt_container') is not False:
             raise ValueError('host libvirt must remain external')
         globals_.update(node_custom_config=str(output/'kolla/config'),

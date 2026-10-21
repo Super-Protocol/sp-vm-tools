@@ -19,6 +19,7 @@ from openstack_container_engine import digest, file_hash, write
 import openstack_kolla_existing as existing
 import openstack_kolla_workspace as workspace
 import openstack_kolla_workflow as fresh
+import openstack_workflow_skyline as skyline
 
 
 def request(filename):
@@ -30,8 +31,11 @@ def request(filename):
         'add-compute':{'controller','controller_python','openrc','host','enrollment_request'}}
     if (not isinstance(value,dict) or type(value.get('schema_version')) is not int
             or value['schema_version']!=1 or value.get('mode') not in modes
-            or set(value)!=common|modes[value['mode']]):
+            or set(value)-{'skyline'}!=common|modes[value['mode']]):
         raise ValueError('exact explicit workflow request required')
+    if 'skyline' in value:
+        literal_path(value['skyline'])
+        skyline.specification(value['skyline'], value['mode'])
     paths=['config','workspace','known_hosts']
     if value['mode']=='fresh':
         if any(type(value[k]) is not bool for k in modes['fresh']) or not value['ack_new_cloud']:
@@ -77,6 +81,11 @@ def fingerprint(value,path,module):
     receipt=workspace.check(value['workspace'])
     if receipt['config_sha256']!=digest(cfg):raise ValueError('workspace/config mismatch')
     paths=[value['config'],value['known_hosts']]
+    if 'skyline' in value:
+        paths.append(value['skyline'])
+        if value['mode']=='fresh':
+            spec=skyline.specification(value['skyline'],'fresh')
+            paths.append(str(Path(spec['runtime_dir'])/'runtime-stage.json'))
     if value['mode']=='existing':
         for filename in value['compute_requests']:
             paths.extend((filename,json.loads(read(filename))['profile']))
@@ -84,6 +93,8 @@ def fingerprint(value,path,module):
         paths.append(value['enrollment_request'])
     source_root=Path(path).parent.parent
     sources=list(Path(path).parent.glob('*.py'))
+    sources.extend(p for p in (Path(path).parent/'skyline').rglob('*')
+                   if p.is_file() and '__pycache__' not in p.parts)
     for package_root in (source_root,source_root/'nova-spvm'):
         for package in ('nova_spvm','openstack_spvm'):
             sources.extend((package_root/package).rglob('*.py'))
@@ -125,8 +136,15 @@ def plan_operation(value,path,module,output):
     if value['mode']=='existing':
         report=existing.execute(verify_args(value,output/'existing-plan-check'),path)
         if report['status']!='EXISTING_KOLLA_SCOPED_VERIFIED':raise ValueError('existing verification blocked')
-        return {'kind':'existing-noop','changes':False,'report_sha256':report['report_sha256']}
+        result={'kind':'existing-noop','changes':False,'report_sha256':report['report_sha256']}
+        if 'skyline' in value:result['skyline']=skyline.verify(value,path,module)
+        return result
     if value['mode']=='fresh':
+        if 'skyline' in value:
+            # Validate the exact staged files, environment, vacant targets and
+            # existing publication prerequisites without starting services.
+            spec=skyline.specification(value['skyline'],'fresh')
+            skyline.runtime.inputs(path,argparse.Namespace(**spec))
         result=fresh.execute(fresh_args(value,output/'fresh','plan-kolla-install'),path,module)
         if result.get('blockers'):raise ValueError('fresh host preparation required; inspect inner plan')
         return {'kind':'fresh-install','changes':True,'plan_sha256':result['plan_sha256']}
@@ -145,11 +163,21 @@ def apply_operation(value,path,module,output,operation, *, resume=False):
     if operation['kind']=='existing-noop':
         report=existing.execute(verify_args(value,output/('existing-apply-'+uuid.uuid4().hex)),path)
         if report['status']!='EXISTING_KOLLA_SCOPED_VERIFIED':raise ValueError('fresh existing verification blocked')
-        return {'status':'OPENSTACK_NOOP_COMPLETE','verification_sha256':report['report_sha256']}
+        result={'status':'OPENSTACK_NOOP_COMPLETE','verification_sha256':report['report_sha256']}
+        if 'skyline' in value:result['skyline']=skyline.verify(value,path,module)
+        return result
     if operation['kind']=='fresh-install':
+        if 'skyline' in value:
+            spec=skyline.specification(value['skyline'],'fresh')
+            skyline.runtime.inputs(path,argparse.Namespace(**spec))
         result=fresh.execute(fresh_args(value,output/'fresh','run-kolla-install',operation['plan_sha256'],resume),path,module)
         if result['status']!='KOLLA_DEPLOYED_NOT_SPVM_ENROLLED':raise ValueError('fresh install incomplete')
-        return {'status':'OPENSTACK_INSTALLED_NOT_SPVM_ENROLLED','completed':result['completed']}
+        answer={'status':'OPENSTACK_INSTALLED_NOT_SPVM_ENROLLED','completed':result['completed']}
+        if 'skyline' in value:
+            answer['skyline']=skyline.install(value,path,output/'skyline-runtime')
+            if answer['skyline']['status']!='FRESH_SKYLINE_RUNTIME_INSTALLED':
+                raise ValueError('Skyline runtime installation incomplete')
+        return answer
     backend=compute_backend(value,module,output/'apply-compute-observations',initial=operation['kind']=='compute-enrollment')
     plan=json.loads(read(output/'compute-plan.json'))
     result=importlib.import_module('compute_transaction').execute(plan,operation['plan_sha256'],output/'compute-transaction',backend)

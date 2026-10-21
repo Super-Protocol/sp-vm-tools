@@ -3284,53 +3284,49 @@ The scenarios do not certify generic Kolla reconfigure idempotency or clean-OS
 installation; fresh and mutating compute paths still require separate live
 acceptance on suitable empty hosts.
 
-### 10.29. Skyline pre-login domain compatibility
+### 10.29. Skyline customization artifact
 
-Some Skyline 9.0.0 console assets call the authenticated `/contrib/domains` API
-before login. With an API that requires a session on that route, the domain
-selector displays `No data` even though Keystone and credentials are correct.
-Do not remove authentication from administrative domain enumeration.
+Skyline itself is supplied by the pinned Kolla console image. All SPVM-specific
+UI pages, branding, login compatibility patches and service examples belong to
+**swarm-cloud**, alongside its Nova driver and authenticated web API.
 
-The offline `scripts/openstack/skyline_login_compat.py` helper changes only the
-login store to read the public `/api/openstack/skyline/api/v1/config` endpoint
-and use its configured `default_domain`. It validates HTTP/config responses,
-requires an approved source checksum and exactly one recognized old call site,
-and refuses unknown/already-patched assets. It never changes the API or guests.
+Use `deployment/skyline/` from the verified OpenStack driver bundle selected in
+section 8. The bundle manifest binds these files, including the logo and web
+assets, to source SHA256 hashes. Do not copy patches from an unrelated installer
+checkout or mix UI and API versions.
 
-The observed asset is `auth.bundle.1663167892.js`, original SHA256
-`ef2c124f46c9cfc2058adecddad203b1ec1df76ca62ce13f683eb3a0f70d8189`;
-patched SHA256 `543c714c8526a7efaff660afe8ff4b383aa2ee54a2f3b4851dea491f13416662`.
-Extract it from the approved console image into a private workspace, then run:
+The detailed build, service, capacity-admission and recovery instructions are in
+`deployment/skyline/README.md` inside that same artifact. Repository reference:
+[SPVM Skyline extension](https://github.com/Super-Protocol/swarm-cloud/blob/feature/spvm-bare-metal-cloud/examples/test-cluster/bare-metal-spvm/deployment/skyline/README.md).
+That branch link is for navigation, not an immutable deployment input; use the
+documentation shipped with the approved archive.
 
-```bash
-python3 scripts/openstack/skyline_login_compat.py \
-  --asset /srv/private/original-auth.js \
-  --sha256 ef2c124f46c9cfc2058adecddad203b1ec1df76ca62ce13f683eb3a0f70d8189 \
-  --output /srv/private/console-context/auth.bundle.1663167892.js
-```
+The installer remains responsible for artifact resolution, derivative-image
+deployment, service/nginx configuration and reviewed Kolla overrides. It does
+not maintain another implementation of the frontend or patch helpers. Existing
+releases such as 0.2.22 predate the Skyline extension; do not assume those archives
+include it.
 
-Build a derivative of the same pinned, already-cached console base. Copy only
-that asset to `/var/lib/kolla/venv/lib/python3/site-packages/skyline_console/static/`,
-preserving all runtime defaults. Regenerate any compressed copies; never serve
-stale `.gz`/`.br` alongside the patched asset. Use `--pull=false --network=none`,
-record the result's exact image ID, and retain the old image/container for rollback.
-Browser clients must hard-refresh cached JS after replacement.
+Pin the derivative console image and its exact image ID with the paired
+`kolla.skyline_console_image` / `kolla.skyline_console_image_id` fields in a
+supported backend. Preserve the nginx proxy customization in Kolla's approved
+custom configuration. Regenerate reviewed inputs instead of editing immutable
+workspaces. Deploying the console must not restart Nova, libvirt or SPVM guests.
 
-The updated backend accepts paired `kolla.skyline_console_image` and
-`kolla.skyline_console_image_id` fields. It rejects incomplete/floating values
-and renders `skyline_console_image_full` without changing the compute image.
-These optional fields require the updated backend; the previously published
-0.2.22 bundle predates them. Do not edit immutable existing workspaces in place;
-regenerate reviewed inputs when adopting this override for a new deployment.
-For an existing deployment retain a private Kolla override with
-`skyline_console_image_full` so a later planned reconfiguration does not restore
-the incompatible image. Merely saving that override does not automatically
-reconfigure the running stack.
+### 10.30. Super image category and logo
 
-Acceptance: public config/regions succeed, anonymous administrative domains
-remain 401, login/profile succeed, and Nova instances are accessible through the
-console proxy. A container health check alone does not prove the login form works.
-Change only the console for this workaround; no Nova/libvirt/guest restart is needed.
+See the matching bundle's `deployment/skyline/README.md`, **Super image category
+and logo** section. The unchanged Glance marker is `os_distro=super-spvm`.
+The logo is bundled, not fetched from an external service at runtime.
+
+### 10.31. Swarm pages and join admission
+
+See the matching bundle's `deployment/skyline/README.md`, **Add a join node from
+Skyline** section, for the authenticated API, service examples, toolbar links,
+minimum-three-ready-node availability display, native resource observations and
+guarded failed-tail recovery. Keep credentials and journals private; do not expose
+the loopback API or grant the web service Docker/DB access. Capacity admission is
+advisory, not a Nova reservation.
 
 ## 11. Add a compute to an existing cloud
 
@@ -3514,3 +3510,234 @@ selected names; do not replay PATCH blindly or claim unrelated records were
 verified unchanged without the original complete observation. The lab retirement
 helper now saves both observations; its older selected-only backups cannot prove
 that retrospectively.
+
+## Complete Skyline overlay and automatic Swarm UI publication
+
+The updated installer exposes five explicit commands for the matching Skyline
+extension from the selected swarm-cloud source/bundle:
+
+1. `stage-skyline-console`: compose login, Super image/logo, Super Protocol
+   flavors and all Swarm forms/navigation from reviewed original assets; render
+   the persistent Kolla nginx proxy override in the same output.
+2. `build-skyline-console`: build against an already cached repository digest,
+   offline, without overwriting a tag; preserve upstream runtime defaults and
+   record the exact image ID plus Kolla/backend overrides.
+3. `stage-skyline-runtime`: verify the wheel matches the selected bundle, clone
+   an approved dependency SDK without modifying it, install the client offline,
+   render matching web/capacity/publisher units and validate imports as the
+   non-root service user. Bind dependency bytes, ownership, modes and symlinks.
+4. `plan-skyline-runtime`: approve a fresh web runtime's exact inputs and host.
+5. `install-skyline-runtime`: install and activate only those approved fresh
+   services. Existing targets/loaded units/listeners/non-empty state are refused,
+   never silently stopped or overwritten. Mutations are journaled under a host
+   install lock; uncertain attempts retain evidence and are not blindly replayed.
+
+Full commands, schemas and recovery instructions live in the selected driver's
+`deployment/skyline/README.md`. This keeps UI implementation/documentation with
+the driver, rather than duplicating its assets in sp-vm-tools. These commands
+require the matching updated sources; the older published 0.2.22 archive does not
+gain them merely because a local checkout has changed. Adopt the complete image
+and custom nginx into an approved Kolla workspace; staging/building alone does
+not reconfigure the console. Fresh service installation is not an upgrade path
+for an occupied lab or proof of clean-OS acceptance.
+
+The console build's `backend-image-fragment.json` now includes the image/tag ID
+and paired `kolla.skyline_console_context` / `skyline_console_context_sha256`.
+Include these in deployment.yaml before render/`init-kolla`. Initialization
+validates the context and adopts its nginx override into the new workspace's
+actual `node_custom_config` tree, including it in file checksums. There is no
+manual proxy-template copy and no mutation of a previously sealed workspace.
+
+Use `repository@sha256:...`, not Docker's bare image configuration ID, as the
+Dockerfile base. BuildKit can interpret `sha256:<image-ID>` as a repository name
+and attempt a registry lookup even with `--pull=false`; the renderer rejects it.
+When cloning an existing private venv as root, preserve non-root read/traversal
+through the dedicated primary group. Never make config/secrets world-readable to
+work around a service permission error.
+
+Optional automatic publication uses a separate root-owned timer worker, not
+root/Docker privileges on the web API. The administrator delegates one project
+and DNS suffix. It exports completed creations as a non-root publisher, validates
+exact paths/domains, and reuses the existing authoritative Nova/Neutron/Barbican
+enrollment, HTTP Host/TLS SNI reconciliers and public UI checker. Guest Swarm
+services remain responsible for cloud DNS/certificates. The shared template
+`gateway_hostname` must already resolve exclusively to the approved public
+ingress IPv4; it is checked, not overwritten automatically. Readable sanitized
+reports live outside the private `/var/lib/spvm` tree. Never loosen that tree.
+
+With publication enabled, the UI operation advances from instance readiness
+through `WAITING_PUBLICATION`, `WAITING_GATEWAY`, `VERIFYING_PUBLIC_UI` and finally
+`UI_READY` with a URL. Three Nova ACTIVE records alone are insufficient. Failure
+retains guests and requires publication review; no bootstrap restart or cluster
+recreation is attempted. The default without delegation remains explicit
+`OPERATOR_REQUIRED`. Inspect old completed operations before enabling a worker:
+delegation applies to every eligible creation in its configured state directory.
+
+On 2026-10-21, the existing two-host lab passed a separate CPU-only three-node
+release-cloud creation through the authenticated Skyline API and automatic host
+publication. Its public UI/config/GraphQL checks and those of the existing cloud
+passed, without restarting existing guests. Complete console build and matching
+runtime staging were also exercised against real pinned inputs. Fresh-only
+service apply is transaction-tested with mocked systemd, not accepted on a reset
+host; clean-OS deployment, HA and real-browser acceptance remain separate.
+
+### Common workflow: optional Skyline completion and repeat verification
+
+#### Automatic Skyline image and runtime preparation
+
+Replace individual `stage-skyline-console`, `build-skyline-console` and
+`stage-skyline-runtime` calls with one approved preparation transaction. Run it
+as root on the controller after Docker/SDK setup and before initializing a new
+Kolla workspace. The command never bootstraps CC hardware, installs packages,
+reconfigures a running cloud or launches a guest. Its private request contains
+exactly the following fields:
+
+```json
+{
+  "schema_version": 1,
+  "deployment_config": "/etc/spvm-install/deployment.yaml",
+  "console": {
+    "static_dir": "/var/lib/spvm-inputs/upstream-static",
+    "nginx_template": "/var/lib/spvm-inputs/nginx.conf.j2",
+    "nginx_sha256": "<approved Kolla template SHA256>",
+    "base_image": "quay.io/openstack.kolla/skyline-console@sha256:<approved digest>",
+    "tag": "spvm/skyline-console:deployment-001"
+  },
+  "runtime": {
+    "sdk_venv": "/opt/spvm/sdk-venv",
+    "web_user": "spvm-web",
+    "web_config": "/etc/spvm-install/web-config.json",
+    "wheel": "/var/lib/spvm-inputs/driver/wheels/nova_spvm-<version>-py3-none-any.whl",
+    "wheel_sha256": "<approved wheel SHA256>",
+    "publication_policy": "/etc/spvm-install/web-publication-policy.json"
+  }
+}
+```
+
+The exact Linux amd64 upstream repository digest must already be cached. Supply
+its original unpatched static files, the pinned Kolla nginx template, a matching
+wheel from the selected release's wheels/ directory and a provisioned SDK venv.
+Even a same-version wheel is rejected if its code differs from the selected
+driver sources. Use `null` for publication_policy only if web-config disables
+publication. The non-root service account, trusted API CA, provider/enrollment
+policy and web config must already exist; they are not guessed defaults.
+
+```sh
+sudo ./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+  plan-skyline-preparation --request /etc/spvm-install/skyline-preparation.json \
+  --output /var/lib/spvm-install/skyline-001
+# Review preparation-plan.json; approve its exact plan_sha256 within 15 minutes:
+sudo ./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+  prepare-skyline --request /etc/spvm-install/skyline-preparation.json \
+  --output /var/lib/spvm-install/skyline-001 \
+  --plan-sha256 '<approved SHA256>' --allow-changes
+```
+
+The parent /var/lib/spvm-install must exist, be root-owned/protected from non-root
+writes, and permit traversal by the web user. The transaction is private. Its
+sibling skyline-001-runtime is created with service-group read/traversal by the
+runtime stager; neither directory may already exist. Secrets are not made
+world-readable. Non-root import/config checks use isolated state, not live state.
+
+Preparation emits deployment.yaml with pinned image/context merged into the
+original settings, skyline.json with runtime path/receipt SHA, and preparation.json
+with provenance. Use the generated deployment.yaml for render/init-kolla and
+point the common fresh workflow's skyline field to the generated skyline.json.
+Rendering/workspace initialization and SPVM resource/network/publication
+enrollment retain their separate boundaries; this replaces manual image/runtime
+assembly, not hardware or all host preparation.
+
+Repeat the approved prepare-skyline command without --allow-changes to verify
+outputs, overlay, runtime files/venv and image ID. It returns
+SKYLINE_PREPARATION_VERIFIED_NOOP, with no rebuild or reinstall. Changed inputs,
+source drift and occupied tags are refused. Interrupted preparations retain
+NEEDS_REVIEW and their private logs: no blind resume, overwrite or evidence
+deletion. Review before explicitly choosing a new transaction/tag.
+
+On 2026-10-21 this combined path passed real offline build/runtime staging on
+.247 plus two verified repeats, with the protected host/container snapshot
+unchanged. Evidence: /var/lib/spvm-skyline-preparation-20261021-01/accepted.json.
+The new image was not activated over the running console; this is not clean-OS
+or authenticated visual-browser acceptance.
+
+#### Common install and existing-state verification
+
+Add an optional `skyline` key to the JSON request passed to `plan-openstack` /
+`apply-openstack`. Its value is a canonical absolute path to a private JSON
+specification. Omitting it retains the older scoped OpenStack-only verification;
+that older result must not be described as GUI acceptance. `add-compute` rejects
+this option: controller GUI changes are not compute enrollment.
+
+For `mode: fresh`, the Skyline specification contains exactly:
+
+```json
+{
+  "runtime_dir": "/var/lib/spvm-install/skyline-runtime",
+  "runtime_sha256": "<SHA256 of runtime-stage.json>"
+}
+```
+
+Prepare the complete console image/context, merge the build's image fragment
+into deployment.yaml and initialize its new immutable Kolla workspace first, as
+described above. Stage the matching wheel/runtime using `stage-skyline-runtime`.
+The common plan validates the staged runtime, vacant systemd targets, non-root
+account, empty private state and publication prerequisites. Apply rechecks them,
+deploys Kolla, then installs the staged runtime under its own exclusive lock and
+write-ahead journal. The parent approval binds the specification, receipt and
+installer/backend sources, including Skyline helpers and assets. The delegated
+runtime approval is generated immediately before installation so a long Kolla
+deployment does not consume its 15-minute TTL.
+
+This joins the existing phases; it is not automatic input discovery or a new
+upgrade/recovery mechanism. The publication enrollment/helpers/policy must already
+be prepared when publication is enabled. Missing prerequisites block planning;
+the workflow does not silently omit them. It still reports
+`OPENSTACK_INSTALLED_NOT_SPVM_ENROLLED`, with a separate Skyline runtime result:
+installing a web API does not establish compute/resource/network enrollment.
+Never label this as verified end-to-end clean-OS installation. After an ambiguous
+failure, inspect both parent and runtime journals; do not replay Kolla or delete
+the journals to bypass occupied-target protection.
+
+For `mode: existing`, the specification contains exactly these fields:
+
+```json
+{
+  "origin": "https://<trusted-controller-VIP>:9999",
+  "manifest": "/var/lib/spvm-install/overlay/console-context.json",
+  "ca_file": "/etc/ssl/certs/ca-certificates.crt",
+  "image_id": "sha256:<approved complete console image ID>",
+  "files_sha256": {
+    "/var/lib/spvm-install/overlay/console-context.json": "<approved manifest SHA256>",
+    "/etc/kolla/skyline-console/nginx.conf": "<approved live nginx config SHA256>",
+    "/etc/systemd/system/spvm-web-nodes.service": "<approved unit SHA256>"
+  },
+  "units": ["spvm-web-nodes.service", "spvm-web-capacity.timer", "spvm-web-publish.timer"]
+}
+```
+
+These are controller paths. Pin all relevant installed units, helpers, API config
+and publication policy in `files_sha256`; the manifest must always be pinned.
+Use deployment receipts/reviewed baselines, not an automatically trusted checksum
+of whatever happens to be live. No file contents or credentials are reported.
+The configured controller is reached through the normal strict SSH transport.
+Verification requires the exact healthy console image, active/enabled runtime
+units, all pinned files, nine HTTPS identity/gzip/logo probes, and HTTP 401 from
+both the proxied and loopback cluster API. Redirects, stale gzip and a successful
+HTML fallback are failures. Container identities/start times, QEMU processes and
+service PIDs must remain unchanged during each check. Completed existing-mode
+apply re-runs these checks on every invocation instead of replaying installation.
+This is static/service acceptance, not proof of authenticated browser interaction
+or every publication operation. Keep the separate authenticated API/public UI
+checks in the acceptance procedure.
+
+Lab acceptance on 2026-10-21 used a private copy of the updated coordinator and
+read-only backend helpers against the existing .247 controller and both .245 /
+.247 computes. One plan and two applies completed with `OPENSTACK_NOOP_COMPLETE`
+and `SKYLINE_INSTALLATION_VERIFIED`, nine static browser probes per check and an
+identical console/container/QEMU snapshot across applies. The approved complete
+console image was
+`sha256:7b7c0b11df6a4f9304719d2f4484977c78e919aed0414156d7490d4b56847ddc`.
+Private receipts are under
+`/home/petr/kolla-spvm/clean-redeploy-20261018-01/installer-gui-workflow-20261021-01`.
+This does not upgrade the previously published archive, deploy a reset host or
+assert authenticated visual-browser acceptance.
