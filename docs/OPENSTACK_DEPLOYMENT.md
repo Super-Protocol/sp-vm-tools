@@ -30,7 +30,9 @@ path in the common coordinator. See
 [the platform workflow](OPENSTACK_PLATFORM_WORKFLOW.md) for inputs and the
 explicit prepared-host/artifact boundary and the latest uninterrupted results.
 The selected bundle must advertise `separate-web-ingress-identities` (introduced
-in 0.2.23). The latest run used unmodified published files and finished with a
+in 0.2.23) and `private-publication-input-handoff` (required by the current
+installer; select a newly built matching bundle). The historical run below used
+unmodified published files and finished with a
 `COMPLETE` parent journal and `PLATFORM_READY_NO_SWARM_CREATED` result.
 
 Candidate pins (tested on the existing two-host lab; **not** clean-OS acceptance):
@@ -552,11 +554,15 @@ not merely a port change. The pinned variable for that mode is
 `haproxy_single_external_frontend_port`.
 
 Do not relax `/etc/kolla` permissions just to make a publisher read credentials.
-Use an explicitly selected, root-protected operator OpenRC path whose ancestors
-the non-root operator can traverse. The lab uses `/etc/spvm/auth` root:operator
-0750 and `admin-openrc.sh` root:operator 0640. Pass that path consistently to
-accounting/activation and ingress policy. Never print the file or source it with
-shell tracing enabled. Controller-originated SSH probes also require both host
+The current installer keeps administrative OpenRC at `/etc/spvm/auth` root:root
+0750, with `admin-openrc.sh` root:root 0640. Accounting/activation escalate before
+sourcing it; the SSH account is transport only. Ingress uses the separate
+`spvm-ingress` non-login system account and `/etc/spvm/ingress-auth` directory,
+root:spvm-ingress 0750 with a 0640 OpenRC. The web account cannot read either.
+Do not reuse the historical lab's root:SSH-user auth ownership. See the
+[service-account workflow](OPENSTACK_PLATFORM_WORKFLOW.md) for isolation and
+private publication handoff. Never print an OpenRC or source it with shell
+tracing enabled. Controller-originated SSH probes also require both host
 keys in the controller's trusted known-hosts file; a local operator's trust does
 not automatically become controller trust. Copy only independently verified
 public host keys, never disable StrictHostKeyChecking or use unverified TOFU.

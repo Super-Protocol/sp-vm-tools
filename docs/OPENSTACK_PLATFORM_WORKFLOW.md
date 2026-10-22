@@ -123,13 +123,24 @@ its checksum against the host baseline and select that copy as
 `base_haproxy_config`. Do not point this field at `/etc/haproxy/haproxy.cfg`,
 because ingress installation intentionally changes that live file.
 
-The `operator_user` must match the controller SSH user. Its private auth file is
-not readable by the separate `web_user`; privileged ingress delegation uses the
-operator account, while the web API uses only the logged-in user's token.
-If the selected web account is absent, the reviewed plan declares creation of a
-dedicated system account/group with no login shell/home. An explicitly selected
-existing distinct account may be reused; shared operator UID/group access is
-refused. No existing user's groups, home or shell are modified.
+The `operator_user` must match the controller SSH user; it identifies transport
+only, never a daemon or credential reader. Administrative API commands escalate
+to root **before** sourcing `/etc/spvm/auth/admin-openrc.sh` (root:root, 0640,
+parent 0750). Ingress runs as the fixed `spvm-ingress` system account and reads
+its separate root-owned OpenRC in `/etc/spvm/ingress-auth/` (root:spvm-ingress,
+0640, parent 0750). This separates Linux identities; it does not silently create
+a different Keystone user or change the enrolled project's API authorization.
+The web API uses only the logged-in user's token and cannot read either OpenRC.
+
+The reviewed plan creates missing `web_user` and `spvm-ingress` system accounts
+with dedicated groups, `/nonexistent` homes and `/usr/sbin/nologin` shells.
+An existing ingress account must have that non-login configuration, no extra
+groups, and no shared UID/group access with the SSH or web accounts. Existing
+user groups, homes and shells are never modified to force adoption. No password
+or SSH login is provisioned for service accounts. Older bundles without the
+`private-publication-input-handoff` capability are rejected before installation:
+the root publisher must broker private spec/enrollment copies for ingress,
+rather than sharing web-state directory permissions.
 
 Keep the provider directory private. Its `base_domain` supplies the allowed DNS
 zone and its `gateway_hostname` supplies the shared publication gateway. The

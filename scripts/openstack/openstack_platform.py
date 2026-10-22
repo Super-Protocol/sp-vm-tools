@@ -26,6 +26,7 @@ from openstack_compute_identity import identities,verify_rule
 FIELDS={'schema_version','controller','sdk_venv','network','profiles','provider_directory',
         'template_name','web_user','operator_user','runtime_dir','state_dir','origins','host_sources',
         'ingress_address','base_haproxy_config','quota_from_host_budgets','console_manifest'}
+INGRESS_USER='spvm-ingress'
 
 
 def account_policy(value):
@@ -33,7 +34,6 @@ def account_policy(value):
     if not isinstance(value['web_user'],str) or not re.fullmatch('[a-z_][a-z0-9_-]{0,30}',value['web_user']):
         raise ValueError('explicit non-root service account name required')
     operator=pwd.getpwnam(value['operator_user'])
-    if operator.pw_uid==0:raise ValueError('non-root operator required')
     try:web=pwd.getpwnam(value['web_user'])
     except KeyError:
         try:grp.getgrnam(value['web_user'])
@@ -45,22 +45,52 @@ def account_policy(value):
     return {'action':'REUSE_DISTINCT_ACCOUNT','name':value['web_user'],'uid':web.pw_uid,'gid':web.pw_gid}
 
 
+def ingress_account_policy(value):
+    """A fixed non-login identity, never the administrator's SSH account."""
+    if INGRESS_USER in (value['operator_user'],value['web_user']):
+        raise ValueError('ingress, web and SSH identities must be distinct')
+    try:account=pwd.getpwnam(INGRESS_USER)
+    except KeyError:
+        try:grp.getgrnam(INGRESS_USER)
+        except KeyError:return {'action':'CREATE_SYSTEM_ACCOUNT','name':INGRESS_USER}
+        raise ValueError('orphan ingress group requires review')
+    if (account.pw_uid==0 or account.pw_shell not in ('/usr/sbin/nologin','/sbin/nologin')
+            or account.pw_dir!='/nonexistent'):
+        raise ValueError('dedicated non-login ingress system account required')
+    ingress_groups=set(os.getgrouplist(INGRESS_USER,account.pw_gid))
+    if ingress_groups!={account.pw_gid}:raise ValueError('ingress account has unexpected supplemental groups')
+    for name in (value['operator_user'],value['web_user']):
+        try:other=pwd.getpwnam(name)
+        except KeyError:continue
+        if (other.pw_uid==account.pw_uid or other.pw_gid==account.pw_gid
+                or account.pw_gid in os.getgrouplist(name,other.pw_gid)):
+            raise ValueError('ingress credentials must not be accessible to SSH/web identities')
+    return {'action':'REUSE_DISTINCT_ACCOUNT','name':INGRESS_USER,'uid':account.pw_uid,'gid':account.pw_gid}
+
+
 def prepare_account(value,output):
-    journal=Path(output)/'web-account.json'
-    if journal.exists():raise ValueError('previous account transaction needs review')
-    wanted=account_policy(value)
-    if wanted['action']=='REUSE_DISTINCT_ACCOUNT':return wanted
-    write(journal,{'status':'CREATING_SYSTEM_ACCOUNT','intent':wanted})
-    p=subprocess.run(['useradd','--system','--user-group','--no-create-home','--home-dir','/nonexistent',
-                      '--shell','/usr/sbin/nologin',wanted['name']],capture_output=True,timeout=30)
-    if p.returncode:
-        write(journal,{'status':'NEEDS_REVIEW','intent':wanted});raise ValueError('service account creation failed; no adoption/retry')
-    result=account_policy(value)
-    write(journal,{'status':'SERVICE_ACCOUNT_READY','account':result});return result
+    result={}
+    for role,policy in (('web',account_policy),('ingress',ingress_account_policy)):
+        journal=Path(output)/(role+'-account.json')
+        if journal.exists():raise ValueError('previous account transaction needs review')
+        wanted=policy(value)
+        if wanted['action']=='REUSE_DISTINCT_ACCOUNT':result[role]=wanted;continue
+        write(journal,{'status':'CREATING_SYSTEM_ACCOUNT','intent':wanted})
+        p=subprocess.run(['useradd','--system','--user-group','--no-create-home','--home-dir','/nonexistent',
+                          '--shell','/usr/sbin/nologin',wanted['name']],capture_output=True,timeout=30)
+        if p.returncode:
+            write(journal,{'status':'NEEDS_REVIEW','intent':wanted});raise ValueError('service account creation failed; no adoption/retry')
+        result[role]=policy(value)
+        write(journal,{'status':'SERVICE_ACCOUNT_READY','account':result[role]})
+    return result
 
 
 def install_operator_auth(authdir, auth, operator_group, region, ca):
-    """Keep the operator auth private but traversable under installer umask 077."""
+    """Install root-owned auth readable only by its explicitly selected group.
+
+    Administrative auth uses gid 0; ingress auth uses the dedicated service gid.
+    The SSH user's group must never be passed here.
+    """
     authdir=Path(authdir)
     authdir.mkdir(mode=0o750,exist_ok=False)
     os.chown(authdir,0,operator_group);authdir.chmod(0o750)
@@ -103,6 +133,7 @@ def specification(filename):
     import re
     if not re.fullmatch('[a-z][a-z0-9-]{0,62}',value['template_name']):raise ValueError('DNS-safe template name required')
     account_policy(value)
+    ingress_account_policy(value)
     return value
 
 
@@ -141,6 +172,8 @@ def require_web_separation(path):
     value=json.loads(read(manifest))
     if 'separate-web-ingress-identities' not in value.get('capabilities',[]):
         raise ValueError('selected driver bundle must support separate-web-ingress-identities; build/select an updated release before fresh deployment')
+    if 'private-publication-input-handoff' not in value.get('capabilities',[]):
+        raise ValueError('selected driver bundle must support private-publication-input-handoff; select an updated release')
 
 
 def initial_probe_request(wanted, value, host):
@@ -211,7 +244,7 @@ def preflight(value,path,backend):
     if not cfg['kolla'].get('skyline_console_image_id'):raise ValueError('pinned custom console image required')
     if Path(spec['runtime_dir']).exists() or Path(spec['state_dir']).exists():
         raise ValueError('fresh web targets occupied; no adoption/overwrite')
-    for name in ('/etc/spvm/auth','/etc/spvm/web-project-enrollment.json','/etc/spvm/web-publication-policy.json','/etc/spvm/ingress-policy.json'):
+    for name in ('/etc/spvm/auth','/etc/spvm/ingress-auth','/var/lib/spvm-ingress-inputs','/etc/spvm/web-project-enrollment.json','/etc/spvm/web-publication-policy.json','/etc/spvm/ingress-policy.json'):
         if Path(name).exists() or Path(name).is_symlink():raise ValueError('occupied platform target before initial deploy')
     for name in ('spvm-web-nodes.service','spvm-web-capacity.service','spvm-web-capacity.timer','spvm-web-publish.service','spvm-web-publish.timer'):
         p=subprocess.run(['systemctl','show',name,'--property=LoadState','--value'],capture_output=True,text=True,timeout=10)
@@ -226,7 +259,8 @@ def preflight(value,path,backend):
         raise ValueError('selected ingress address is not assigned to controller')
     return {'status':'PLATFORM_COMPLETION_INTENT_VALIDATED','native_identities':identities(cfg,audits),
             'input_sha256':input_files(value['platform']),'sdk_sha256':sdk_digest(value['platform']),
-            'web_account':account_policy(spec),'preparation':preparation_intent,'guests_launched':False}
+            'web_account':account_policy(spec),'ingress_account':ingress_account_policy(spec),
+            'preparation':preparation_intent,'guests_launched':False}
 
 
 def preparation_spec(value,backend,audits):
@@ -341,10 +375,12 @@ def post_install(value,path,backend,output,core):
         services=list(connection.compute.services(binary='nova-compute'))
         if len(services)!=len(binding['hosts']) or any(s.state!='up' for s in services):raise ValueError('computes not healthy')
         group=pwd.getpwnam(spec['web_user']).pw_gid
-        operator_group=pwd.getpwnam(spec['operator_user']).pw_gid
+        ingress_group=pwd.getpwnam(INGRESS_USER).pw_gid
         authdir=Path('/etc/spvm/auth')
+        ingress_authdir=Path('/etc/spvm/ingress-auth')
         def private_operator_auth():
-            install_operator_auth(authdir,auth,operator_group,binding['bootstrap_runtime']['region_name'],ca)
+            install_operator_auth(authdir,auth,0,binding['bootstrap_runtime']['region_name'],ca)
+            install_operator_auth(ingress_authdir,auth,ingress_group,binding['bootstrap_runtime']['region_name'],ca)
         phase('operator-auth',private_operator_auth)
         def shared_network():
             request={**json.loads(read(spec['network'])),'project_id':project};request_path=output/'network-request.json';write(request_path,request)
@@ -394,7 +430,7 @@ def post_install(value,path,backend,output,core):
             base=Path(spec['base_haproxy_config'])
             request={'schema_version':1,'machine_sha256':hashlib.sha256(Path('/etc/machine-id').read_bytes().strip()).hexdigest(),
                 'bind_address':spec['ingress_address'],'allowed_cidr':json.loads(read(spec['network']))['guest']['cidr'],
-                'base_config_sha256':file_hash(base),'publisher':{'run_as':spec['operator_user'],'auth_script':str(authdir/'admin-openrc.sh'),
+                'base_config_sha256':file_hash(base),'publisher':{'run_as':INGRESS_USER,'auth_script':str(ingress_authdir/'admin-openrc.sh'),
                     'auth_args':[],'ca_bundle':ca,'openstack_cli':str(Path(spec['sdk_venv'])/'bin/openstack')}}
             request_path=output/'ingress-request.json';write(request_path,request)
             staged=ingress.stage(R(request=str(request_path),base_config=str(base),output=str(output/'ingress-package')),path)
