@@ -5,32 +5,36 @@ specification. It runs existing owned phases in order and resolves project,
 user, network and security-group IDs from the **new** cloud. It never launches
 a Swarm, resumes encrypted guest disks, signs a release or reboots hardware.
 
-Live checkpoint (2026-10-21): after another scoped cleanup, the combined path
-completed owned hostname/network preparation, native Kolla prechecks/deploy/
-post-deploy, shared Neutron topology, profiles, Barbican ACL probe and runtime
-request staging. It then refused operator accounting because the auth directory
-was not traversable by the operator. The source permission fixes described below
-passed regression tests. Reviewed, separate child transactions completed both
-compute enrollments, quotas, ingress, template import and the web runtime.
+Live checkpoint (2026-10-21): after another scoped cleanup of both prepared hosts,
+the common workflow completed **uninterrupted**, without child recovery or a local
+worker overlay. The parent journal is `COMPLETE`; the platform result is
+`PLATFORM_READY_NO_SWARM_CREATED`. It used installer commit
+`52cd397c538d28b7032a9ddb88693ea7955c6c1f` and published driver 0.2.23, source
+`c4df9f8ee9395cd0a5da492c3f4a058ed28c0025`. The release archive SHA256 is
+`1b032cc543cd26a4aadcb094bcc5ba786f4484a5a7906e6ff3d5b55b5c9b99f5`.
 
-Final strict-TLS HTTP/API acceptance passed: two enabled/up computes, one private
+Strict-TLS HTTP/API acceptance passed: two enabled/up computes, one private
 provider template, one image, two profiles, fresh native capacity, nine static
 probes, authenticated login/domain/catalog APIs and no guests. The separate web
-account cannot read the operator admin OpenRC. This is **not** an uninterrupted
-successful run of the common workflow: its failed journals remain `NEEDS_REVIEW`.
-Completion required scoped recovery and a separately hash-recorded development
-overlay for the publication worker; the published driver bundle was not edited.
-It is also not clean-OS, cold-cache, reboot, headed-browser or Swarm-launch proof.
+account cannot read the operator admin OpenRC. The installed publication worker
+matches the published bundle byte-for-byte. All 123 protected libvirt/QEMU/CC
+files and both public routes remained unchanged; 38 controller and nine compute
+containers were running with none unhealthy. Host runtime identity checks passed.
 
-The selected driver must advertise `separate-web-ingress-identities`. The existing
-0.2.22 published artifact used in the lab lacks that capability: its worker
+Evidence is retained privately under
+`/var/lib/spvm-openstack-release023-20261021-03` on the lab hosts, with recoverable
+configuration backups under `/var/backups/spvm-openstack-cleanup-20261021-03`.
+Older failed journals remain `NEEDS_REVIEW`; they have not been relabelled.
+This is not clean-OS, cold-cache, reboot, headed-browser or Swarm-launch proof.
+
+The selected driver must advertise `separate-web-ingress-identities`. The older
+0.2.22 artifact used in the preceding lab run lacks that capability: its worker
 required the web exporter and ingress publisher to share a Unix identity. Do not
 grant admin OpenRC access to the web service to satisfy that obsolete check.
 The new worker validates both root-configured accounts as non-root independently.
-Build/select an updated bundle before the next fresh deployment; the new planner
-refuses the old artifact before host preparation. Never edit a verified manifest
-to bypass this gate. An uninterrupted cleared-host run with those updated artifacts
-is still required.
+The planner refuses the old artifact before host preparation. Never edit a
+verified manifest to bypass this gate. The published 0.2.23 bundle passed the
+uninterrupted cleared-host run described above.
 
 ## Prerequisites and current boundary
 
@@ -82,6 +86,28 @@ again against fresh host audits and refuses mismatches before deployment.
 Existing-cloud adoption must use the already registered Nova identity instead.
 
 ## Prepare input files
+
+Candidate 0.2.24 adds optional administrator registration of additional public
+SPVM releases through Skyline. It is disabled by default. To enable it on a fresh
+platform, prepare `registered_release_cache_root` in **every** helper request
+before staging/binding and set `release_registration: true` in the platform
+specification. The root cache must be isolated from state, tools, runtime and the
+default cache. The matching bundle must advertise
+`administrator-release-registration`; old bundles or missing compute cache opt-ins
+are refused before deployment. The selected administrator operator is enrolled
+as the trusted Barbican release registrar/reader. Both the immutable compute
+configuration and web delegation name that identity; the UI also checks its
+current Keystone admin role. Debug registration requires debug opt-in on every
+selected helper. Existing static release policies remain unchanged when omitted.
+
+Registration creates a private Glance marker and project/image-bound private
+Barbican approval after checking the official GitHub release and `vm.json` asset.
+Signature presence, CA, grants and membership are still checked at launch.
+No guest or Nova restart is needed per registration **after** installing this
+opt-in capability. First launch may download assets; cache budgeting/cleanup is
+still the operator's responsibility. Enabling the capability on an existing cloud
+requires a reviewed matching driver/helper/runtime rollout, not a hot config edit.
+See the selected bundle's `deployment/skyline/README.md` for exact field semantics.
 
 Copy and edit these English examples; placeholder paths/IPs are not lab defaults:
 

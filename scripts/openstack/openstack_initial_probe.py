@@ -118,6 +118,7 @@ def probe(request,root=Path('/'),runner=subprocess.run):
                 or execution['release']!=spec['release'] or execution['tools']!=spec['tools']
                 or execution['cache']!=spec['cache'] or execution['allow_debug_launch'] is not spec['allow_debug']
                 or execution['release_caches']!={spec['release']:spec['cache']}
+                or execution.get('registered_release_cache_root')!=spec.get('registered_release_cache_root')
                 or execution['source_sha256']!=request['launcher_sha256']
                 or execution['release_gate']!='guest-api-registry-presence-v1'):
             blockers.append('HELPER_CONFIG_MISMATCH')

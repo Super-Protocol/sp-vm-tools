@@ -77,9 +77,11 @@ def install_operator_auth(authdir, auth, operator_group, region, ca):
 
 def specification(filename):
     value=json.loads(read(filename))
-    if (not isinstance(value,dict) or set(value)!=FIELDS or type(value['schema_version']) is not int
+    if (not isinstance(value,dict) or set(value)-{'release_registration'}!=FIELDS or type(value['schema_version']) is not int
             or value['schema_version']!=1 or value['quota_from_host_budgets'] is not True):
         raise ValueError('exact fresh platform completion specification required')
+    if 'release_registration' in value and type(value['release_registration']) is not bool:
+        raise ValueError('explicit boolean release registration opt-in required')
     for key in ('sdk_venv','network','profiles','provider_directory','runtime_dir','state_dir','base_haproxy_config','console_manifest'):
         p=Path(value[key])
         if not p.is_absolute() or p.resolve()!=p or any(c.isspace() for c in str(p)):
@@ -158,6 +160,11 @@ def preflight(value,path,backend):
     """Read-only early identity and local-controller proof, before native deploy."""
     require_web_separation(path)
     spec=specification(value['platform']);cfg=backend.deployment_config(value['config'])
+    if spec.get('release_registration'):
+        manifest=Path(path).parent.parent/'manifest.json'
+        if not manifest.is_file():manifest=Path(path).parent.parent/'nova-spvm/manifest.json'
+        if 'administrator-release-registration' not in json.loads(read(manifest)).get('capabilities',[]):
+            raise ValueError('release registration requires an updated driver bundle')
     controller=cfg['hosts'].get(spec['controller'])
     if (os.geteuid()!=0 or not controller or 'control' not in controller['roles']
             or sum('control' in h['roles'] for h in cfg['hosts'].values())!=1):
@@ -175,6 +182,9 @@ def preflight(value,path,backend):
     local=hashlib.sha256(Path('/etc/machine-id').read_bytes().strip()).hexdigest()
     if audits[spec['controller']]['host_identity_sha256']!=local:raise ValueError('not the selected controller')
     binding=json.loads(read(Path(value['workspace'])/'compute-binding.json'))
+    if spec.get('release_registration') and not all(
+            'registered_release_cache_root' in json.loads(read(h['request_file'])) for h in binding['hosts'].values()):
+        raise ValueError('release registration requires explicit isolated cache roots on every compute before deployment')
     verify_rule(workspace.check(value['workspace']),identities(cfg,audits))
     for name,wanted in identities(cfg,audits).items():
         if binding['hosts'][name]['compute_uuid']!=wanted['compute_uuid']:
@@ -345,7 +355,8 @@ def post_install(value,path,backend,output,core):
         def stage_enrollment():
             request=output/'enrollment-request.json'
             write(request,{'schema_version':1,'projects':{project:{'publisher_user_ids':[user],'reader_user_ids':[user],
-                'network_ids':[net['network_id']],'releases':[cfg['guest_release']]}}})
+                'network_ids':[net['network_id']],'releases':[cfg['guest_release']],
+                **({'release_registry_user_ids':[user]} if spec.get('release_registration') else {})}}})
             return enrollment.stage(R(workspace=value['workspace'],request=str(request),profiles=spec['profiles'],output=str(output/'enrollment')),path)
         phase('stage-enrollment',stage_enrollment)
         enrollment_path=str(output/'enrollment/enrollment-plan.json')
@@ -410,6 +421,12 @@ def post_install(value,path,backend,output,core):
                 'auth_url':binding['bootstrap_runtime']['auth_url'],'ca_file':ca,'origins':spec['origins'],'state_dir':spec['state_dir'],
                 'capacity_file':'/run/spvm-web-capacity/capacity.json','clusters':{},
                 'provider_template_policy':{'enrollment':str(target),'host_sources':spec['host_sources']}}
+            if spec.get('release_registration'):
+                prepared=[json.loads(read(h['request_file'])) for h in binding['hosts'].values()]
+                if not all('registered_release_cache_root' in h for h in prepared):
+                    raise ValueError('release registration requires prepared isolated cache roots on every compute')
+                config['release_registration']={'project_id':project,'admin_user_ids':[user],
+                    'reader_user_ids':[user],'allow_debug':all(h['allow_debug'] for h in prepared)}
             policy={'schema_version':1,'run_as':spec['web_user'],'python':str(Path(spec['sdk_venv'])/'bin/python'),
                 'state_dir':spec['state_dir'],'project_id':project,'domain_suffix':zone,'gateway_hostname':gateway,
                 'public_ip':spec['ingress_address'],'timeout':1800}

@@ -37,7 +37,7 @@ def request(path):
     if path.is_symlink() or not path.is_file() or path.stat().st_size>1048576:
         raise ValueError('bounded regular request file required')
     value=json.loads(path.read_text())
-    if not isinstance(value,dict) or set(value)!={'version','machine_sha256','compute_uuid','release',
+    if not isinstance(value,dict) or set(value)-{'registered_release_cache_root'}!={'version','machine_sha256','compute_uuid','release',
             'allow_debug','tools','cache','pools','gpus'} or type(value['version']) is not int or value['version']!=1:
         raise ValueError('explicit versioned helper request required')
     if (not re.fullmatch('[a-f0-9]{64}',str(value['machine_sha256']))
@@ -46,12 +46,12 @@ def request(path):
             or type(value['allow_debug']) is not bool
             or (value['release'].endswith('-debug') and not value['allow_debug'])):
         raise ValueError('invalid machine/compute/release binding')
-    for key in ('cache','tools'):
+    for key in ('cache','tools', *(['registered_release_cache_root'] if 'registered_release_cache_root' in value else [])):
         p=Path(value[key])
         if (not p.is_absolute() or p==Path('/') or '..' in p.parts
                 or p.parts[1] in ('home','root','tmp','run','proc','sys','dev')):
             raise ValueError('runtime/cache paths must be explicit non-home system paths')
-        if key=='cache' and p.parts[1] in ('usr','etc','boot','efi'):
+        if key!='tools' and p.parts[1] in ('usr','etc','boot','efi'):
             raise ValueError('cache must remain writable under helper systemd sandbox')
     if not isinstance(value['pools'],list) or not value['pools']:
         raise ValueError('explicit state pools required')
@@ -74,7 +74,8 @@ def request(path):
             or any(not isinstance(p,str) or not re.fullmatch(r'[a-f0-9]{4}:[a-f0-9]{2}:[01][a-f0-9]\.[0-7]',p) for p in value['gpus'])
             or len(value['gpus'])!=len(set(value['gpus']))):
         raise ValueError('explicit unique GPU BDF list required; [] means none')
-    roots=[Path(p) for p in [*ROOTS.values(),value['cache'],value['tools'],*[p['root'] for p in value['pools']]]]
+    roots=[Path(p) for p in [*ROOTS.values(),value['cache'],value['tools'],*[p['root'] for p in value['pools']],
+                          *([value['registered_release_cache_root']] if 'registered_release_cache_root' in value else [])]]
     if any(a.is_relative_to(b) or b.is_relative_to(a) for i,a in enumerate(roots) for b in roots[i+1:]):
         raise ValueError('storage/cache/tools/runtime roots must not overlap')
     return value
@@ -115,6 +116,7 @@ def source_manifest(backend_path,spec,*,bootstrap=False):
         raise ValueError('driver capability manifest required')
     value=json.loads(path.read_text())
     needed={'grant-bound-release-selection','guest-api-registry-presence'}
+    if 'registered_release_cache_root' in spec:needed.add('administrator-release-registration')
     if spec['release'].endswith('-release'):needed.add('release-only-helper-default')
     if bootstrap:needed.add('deny-all-runtime-bootstrap')
     if value.get('schema_version')!=1 or not needed<=set(value.get('capabilities',[])):
@@ -218,6 +220,10 @@ class Host:
         cache=self.trusted(spec['cache'])
         if cache.exists() and (not cache.is_dir() or cache.stat().st_mode & 0o067):
             raise ValueError('existing cache must be private except for traversal')
+        if 'registered_release_cache_root' in spec:
+            dynamic=self.trusted(spec['registered_release_cache_root'])
+            if dynamic.exists() and (not dynamic.is_dir() or dynamic.stat().st_mode & 0o067):
+                raise ValueError('registered release cache root must be private')
         pools,devices=[],set()
         for item in spec['pools']:
             mount=self.trusted(item['mount'],directory=True)
@@ -289,7 +295,8 @@ class Host:
             # Provider payloads and lease journals are helper-private. Their
             # backend validators require 0700, not QEMU traversal permissions.
             self.directory(path,0o700 if key in ('provider','runtime') else 0o710)
-        for path in [spec['cache'],*[p['root'] for p in spec['pools']]]:
+        for path in [spec['cache'],*[p['root'] for p in spec['pools']],
+                     *([spec['registered_release_cache_root']] if 'registered_release_cache_root' in spec else [])]:
             self.directory(path,0o710)
         config={'allowed_peer_uids':[UID],'backend_timeout':1700,'request_timeout':30,
             'storage':{'compute_uuid':spec['compute_uuid'],'pools':observed['pools']},
@@ -299,6 +306,8 @@ class Host:
                 'release':spec['release'],'cache':spec['cache'],'timeout':1200,
                 'allow_debug_launch':spec['allow_debug'],'release_caches':{spec['release']:spec['cache']},
                 'release_gate':'guest-api-registry-presence-v1'}}
+        if 'registered_release_cache_root' in spec:
+            config['execution']['registered_release_cache_root']=spec['registered_release_cache_root']
         files={**files,'/etc/spvm/host-helper.json':(json.dumps(config,indent=2).encode(),0o600),
             '/etc/spvm/compute-pools.json':(json.dumps({'compute_uuid':spec['compute_uuid'],
                 'pool_ids':[p['id'] for p in spec['pools']]}).encode(),0o644),

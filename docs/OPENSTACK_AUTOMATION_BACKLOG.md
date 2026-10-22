@@ -29,14 +29,14 @@ host libvirt/QEMU, QGS/PCCS, VFIO configuration and primary management connectiv
 | Operating system | Ubuntu 26.04; explicitly experimental for this Kolla source |
 | Kolla source | `4b493ef36ace2b90257ecf94feb00e2c6e8014c9`, 2026.2 |
 | Container distribution | Ubuntu noble; real host facts remain Ubuntu 26.04 |
-| Installer snapshot | `fbad0699a298bfa9dd5ba3e401139c9949638483` |
-| Driver source | `23ad534f64209a4ff5779315a9a2dea12b1b0431`, package 0.2.22 |
+| Installer snapshot | `52cd397c538d28b7032a9ddb88693ea7955c6c1f` |
+| Driver source | `c4df9f8ee9395cd0a5da492c3f4a058ed28c0025`, package 0.2.23 |
 | GitHub release channel | `openstack-feature-spvm-bare-metal-cloud-1325095077dd` |
-| Driver archive SHA256 | `7a29a11ef9f365ef4f395600dd5b01ef6ca3783c6befa0bb90d8fb5b8dbf42e6` |
+| Driver archive SHA256 | `1b032cc543cd26a4aadcb094bcc5ba786f4484a5a7906e6ff3d5b55b5c9b99f5` |
 | Nova base | `quay.io/openstack.kolla/nova-compute@sha256:f5aadb8b42f653403b4db2a4b2b68fafe132b9f57191c318237736df4df7ebae` |
 | Skyline base | `quay.io/openstack.kolla/skyline-console@sha256:2ce16dc6bb5bf70fd17bb36248c19c83216da3dfddf870e97e045cbc9f4054d5` |
-| Built Nova image ID | `sha256:1776e534de881dd584eacc798c2886892f7a10db9d59bead301919a832bbe928` |
-| Built Skyline image ID | `sha256:0c26fdc949424571ea8f0ffc1c71b103def1e13552542fc7e69eb9e95591ad2f` |
+| Built Nova image ID | `sha256:8e6b7ce2f426e9765b62fa223b6294ba107ec891b72a3920ecca9eec9efe6f8a` |
+| Built Skyline image ID | `sha256:48e859c286d8cab280d6a790b0c397cd990e981e0ea15ad3ca85de2a535ed4e5` |
 | Enrolled guest release | `build-449-release`; no debug/SSH readiness fallback |
 
 The release channel and package version alone do not identify immutable bytes.
@@ -66,10 +66,11 @@ Unattributed native MySQL/memcached on `.245` were retained, not silently remove
   unauthorized-request rejection and nine JS/logo probes including gzip passed.
   One named `default` provider template was imported into private Barbican records.
   This is HTTP/API acceptance, not a headed-browser or guest-launch test.
-- An operator still assembles inputs and invokes individual phases. Some lab
-  preparation and recovery glue exists only in private transaction scripts.
-  These are evidence of missing product orchestration, not the supported public
-  deployment interface. Do not copy a lab script with fixed UUIDs into production.
+- An operator still prepares artifacts, images, SDK and private management
+  transport explicitly. The common coordinator now drives the supported
+  prepared-host-to-platform phases without manual recovery. Lab preparation
+  glue is not a portable OS-to-platform installer; do not copy fixed lab UUIDs
+  into production.
 
 No existing encrypted guest disk or previous Swarm CA was restored. Guest state
 uses ephemeral encryption keys; stopped guests cannot be treated as resumable.
@@ -79,12 +80,14 @@ Do not restart/bootstrap an existing Swarm to test installer idempotency.
 
 ### Latest combined-path live checkpoint
 
-The follow-up cleared-host run completed Kolla and API-side network/resources
-through the new coordinator. Scoped recovery then reached strict-TLS API/GUI
-acceptance with both computes enabled/up, one template/image, two profiles, native
-capacity and nine static probes, without creating a guest. The original parent
-did not complete uninterrupted; its failed journals were retained, not relabelled
-as successful. A local publication-worker overlay was separately hash-recorded.
+The latest cleared-host run with the pinned 0.2.23 release completed the common
+coordinator uninterrupted: parent `COMPLETE`, platform
+`PLATFORM_READY_NO_SWARM_CREATED`, both computes enabled/up, one template/image,
+two profiles, native capacity and nine static probes, without creating a guest.
+No worker overlay or child recovery was required. The separate web account cannot
+read admin OpenRC; installed worker bytes match the release. All 123 protected
+host files and both public routes remained unchanged. The preceding failed run
+and its scoped-recovery evidence remain preserved, not relabelled as successful.
 
 Live findings fixed in source:
 
@@ -98,10 +101,10 @@ Live findings fixed in source:
   Gate fresh deployment on `separate-web-ingress-identities` in the driver bundle.
 
 353 installer tests and seven publication-worker tests passed after these fixes.
-Next acceptance requirement: build/select an updated driver bundle and repeat one
-uninterrupted cleared-host common-workflow run. The current published 0.2.22
-artifact is not sufficient for the separate-account path. Also retain the broader
-artifact/bootstrap preparation boundaries below; this is not OS-to-platform proof.
+The updated published 0.2.23 bundle passed the uninterrupted common-workflow
+acceptance requirement. Remaining acceptance includes clean-OS/cold-cache and
+reboot/failure scenarios; retain the broader artifact/bootstrap preparation
+boundaries below. This is not OS-to-platform proof or a new Swarm-launch test.
 
 Implementation follow-up: the working tree now contains `stage-kolla-identities`,
 owned hostname preparation, optional narrowly approved stale networkd-cache repair,

@@ -30,7 +30,7 @@ def document(raw, binding):
     projects={}
     for project,spec in raw['projects'].items():
         if (not re.fullmatch('[A-Za-z0-9_-]{1,64}',project) or not isinstance(spec,dict)
-                or set(spec)!={'publisher_user_ids','reader_user_ids','network_ids','releases'}):
+                or set(spec)-{'release_registry_user_ids'}!={'publisher_user_ids','reader_user_ids','network_ids','releases'}):
             raise ValueError('unsupported project enrollment fields')
         networks=spec['network_ids'];releases=spec['releases']
         if (not isinstance(networks,list) or not 1<=len(networks)<=64
@@ -45,8 +45,14 @@ def document(raw, binding):
         # Never authorize a release whose measured cache/helper gate is not bound.
         for host in binding['hosts'].values():
             helper=json.loads(read(host['request_file']))
+            if 'release_registry_user_ids' in spec and 'registered_release_cache_root' not in helper:
+                raise ValueError('registered release caches must be explicitly prepared on every compute')
             if set(releases)!={helper['release']} or (helper['release'].endswith('-debug') and not helper['allow_debug']):
                 raise ValueError('release not prepared/authorized on every selected compute')
+        if 'release_registry_user_ids' in spec:
+            identifiers(spec['release_registry_user_ids'])
+            if not set(spec['release_registry_user_ids']) <= set(spec['publisher_user_ids']):
+                raise ValueError('release registrars must be explicitly enrolled project publishers')
         projects[project]={**spec,'publisher_user_ids':identifiers(spec['publisher_user_ids']),
             'reader_user_ids':identifiers(spec['reader_user_ids']), 'guest_profile':'swarm-nodes-v1-ms',
             'readiness':{'network_mode':'tap','timeout':900,'interval':3,'request_timeout':10}}
