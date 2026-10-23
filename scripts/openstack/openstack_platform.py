@@ -174,6 +174,9 @@ def require_web_separation(path):
         raise ValueError('selected driver bundle must support separate-web-ingress-identities; build/select an updated release before fresh deployment')
     if 'private-publication-input-handoff' not in value.get('capabilities',[]):
         raise ValueError('selected driver bundle must support private-publication-input-handoff; select an updated release')
+    for capability in ('restricted-service-credentials','automatic-web-retirement-permits','matched-web-client-wheel'):
+        if capability not in value.get('capabilities',[]):
+            raise ValueError('selected driver bundle must support '+capability+'; select an updated release')
 
 
 def initial_probe_request(wanted, value, host):
@@ -244,9 +247,13 @@ def preflight(value,path,backend):
     if not cfg['kolla'].get('skyline_console_image_id'):raise ValueError('pinned custom console image required')
     if Path(spec['runtime_dir']).exists() or Path(spec['state_dir']).exists():
         raise ValueError('fresh web targets occupied; no adoption/overwrite')
-    for name in ('/etc/spvm/auth','/etc/spvm/ingress-auth','/var/lib/spvm-ingress-inputs','/etc/spvm/web-project-enrollment.json','/etc/spvm/web-publication-policy.json','/etc/spvm/ingress-policy.json'):
+    for name in ('/etc/spvm/auth','/etc/spvm/ingress-auth','/etc/spvm/retirement-auth',
+                 '/etc/spvm/retirement-permits','/etc/spvm/retirement-policies',
+                 '/etc/spvm/automatic-retirement-policy.json','/etc/spvm/retirement-dns.json',
+                 '/var/lib/spvm-ingress-inputs','/etc/spvm/web-project-enrollment.json',
+                 '/etc/spvm/web-publication-policy.json','/etc/spvm/web-retirement-policy.json','/etc/spvm/ingress-policy.json'):
         if Path(name).exists() or Path(name).is_symlink():raise ValueError('occupied platform target before initial deploy')
-    for name in ('spvm-web-nodes.service','spvm-web-capacity.service','spvm-web-capacity.timer','spvm-web-publish.service','spvm-web-publish.timer'):
+    for name in ('spvm-web-nodes.service','spvm-web-capacity.service','spvm-web-capacity.timer','spvm-web-publish.service','spvm-web-publish.timer','spvm-web-retire.service','spvm-web-retire.timer'):
         p=subprocess.run(['systemctl','show',name,'--property=LoadState','--value'],capture_output=True,text=True,timeout=10)
         if p.returncode not in (0,1) or p.stdout.strip()!='not-found':raise ValueError('cached/occupied platform unit before deploy')
     for action,wanted in (('is-active','inactive'),('is-enabled','disabled')):
@@ -380,7 +387,17 @@ def post_install(value,path,backend,output,core):
         ingress_authdir=Path('/etc/spvm/ingress-auth')
         def private_operator_auth():
             install_operator_auth(authdir,auth,0,binding['bootstrap_runtime']['region_name'],ca)
-            install_operator_auth(ingress_authdir,auth,ingress_group,binding['bootstrap_runtime']['region_name'],ca)
+            source=Path(path).parent/'service_credentials.py'
+            definition=importlib.util.spec_from_file_location('platform_service_credentials',source)
+            credentials=importlib.util.module_from_spec(definition);definition.loader.exec_module(credentials)
+            result={}
+            for purpose,directory in [('ingress',ingress_authdir),('retirement',Path('/etc/spvm/retirement-auth'))]:
+                directory.mkdir(mode=0o750,exist_ok=True)
+                credentials.protected_directory(directory)
+                os.chown(directory,0,ingress_group);directory.chmod(0o750)
+                result[purpose]=credentials.configure(connection,purpose,'spvm-'+purpose+'-'+cfg['deployment_id'],
+                    directory/'openrc.sh',ingress_group,auth['auth_url'],binding['bootstrap_runtime']['region_name'],ca)
+            return result
         phase('operator-auth',private_operator_auth)
         def shared_network():
             request={**json.loads(read(spec['network'])),'project_id':project};request_path=output/'network-request.json';write(request_path,request)
@@ -430,7 +447,7 @@ def post_install(value,path,backend,output,core):
             base=Path(spec['base_haproxy_config'])
             request={'schema_version':1,'machine_sha256':hashlib.sha256(Path('/etc/machine-id').read_bytes().strip()).hexdigest(),
                 'bind_address':spec['ingress_address'],'allowed_cidr':json.loads(read(spec['network']))['guest']['cidr'],
-                'base_config_sha256':file_hash(base),'publisher':{'run_as':INGRESS_USER,'auth_script':str(ingress_authdir/'admin-openrc.sh'),
+                'base_config_sha256':file_hash(base),'publisher':{'run_as':INGRESS_USER,'auth_script':str(ingress_authdir/'openrc.sh'),
                     'auth_args':[],'ca_bundle':ca,'openstack_cli':str(Path(spec['sdk_venv'])/'bin/openstack')}}
             request_path=output/'ingress-request.json';write(request_path,request)
             staged=ingress.stage(R(request=str(request_path),base_config=str(base),output=str(output/'ingress-package')),path)
@@ -467,13 +484,30 @@ def post_install(value,path,backend,output,core):
                 'state_dir':spec['state_dir'],'project_id':project,'domain_suffix':zone,'gateway_hostname':gateway,
                 'public_ip':spec['ingress_address'],'timeout':1800}
             write(output/'web-config.json',config);write(output/'publication-policy.json',policy)
+            for directory in ('/etc/spvm/retirement-permits','/etc/spvm/retirement-policies'):
+                Path(directory).mkdir(mode=0o700)
+            dns_url=provider['powerdns_api_url'].rstrip('/')
+            if not dns_url.endswith('/api/v1/servers/localhost'):dns_url+='/api/v1/servers/localhost'
+            write(Path('/etc/spvm/retirement-dns.json'),{'api_url':dns_url,'api_key':provider['powerdns_api_key'],'zones':[zone+'.']})
+            automatic={'schema_version':1,'project_id':project,'publisher_user_ids':[user],
+                'domain_suffix':zone,'gateway_hostname':gateway,'network_ids':[net['network_id']],'run_as':INGRESS_USER,
+                'auth_script':'/etc/spvm/retirement-auth/openrc.sh','ca_bundle':ca,
+                'openstack_cli':str(Path(spec['sdk_venv'])/'bin/openstack'),
+                'registry':'/etc/spvm/ingress-registry.json','refresh':'/etc/spvm/ingress-policy.json',
+                'ports':'/etc/spvm/ingress-http-ports.json','dns_credentials':'/etc/spvm/retirement-dns.json'}
+            write(Path('/etc/spvm/automatic-retirement-policy.json'),automatic)
+            retirement={'schema_version':1,'run_as':spec['web_user'],'python':str(Path(spec['sdk_venv'])/'bin/python'),
+                'state_dir':spec['state_dir'],'project_id':project,'admin_user_ids':[user],
+                'permits_dir':'/etc/spvm/retirement-permits','auto_permit_policy':'/etc/spvm/automatic-retirement-policy.json'}
+            write(output/'retirement-policy.json',retirement)
             source=Path(path).parent/'skyline/stage_runtime.py'
             definition=importlib.util.spec_from_file_location('platform_web_stage',source)
             stager=importlib.util.module_from_spec(definition);definition.loader.exec_module(stager)
             wheels=list((Path(path).parent.parent/'wheels').glob('nova_spvm-*.whl'))
             if len(wheels)!=1:raise ValueError('one verified bundle client wheel required')
             return stager.stage(R(output=spec['runtime_dir'],sdk_venv=spec['sdk_venv'],web_user=spec['web_user'],
-                web_config=str(output/'web-config.json'),wheel=str(wheels[0]),wheel_sha256=file_hash(wheels[0]),publication_policy=str(output/'publication-policy.json')))
+                web_config=str(output/'web-config.json'),wheel=str(wheels[0]),wheel_sha256=file_hash(wheels[0]),
+                publication_policy=str(output/'publication-policy.json'),retirement_policy=str(output/'retirement-policy.json')))
         phase('web-stage',web_stage)
         def web_install():
             args=R(action='plan-skyline-runtime',runtime_dir=spec['runtime_dir'],runtime_sha256=file_hash(Path(spec['runtime_dir'])/'runtime-stage.json'),
