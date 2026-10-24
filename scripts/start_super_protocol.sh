@@ -1338,6 +1338,11 @@ if [[ "${NETDEV_MODE}" == "tap" ]]; then
     rm -f ${PROVIDER_CONFIG_DISK_PATH}
     dd if=/dev/zero "of=${PROVIDER_CONFIG_DISK_PATH}" bs=1M count=1;
     mkfs.ext4 -O ^has_journal,^huge_file,^meta_bg,^ext_attr -L provider_config "$PROVIDER_CONFIG_DISK_PATH";
+    # The image embeds the provider config verbatim -- on a swarm-cloud host that means the
+    # GitHub token, the PowerDNS API key and the marketplace OAuth client secret. dd creates
+    # it under the caller's umask (0644 under the usual 022), so it was readable without
+    # sudo by every shell user on the host.
+    chmod 600 "$PROVIDER_CONFIG_DISK_PATH";
     PROVIDER_CONFIG_LOOP_DEVICE="$(losetup --find --show --partscan "$PROVIDER_CONFIG_DISK_PATH")";
     PROVIDER_CONFIG_TEMP_MOUNT_POINT="$(mktemp -d)";
     mount "$PROVIDER_CONFIG_LOOP_DEVICE" "$PROVIDER_CONFIG_TEMP_MOUNT_POINT";
