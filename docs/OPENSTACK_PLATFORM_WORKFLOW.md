@@ -100,6 +100,13 @@ configuration and web delegation name that identity; the UI also checks its
 current Keystone admin role. Debug registration requires debug opt-in on every
 selected helper. Existing static release policies remain unchanged when omitted.
 
+Debug is disabled in the shipped helper-request example (`allow_debug: false`).
+See [OPENSTACK_DEBUG_BUILDS.md](OPENSTACK_DEBUG_BUILDS.md) for both admission
+gates, fresh-install opt-in, existing-install maintenance, and disabling debug
+after diagnostics. The required helper boolean must be explicit; omission is
+not an implicit permission. Enabling web registration alone cannot enable host
+debug launches.
+
 Registration creates a private Glance marker and project/image-bound private
 Barbican approval after checking the official GitHub release and `vm.json` asset.
 Signature presence, CA, grants and membership are still checked at launch.

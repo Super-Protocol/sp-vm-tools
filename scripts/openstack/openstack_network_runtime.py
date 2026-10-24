@@ -66,7 +66,7 @@ def validate(p):
         if (p['external_interface']!='spvm-ext0' or p['host_interface']!='spvm-nat0'
                 or len({p[k] for k in ('external_interface','host_interface','egress_interface')})!=3
                 or {p['external_interface'],p['host_interface'],p['egress_interface']} & {p['management_interface'],p['route_interface']}
-                or route!={'gateway':p['router_ip'],'interface':p['host_interface'],'source':str(transit.ip)}):
+                or route!={'gateway':p['router_ip'],'interface':p['host_interface'],'source':str(address.ip)}):
             raise ValueError('NAT interface or probe route conflict')
         if (not isinstance(p['probe_sources'],list) or p['probe_sources']!=sorted(set(p['probe_sources']))
                 or len(p['probe_sources'])>255 or not isinstance(p['probe_ports'],list)
@@ -101,7 +101,10 @@ def firewall(p):
         fr.extend([['-A',f,'-i',mgmt,'-o',host,'-s',source+'/32','-d',guest,'-p','tcp','-m','multiport','--dports',ports,'-j','ACCEPT'],
             ['-A',f,'-i',host,'-o',mgmt,'-s',guest,'-d',source+'/32','-m','conntrack','--ctstate','ESTABLISHED,RELATED','-j','ACCEPT']])
         nr.append(['-A',n,'-s',source+'/32','-d',guest,'-o',host,'-p','tcp','-m','multiport','--dports',ports,
-                   '-j','SNAT','--to-source',str(ip.IPv4Interface(p['transit_address']).ip)])
+                   # The OVN security group admits management clients only.
+                   # Use the same approved source as controller-local probes;
+                   # conntrack restores the original peer on the return path.
+                   '-j','SNAT','--to-source',str(ip.IPv4Interface(p['management_address']).ip)])
     fr.append(['-A',f,'-j','DROP']);nr.extend([['-A',n,'-s',transit,'-o',egress,'-j','MASQUERADE'],['-A',n,'-j','RETURN']])
     return {'filter':(fr,[['-A','FORWARD','-i',host,'-j',f],['-A','FORWARD','-o',host,'-j',f]]),
             'nat':(nr,[['-A','POSTROUTING','-o',host,'-d',guest,'-j',n],['-A','POSTROUTING','-s',transit,'-o',egress,'-j',n]])}

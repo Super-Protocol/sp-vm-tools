@@ -57,7 +57,7 @@ def inputs(backend, args):
     if value.get('schema_version') != 1 or value.get('status') != 'SKYLINE_RUNTIME_STAGED_NOT_INSTALLED':
         raise ValueError('complete staged runtime required')
     files = value.get('files_sha256')
-    if not isinstance(files, dict) or len(files) not in (5, 9):
+    if not isinstance(files, dict) or len(files) not in (5, 9, 10, 14):
         raise ValueError('recognized staged files required')
     for name, expected in files.items():
         item = root/name
@@ -78,9 +78,21 @@ def inputs(backend, args):
         raise ValueError('fresh empty owned state required; never replay existing operations')
     unit_names = ['spvm-web-nodes.service', 'spvm-web-capacity.service', 'spvm-web-capacity.timer']
     publication = value.get('publication_enabled_in_staged_config') is True
+    retirement = value.get('retirement_enabled_in_staged_config') is True
+    if len(files) != 5 + (4 if publication else 0) + (5 if retirement else 0):
+        raise ValueError('staged file count differs from delegated capabilities')
     if publication: unit_names += ['spvm-web-publish.service', 'spvm-web-publish.timer']
+    if retirement: unit_names += ['spvm-web-retire.service', 'spvm-web-retire.timer']
     targets = {Path('/etc/systemd/system')/name: root/'units'/name for name in unit_names}
     targets[Path('/usr/local/libexec/spvm-web-capacity/collector.py')] = root/'helpers/web_capacity_collector.py'
+    if retirement:
+        for name in ('spvm-web-retire', 'spvm-cluster-retire'):
+            targets[Path('/usr/local/sbin')/name] = root/'helpers'/name
+        targets[Path('/etc/spvm/web-retirement-policy.json')] = root/'web-retirement-policy.json'
+        if config.get('retirement_status_dir') != '/var/lib/spvm-web-retirement':
+            raise ValueError('fixed root retirement status directory required')
+    elif 'retirement_status_dir' in config:
+        raise ValueError('retirement requires staged root delegation')
     if publication:
         targets[Path('/usr/local/sbin/spvm-web-publish')] = root/'helpers/spvm-web-publish'
         targets[Path('/etc/spvm/web-publication-policy.json')] = root/'web-publication-policy.json'
@@ -158,6 +170,9 @@ def execute(backend, args):
             # before enabling a timer or accepting any cluster creation.
             run(['/usr/bin/python3', '/usr/local/sbin/spvm-web-publish',
                  '--policy', '/etc/spvm/web-publication-policy.json'])
+        if value.get('retirement_enabled_in_staged_config') is True:
+            run(['/usr/bin/python3', '/usr/local/sbin/spvm-web-retire',
+                 '--policy', '/etc/spvm/web-retirement-policy.json'])
         for name in ('spvm-web-capacity.service', 'spvm-web-nodes.service'):
             # Record intent before invoking a possibly ambiguously acknowledged start.
             record['services_started'].append(name); write(journal, record)
@@ -180,6 +195,7 @@ def execute(backend, args):
     try:
         timers = ['spvm-web-capacity.timer']
         if value.get('publication_enabled_in_staged_config') is True: timers.append('spvm-web-publish.timer')
+        if value.get('retirement_enabled_in_staged_config') is True: timers.append('spvm-web-retire.timer')
         for name in ['spvm-web-nodes.service', *timers]:
             record['services_started'].append(name); write(journal, record)
             run(['systemctl', 'enable', '--now', name])

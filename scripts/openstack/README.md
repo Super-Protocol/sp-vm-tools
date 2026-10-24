@@ -75,6 +75,26 @@ still-untested Ubuntu26 missing-Docker path.
 Geneve protection remains a separate command/module. Neither workflow deploys
 OpenStack or launches/restarts a guest.
 
+Guest probe routes must select the host's management address as their preferred
+source, including on the NAT/controller host. The transit veth address is not an
+approved cluster API client in Neutron security groups. Using it makes healthy
+measurement/PKI endpoints appear unreachable. Do not widen ingress to compensate;
+keep the management source in the persistent host-network policy.
+Forwarded peer-compute probes must also SNAT to that approved management
+address, never the transit address. Otherwise local controller probes succeed
+while remote compute observers still time out. Conntrack restores the peer
+destination for replies; the source/guest/port allowlist remains unchanged.
+
+Fresh-host preflight refuses active/enabled native `openvswitch-switch`,
+`ovsdb-server` or `ovs-vswitchd` services and existing `/run/openvswitch` contents.
+Kolla's OVS containers share this runtime namespace: an old native database can
+leave a PID/socket that makes the new container abort. Review ownership, bridges,
+processes and any workloads before stopping a native service. Never disable it
+automatically or delete its sockets while a process is still using them. During
+an explicitly approved cleared-cloud reset, stop/disable only attributed empty
+native OVS services, then quarantine stale runtime on the same filesystem.
+This preparation does not require touching libvirt/QEMU or the public bond.
+
 `openstack_kolla_workflow.py` provides the explicitly approved fresh-cloud
 `prechecks → deploy → post-deploy` transaction. It never bootstraps hardware,
 installs Docker implicitly, upgrades an existing cloud, or launches guests.

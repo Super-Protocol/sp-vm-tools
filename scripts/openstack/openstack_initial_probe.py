@@ -12,6 +12,22 @@ import stat
 import subprocess
 
 
+def native_ovs_conflicts(run):
+    """Never take over native OVS or its shared sockets during a fresh deploy."""
+    observed={};blockers=[]
+    for unit in ('openvswitch-switch.service','ovsdb-server.service','ovs-vswitchd.service'):
+        reply=run(['systemctl','show',unit,'--property=LoadState,ActiveState,MainPID,UnitFileState'],(0,1,4))
+        fields=dict(line.split('=',1)for line in reply.stdout.splitlines()if '='in line)
+        if fields.get('LoadState')=='not-found':continue
+        if (not {'LoadState','ActiveState','MainPID','UnitFileState'}<=fields.keys()
+                or not fields['MainPID'].isdecimal()):raise ValueError('native OVS service observation unavailable')
+        observed[unit]=fields
+        if (fields['ActiveState']in ('active','activating','reloading','deactivating')
+                or int(fields['MainPID']) or fields['UnitFileState']in ('enabled','enabled-runtime','linked','linked-runtime')):
+            blockers.append('NATIVE_OVS_SERVICE_CONFLICT:'+unit)
+    return observed,blockers
+
+
 def probe(request,root=Path('/'),runner=subprocess.run):
     root=Path(root)
     owner=0 if root==Path('/') else os.getuid()
@@ -62,6 +78,12 @@ def probe(request,root=Path('/'),runner=subprocess.run):
         protected[c['Id']]={'name':name,'image':c['Image'],'state':c['State']['Status'],
                             'started_at':c['State']['StartedAt']}
     result['protected_containers']=protected
+    if blockers:return result
+    native,conflicts=native_ovs_conflicts(run)
+    result['native_ovs_services']=native;blockers.extend(conflicts)
+    runtime=path('/run/openvswitch')
+    if runtime.is_symlink()or (runtime.exists()and (not runtime.is_dir()or any(runtime.iterdir()))):
+        blockers.append('EXISTING_OVS_RUNTIME_REQUIRES_REVIEW')
     if blockers:return result
     volumes=run(['docker','volume','ls','--format','{{.Name}}']).stdout.split()
     if any(v in {'mariadb','rabbitmq','nova_compute','nova_libvirt','keystone','barbican'} for v in volumes):

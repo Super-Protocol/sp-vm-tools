@@ -71,7 +71,10 @@ def inputs(args,backend):
                 external_interface='spvm-ext0',host_interface='spvm-nat0',probe_ports=nat['probe_ports'],
                 probe_sources=sorted(str(ip.IPv4Interface(info['management_address']).ip) for peer,info in request['hosts'].items()
                                      if peer!=name and 'compute' in cfg['hosts'][peer]['roles']),
-                guest_route={'gateway':nat['router_ip'],'interface':'spvm-nat0','source':str(transit.ip)})
+                # Cluster API ingress admits management addresses, not the
+                # transit veth address used only to reach the OVN router.
+                guest_route={'gateway':nat['router_ip'],'interface':'spvm-nat0',
+                             'source':str(ip.IPv4Interface(node['management_address']).ip)})
         return runtime.validate(p)
     # Reject an impossible second phase before authorizing changes in the first.
     policies={name:make_policy(name,'management') for name in request['hosts']}

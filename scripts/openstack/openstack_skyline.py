@@ -27,7 +27,7 @@ def context(directory, expected):
     if (set(value) != {'schema_version', 'base_image', 'asset_sha256', 'nginx_source_sha256',
                       'nginx_sha256', 'dockerfile_sha256'} or value['schema_version'] != 1
             or not re.fullmatch(r'[a-z0-9][a-z0-9.:/_-]*@sha256:[0-9a-f]{64}', value['base_image'])
-            or not isinstance(value['asset_sha256'], dict) or not 15 <= len(value['asset_sha256']) <= 19):
+            or not isinstance(value['asset_sha256'], dict) or not 15 <= len(value['asset_sha256']) <= 23):
         raise ValueError('recognized complete Skyline context required')
     for name, digest in value['asset_sha256'].items():
         if (not re.fullmatch(r'[a-zA-Z0-9._-]+', name)
@@ -105,7 +105,7 @@ def main(backend, argv):
     parser.add_argument('action', choices=('stage-skyline-console', 'build-skyline-console', 'stage-skyline-runtime'))
     parser.add_argument('--output', required=True)
     for name in ('static-dir', 'nginx-template', 'nginx-sha256', 'base-image', 'context-sha256', 'tag', 'journal',
-                 'sdk-venv', 'web-user', 'web-config', 'wheel', 'wheel-sha256', 'publication-policy'):
+                 'sdk-venv', 'web-user', 'web-config', 'wheel', 'wheel-sha256', 'publication-policy', 'retirement-policy'):
         parser.add_argument('--'+name)
     args = parser.parse_args(argv)
     try:
@@ -121,8 +121,10 @@ def main(backend, argv):
                 '--web-config', args.web_config, '--wheel', args.wheel, '--wheel-sha256', args.wheel_sha256]
             if args.publication_policy:
                 command += ['--publication-policy', args.publication_policy]
+            if args.retirement_policy:
+                command += ['--retirement-policy', args.retirement_policy]
             subprocess.run(command, check=True)
-        elif any(runtime) or args.publication_policy:
+        elif any(runtime) or args.publication_policy or args.retirement_policy:
             raise ValueError('runtime arguments are valid only for stage-skyline-runtime')
         elif args.action == 'stage-skyline-console':
             if not all((args.static_dir, args.nginx_template, args.nginx_sha256, args.base_image)) or any((args.context_sha256, args.tag, args.journal)):

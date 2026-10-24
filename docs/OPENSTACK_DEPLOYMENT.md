@@ -876,6 +876,10 @@ Request fields are deliberately explicit:
 | `pools` | Unique pool IDs, existing mountpoints, roots, logical budgets and reserves |
 | `gpus` | Approved canonical BDF list; `[]` means no GPU donation, never automatic all |
 
+Debug is off in the shipped request. Registration and host launch admission are
+separate opt-ins; see [Debug builds](OPENSTACK_DEBUG_BUILDS.md) for fresh-install
+inputs, defaults, validated changes on an existing installation, and rollback.
+
 Selected GPUs must already be NVIDIA display-class devices bound to `vfio-pci`,
 with a single-device IOMMU group. The phase does not change PCI drivers, GPU modes
 or firmware. More complex shared-IOMMU/NVSwitch layouts are not silently accepted.
