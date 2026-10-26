@@ -318,7 +318,10 @@ class Host:
         os.chown(self.path('/var/lib/nova'),UID,UID)
         run=self.trusted('/run/spvm')
         if run.exists():raise ValueError('existing helper runtime directory refused')
-        run.mkdir(mode=0o750);os.chown(run,0,UID)
+        run.mkdir(mode=0o750)
+        # The enclosing transaction deliberately uses umask 077. Group traversal
+        # is nevertheless required for kolla-nova to reach the 0660 IPC socket.
+        os.chmod(run,0o750);os.chown(run,0,UID)
         # Use installed trusted code; no source-directory import as root.
         code="import sys;sys.path[:0]=['/usr/local/libexec/spvm','/usr/local/libexec/nova-spvm'];from host_helper import load_config;from host_execution import validate_config;c=load_config('/etc/spvm/host-helper.json');validate_config(c['execution'])"
         self.command(['/usr/bin/python3','-I','-c',code])

@@ -1,13 +1,14 @@
 """Ship approved stdlib phase code over strict SSH; never run operator shell text."""
 import json
+import re
 from pathlib import Path
 import subprocess
 
 from openstack_compute_image import read
-from openstack_container_engine import write
+from openstack_container_engine import write,digest
 
 
-def prepare(value,path,backend,output):
+def prepare(value,path,backend,output,*,targets=None):
     request=json.loads(read(value['preparation']))
     if not {'network_request','geneve_request'}<=set(request):return
     cfg=backend.deployment_config(value['config'])
@@ -19,8 +20,13 @@ def prepare(value,path,backend,output):
     stages=[('geneve',n) for n in sorted(geneve['hosts'])]
     stages += [('management',n) for n in sorted(cfg['hosts'])]
     stages += [('nat',network['nat']['host'])]
+    if targets is not None:
+        if (not isinstance(targets,list) or not targets or len(set(targets))!=len(targets)
+                or any(n not in cfg['hosts'] or cfg['hosts'][n]['roles']!=['compute'] for n in targets)):
+            raise ValueError('explicit compute-only network targets required')
+        stages=[(phase,name) for phase,name in stages if name in targets and phase!='nat']
     for phase,name in stages:
-        remote_output='/var/lib/spvm-installer/'+cfg['deployment_id']+'/network-'+output.name+'-'+name+'-'+phase
+        remote_output='/var/lib/spvm-installer/'+cfg['deployment_id']+'/network-'+digest(str(output))[:24]+'-'+name+'-'+phase
         data={'cfg':cfg,'network':network,'geneve':geneve,'phase':phase,'host':name,
               'allow_experimental_ubuntu26':value['allow_experimental_ubuntu26'],'output':remote_output,
               'repair_stale_networkd_cache':request.get('repair_stale_networkd_cache',False)}
@@ -72,6 +78,11 @@ with tempfile.TemporaryDirectory(prefix='spvm-network-stage-') as directory:
 '''
         result=subprocess.run(backend.ssh_arguments(cfg['hosts'][name])+['sudo -n /usr/bin/python3 -'],
                               input=source,text=True,capture_output=True,timeout=600)
-        if result.returncode:raise ValueError('owned host network stage refused; inspect remote journal')
+        if result.returncode:
+            write(output/('network-'+name+'-'+phase+'-error.json'),{
+                'status':'REMOTE_NETWORK_PHASE_REFUSED','returncode':result.returncode,
+                'error_types':re.findall(r'^([A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception)):',result.stderr,re.M),
+                'frames':re.findall(r'line ([0-9]+), in ([A-Za-z_<>]+)',result.stderr)})
+            raise ValueError('owned host network stage refused; inspect local phase error and remote journal')
         record=json.loads(result.stdout)
         write(output/('network-'+name+'-'+phase+'.json'),record)

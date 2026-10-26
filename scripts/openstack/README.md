@@ -10,6 +10,11 @@ entry points: explicit fresh installation, existing scoped NOOP, or prepared
 add-compute NOOP/initial enrollment and explicit new-compute scoped Kolla deployment.
 Source/input-bound approval, durable parent
 journal, explicit mutation opt-in and child recovery guards are retained.
+An optional source-bound new-compute preparation recipe connects compute-only
+network, Docker, helper/launcher and driver-image phases before registration.
+It includes insert-only owned peer allowlist expansion, audited management
+hostnames and target-only dependencies/public API trust. See guide §11.2 for
+transport, filesystem and acceptance limits.
 It never guesses a scenario or silently redeploys a working cloud. See guide
 §10.28 for schemas, completion semantics and the separate preparation/enrollment
 phases; bare-host provisioning and general upgrades are not implied.

@@ -118,6 +118,10 @@ def fingerprint(value,path,module):
         paths.append(value['new_compute'])
         platform_inputs.update({'new-compute-config/'+k:v for k,v in
             openstack_compute_prepare.config_hashes(value['new_compute']).items()})
+        spec=openstack_compute_prepare.specification(value['new_compute'])
+        if 'preparation' in spec:
+            import openstack_compute_onboard
+            platform_inputs.update(openstack_compute_onboard.input_hashes(spec['preparation'],path))
     source_root=Path(path).parent.parent
     sources=list(Path(path).parent.glob('*.py'))
     sources.extend(p for p in (Path(path).parent/'skyline').rglob('*')

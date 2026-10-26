@@ -20,7 +20,7 @@ import openstack_kolla_workspace as workspace
 
 def specification(filename):
     value = json.loads(read(filename))
-    if (type(value) is not dict or set(value) != {'schema_version','configdir','allow_experimental_ubuntu26'}
+    if (type(value) is not dict or set(value)-{'preparation'} != {'schema_version','configdir','allow_experimental_ubuntu26'}
             or type(value['schema_version']) is not int or value['schema_version'] != 1
             or type(value['allow_experimental_ubuntu26']) is not bool):
         raise ValueError('exact new-compute preparation request required')
@@ -32,6 +32,9 @@ def specification(filename):
             raise ValueError('untrusted existing Kolla config directory')
     if not (root/'passwords.yml').is_file():
         raise ValueError('existing passwords required; never generate new credentials')
+    if 'preparation' in value:
+        import openstack_compute_onboard
+        openstack_compute_onboard.specification(value['preparation'])
     return value
 
 
@@ -157,6 +160,19 @@ finally:c.close()
 
 
 def plan(value,path,module,output,runner):
+    spec=specification(value['new_compute'])
+    if 'preparation' in spec:
+        import openstack_compute_onboard as onboard
+        with onboard.hold_target(value,module):
+            observed=onboard.observe(value,path,module,output,runner)
+        result={'kind':'new-compute-with-preparation-v1','created_at':int(time.time()),
+                'preparation':observed,'automatic_recovery':False}
+        result['plan_sha256']=digest(result);write(output/'new-compute-plan.json',result)
+        return {'kind':'new-compute','changes':True,'plan_sha256':result['plan_sha256']}
+    return plan_prepared(value,path,module,output,runner)
+
+
+def plan_prepared(value,path,module,output,runner):
     cfg,receipt,wanted,spec,alias=inputs(value,module)
     target=facts(runner,value,cfg,wanted);current=cloud(runner)
     os_release=target['os']
@@ -232,6 +248,20 @@ print(json.dumps({'registered_disabled':True}))
 
 
 def apply(value,path,module,output,runner):
+    approved=json.loads(read(output/'new-compute-plan.json'))
+    if approved.get('kind')=='new-compute-with-preparation-v1':
+        import openstack_compute_onboard as onboard
+        with onboard.hold_target(value,module):
+            onboard.execute(value,path,module,output,runner,approved['preparation'])
+            # Prepared-host checks can only run after the prerequisites exist.
+            # Parent approval binds their code, policies and artifact inputs.
+            child=output/'prepared-compute';child.mkdir(mode=0o700,exist_ok=False)
+            plan_prepared(value,path,module,child,runner)
+            return apply_prepared(value,path,module,child,runner)
+    return apply_prepared(value,path,module,output,runner)
+
+
+def apply_prepared(value,path,module,output,runner):
     cfg,receipt,wanted,spec,alias=inputs(value,module)
     approved=json.loads(read(output/'new-compute-plan.json'))
     journal=output/'new-compute-transaction.json'

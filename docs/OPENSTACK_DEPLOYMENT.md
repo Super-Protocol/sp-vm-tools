@@ -170,6 +170,7 @@ Do not describe a passing basic preflight as a deployed or attested cloud.
 | Initial portable host ingress scaffold and activation | Real empty-scaffold install/start/enable passed on freed `.247`; Kolla containers unchanged; namespace routing/negative checks also passed |
 | Initial compute quarantine/stop/enroll/start/accept/enable | Full fresh enrollment/activation passed on compute-only `.245` and all-in-one `.247`, protecting other containers/services; clean-OS acceptance remains separate |
 | Separate compute deployment into an existing cloud | Passed on 2026-10-26: `.245` Nova service/container absent, disabled preregistration, scoped Kolla deploy, guarded SPVM enrollment, ordinary VM/shared VIF and occupied NOOP; prepared infrastructure was reused, not a clean OS |
+| Existing-cloud compute preparation coordinator | Passed on 2026-10-26: additive peer allowlists, managed hostnames, public CA, target network/helper/launcher/image, then scoped Nova deploy/enrollment. Docker and apt/SDK packages existed; the final whole-workflow run verified some prerequisites created in earlier reviewed attempts. Not clean-OS acceptance |
 | Prepared, registered compute activation with journal/resume | Implemented and tested on the two-host lab |
 | Release449 Swarm across two hosts, public HTTPS UI | Re-tested after full cleared-cloud redeployment: three ACTIVE/READY guests, registry presence, Barbican CA, UI/config/GraphQL HTTP200; repeat create reused existing guests |
 | Two simultaneous Swarms and exact neighbor-preserving cleanup | Passed on rebuilt Kolla across both hosts: six ACTIVE/READY guests, one H100 per seed, distinct CA/grants/SG/domains, both public UIs; retiring only the second returned accounting to baseline and preserved the first QEMU processes/UI/shared network |
@@ -3498,6 +3499,128 @@ already-enrolled-host verification, omit `new_compute` and use the NOOP/existing
 workflow. Full fresh-OS preparation, hardware bootstrap and transport creation
 remain distinct acceptance cases; successful new Nova registration alone does
 not certify them or prove that Swarm applications are healthy.
+
+### 11.2. Single-compute preparation coordinator
+
+The optional preparation coordinator connects the existing owned prerequisite
+phases to the section 11.1 deploy/enroll transaction. Hardware bootstrap remains
+separate: it never changes firmware, BIOS, QEMU/libvirt configuration or CC setup,
+and never reboots the target. State filesystems must already be mounted local
+ext4/xfs filesystems; this workflow does not format disks or allocate partitions.
+
+Add `"preparation": "/srv/private/compute02-preparation.json"` to the
+`new-compute.json` from section 11.1. The referenced recipe has this exact schema:
+
+```json
+{
+  "schema_version": 1,
+  "network_request": "/srv/private/shared-host-network.json",
+  "geneve_request": "/srv/private/shared-geneve.json",
+  "launcher_stage": "/srv/private/reviewed-launcher",
+  "launcher_sha256": "<approved launcher receipt SHA256>",
+  "image_package": "/srv/private/exported-compute-image",
+  "image_package_sha256": "<approved image package SHA256>",
+  "image_reserve_gib": 10
+}
+```
+
+Use the existing launcher staging and compute-image export commands to prepare
+these immutable inputs. The image must match the existing cloud's configured
+driver tag and image ID. The recipe does not select a different driver version,
+generate cloud credentials or change existing host budgets. The target helper
+request comes from the approved enrollment request, including its machine
+identity, native compute UUID, state-pool budgets and GPU donation. All helper
+sources, launcher files, network requests and the exported image are fingerprinted
+by the parent approval. Current image delivery requires an explicit SSH identity
+and an IPv4/DNS target supported by the existing delivery transport.
+
+Read-only planning validates the empty target, pinned Kolla/dependencies, native
+UUID, helper prerequisites and artifact identities. It checks existing peers'
+owned Geneve and network-node NAT policy without modifying them. Only additions
+of the one new compute's tunnel/management addresses are supported. Existing
+members, chain jumps, interfaces, routes and all other policy fields must remain
+unchanged. Application is:
+
+```text
+recheck approved empty target and existing cloud
+  -> insert the new compute's addresses into existing owned peer allowlists
+  -> distribute audited kernel-hostname / management-IP mappings
+  -> prepare compute-only packages, Docker Python SDK and public API CA trust
+  -> preserve installed Docker, or let the pinned Kolla Docker role install it
+  -> prepare Geneve and management/guest route on this compute only
+  -> install matching helper + measured launcher + deny-all bootstrap runtime
+  -> deliver/import the checksum-approved compute container image
+  -> fresh prepared-host plan
+  -> existing disabled Nova registration / scoped deploy / SPVM enrollment
+```
+
+Docker installation uses actual gathered OS facts; it does not substitute Ubuntu
+24.04 facts on an Ubuntu 26.04 host. The experimental Ubuntu 26 acknowledgement
+is still required. Network preparation is explicitly scoped to the new compute:
+it does not re-run controller management/NAT provisioning, change an existing
+host's Docker configuration or stop existing guests. Peer updates use insert-only
+rules, never a firewall flush, chain replacement, route rewrite or service
+restart. Their policy files are persisted only after verifying the new rules and
+unchanged unrelated state; partial failures retain private backups/journals and
+require review. Management hostname updates preserve unrelated entries and do
+not rename the kernel host. Conflicting hostname mappings are refused.
+
+Target packages use the reviewed native Kolla packages role, a one-host inventory
+and an explicit literal `--limit`. Package tasks suppress automatic service
+restarts and protected-runtime observations must remain identical. An already
+installed but unusable SDK is refused rather than repaired implicitly. API trust
+accepts exactly one public CA certificate, not a private key, certificate chain
+or leaf certificate. An existing conflicting trust anchor is not overwritten.
+No cloud administrator password is required on the new host for these phases.
+
+Only approved helper and
+launcher sources are sent for helper provisioning; provider secrets, private
+cloud credentials and SSH private keys are not copied to the compute by it.
+The shared cloud's compute image and enrollment remain separate guarded phases.
+
+Each attempted phase has a private journal. A partial failure is `NEEDS_REVIEW`,
+not an invitation to rerun with another output directory. No automatic recovery,
+cleanup or ambiguous apply replay is implemented. Successful preparation alone
+means `HOST_PREPARED_NOT_DEPLOYED`, not a registered or usable compute.
+
+**Completion limits:** physical networking and any underlying WireGuard transport
+must already exist. New addresses must be covered by that transport's AllowedIPs;
+the installer never changes an administrator's WireGuard peer keys or underlay
+policy. Mounted state filesystems and administrator-approved budgets are required;
+disk formatting, LVM assembly and BIOS changes are not part of onboarding.
+The driver container image is delivered/imported; measured guest release files
+use the existing registered-release/cache mechanism, not an unverified copy from
+an arbitrary host. A created cache directory alone does not prove a guest release
+was downloaded or launched. Do not advertise this scenario as clean-OS verified
+without a separate acceptance receipt documenting what was actually absent and
+what was reused. Fixture tests are not a live preparation acceptance.
+
+Live acceptance on 2026-10-26 completed this coordinator and scoped deployment on
+`.245` against the existing `.247` controller using published driver **0.2.28**;
+no driver rebuild was needed. Both computes finished enabled/up, an ordinary VM
+on `.245` reached ACTIVE on the shared network, occupied NOOP preserved its
+domain/PID, and full preparation refused the occupied host. Owned test resources
+were deleted afterward. All 38 controller containers, the target Docker daemon
+and the four existing protected QEMU/libvirt files were unchanged. The native
+compute UUID was retained; `CUSTOM_SPVM` and available native GPU accounting were
+verified. The 400-test installer fixture suite also passed.
+
+This acceptance reused installed Docker/apt/SDK packages, the physical underlay,
+mounted storage and measured guest caches. Positive peer/network/CA phases ran
+in an earlier reviewed attempt; the final uninterrupted transaction verified
+them, installed a fresh helper and missing driver image, and completed Nova
+deployment/enrollment. It was not a single clean-OS run with every prerequisite
+absent. The detailed receipt is
+`swarm-cloud/examples/test-cluster/bare-metal-spvm/deployment/ACCEPTANCE_HOST_ONBOARDING_2026_10_26.md`.
+Private successful evidence is in
+`/var/lib/spvm-onboard-accept-20261026-04/final-verification.json` on `.247`.
+
+Live testing also fixed raw-versus-stripped machine-ID comparison, trusted lock
+placement (`/run/lock` is world-writable on Ubuntu), IPC group traversal under
+`umask 077`, and remote receipt collisions across identically named parent
+directories. Transaction identities now bind the full parent path. Earlier
+failure journals and recoverable backups are retained; none was automatically
+replayed or overwritten to claim success.
 
 ## 12. Swarm lifecycle, certificates and secrets
 
