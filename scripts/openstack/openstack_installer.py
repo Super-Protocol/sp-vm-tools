@@ -165,6 +165,8 @@ def main(argv=None):
         'Read-only aggregate and next stage: initial-host-status. '
         'Occupied Kolla cloud, scoped read-only verification: verify-kolla-existing. '
         'Explicit scenario coordinator: plan-openstack, apply-openstack (optional fresh platform completion). '
+        'Empty-host budget requests: sync-host-budgets, process-host-budgets. '
+        'Opt-in budget processing: stage-host-budget-worker, install-host-budget-worker. '
         'Native fresh identities: stage-kolla-identities. Management DNS names: plan-hostnames, prepare-hostnames. '
         'Root-local registered-host Geneve firewall: plan-geneve-guard, prepare-geneve-guard. '
         'Existing private management and isolated host-NAT: plan/prepare-management, plan/prepare-nat. '
@@ -190,6 +192,9 @@ def main(argv=None):
         parser.error('backend command required after --; use -- --help to list commands')
     try:
         path = select(args)
+        if remaining[0] in ('stage-host-budget-worker','install-host-budget-worker'):
+            from openstack_budget_service import main as budget_service
+            return budget_service(path,remaining)
         if remaining[0] in ('sync-host-budgets','process-host-budgets'):
             from openstack_host_budgets import main as host_budgets
             return host_budgets(path,remaining)

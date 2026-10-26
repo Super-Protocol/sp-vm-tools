@@ -34,6 +34,9 @@ def policy(filename):
             raise ValueError('exact automatic host defaults required')
         if any(type(defaults[k]) is not int or defaults[k]<1 for k in ('reserved_cpus','reserved_memory_mb')):
             raise ValueError('positive host reserves required')
+        from openstack_spvm.host_budgets import normalize
+        normalize({'request_id':'11111111-1111-4111-8111-111111111111','host':'baseline',
+            'generation':'0'*64,'budget':{'mode':'manual','vcpus':1,'memory_mb':1,'pools':defaults['pools']}})
     return value
 
 
@@ -42,10 +45,15 @@ class Worker:
         from openstack_spvm import host_budgets
         self.model=host_budgets;self.config=config;self.path=Path(path);self.module=module;self.c=connection
         self.root=root;root.mkdir(mode=0o700,parents=True,exist_ok=True)
+        from openstack_skyline_runtime import trusted
+        trusted(root)
+        if root.stat().st_mode&0o077:raise ValueError('private worker journal directory required')
         self.cfg=module.deployment_config(config['config'])
         if connection.session.get_project_id()!=config['project_id']:raise ValueError('worker auth project differs')
         host_budgets.admin(connection)
         self.publisher=connection.session.get_user_id()
+        if self.publisher not in config['reader_user_ids']:
+            raise ValueError('worker identity is not an approved request reader')
         if not set(config['automatic'])<=set(self.cfg['hosts']):raise ValueError('unknown delegated host')
         from compute_workflow import Backend
         self.runner=Backend(self.cfg,config['controller'],config['controller_python'],config['openrc'],root/'observations')
@@ -88,7 +96,7 @@ print(p.stdout)
             blockers.append('PCI_RESERVATIONS_PRESENT')
         return sorted(set(blockers)),services[0] if len(services)==1 else None
 
-    def catalog(self,name):
+    def catalog(self,name,*,request_id=None):
         before=self.local(name,'observe');extra,service=self.cloud_empty(name,before)
         defaults=self.config['automatic'][name];hardware=before['hardware']
         automatic={'mode':'auto','vcpus':hardware['logical_cpus']-defaults['reserved_cpus'],
@@ -101,9 +109,15 @@ print(p.stdout)
         host=self.cfg['hosts'][name].get('inventory_name',name)
         generation=self.model.digest({'host':host,'compute_uuid':before['compute_uuid'],
             'machine':before['machine_sha256'],'current':current})
+        unresolved=[]
+        for journal in self.root.glob('*/transaction.json'):
+            if journal.parent.name==request_id:continue
+            transaction=json.loads(journal.read_text())
+            if transaction.get('host') in (None,host) and transaction.get('status') not in ('SUCCEEDED','REFUSED'):
+                unresolved.append('BUDGET_TRANSACTION_REVIEW_REQUIRED')
         return {'schema_version':1,'project_id':self.config['project_id'],'host':host,'generation':generation,
             'current':current,'automatic':automatic,'hardware':hardware,
-            'blockers':sorted(set(before['blockers']+extra))},before,service
+            'blockers':sorted(set(before['blockers']+extra+unresolved))},before,service
 
     def publish(self,name,payload):
         from openstack_spvm import cluster_flow,secrets
@@ -127,7 +141,13 @@ print(p.stdout)
         cfg['hosts'][name]['compute_resources']={'reserved_cpus':before['hardware']['logical_cpus']-wanted['vcpus'],
             'reserved_memory_mb':before['hardware']['memory_mb']-wanted['memory_mb']}
         by_id={p['id']:p for p in wanted['pools']}
-        for p in cfg['hosts'][name]['storage_pools']:p['reserve_gib']=by_id[p['id']]['reserve_gib']
+        for p in cfg['hosts'][name]['storage_pools']:
+            p.update({k:by_id[p['id']][k] for k in ('budget_gib','reserve_gib')})
+        # Validate the complete candidate before replacing canonical intent.
+        candidate=self.active/'deployment.after.yaml'
+        candidate.write_text(yaml.safe_dump(cfg,sort_keys=False))
+        self.module.deployment_config(candidate)
+        if filename.read_bytes()!=old:raise ValueError('canonical deployment changed during budget application')
         from runtime_maintenance import atomic
         atomic(filename,yaml.safe_dump(cfg,sort_keys=False).encode(),filename.stat().st_mode&0o777)
 
@@ -167,13 +187,13 @@ print(p.stdout)
             self.publish(result_name,{'request_id':request_id,'project_id':self.config['project_id'],'status':'REVIEW_REQUIRED',
                 'message':'A previous attempt was interrupted. No automatic replay; inspect the private journal.'});return
         self.active.mkdir(mode=0o700)
-        record={'request_id':request_id,'status':'PROCESSING','phase':'PREFLIGHT'}
+        record={'request_id':request_id,'host':body['host'],'status':'PROCESSING','phase':'PREFLIGHT'}
         journal=self.active/'transaction.json';write(journal,record)
         disabled=False
         try:
             matches=[n for n in self.config['automatic'] if self.cfg['hosts'][n].get('inventory_name',n)==body['host']]
             if len(matches)!=1:raise ValueError('host not delegated')
-            host=matches[0];catalog,before,service=self.catalog(host)
+            host=matches[0];catalog,before,service=self.catalog(host,request_id=request_id)
             wanted=self.model.resolve({k:body[k] for k in ('request_id','host','generation','budget')},catalog)
             if catalog['blockers']:raise ValueError('Budgets can only be changed on an empty host. '+', '.join(catalog['blockers']))
             record['phase']='DISABLING_SCHEDULING';write(journal,record)
@@ -195,6 +215,8 @@ print(p.stdout)
             final=self.local(host,'observe');blockers,current_service=self.cloud_empty(host,final)
             if blockers or current_service is None or current_service.status!='disabled':
                 raise ValueError('Host changed before scheduling restore')
+            if final['current']!={**wanted,'mode':'manual'}:
+                raise ValueError('host configuration does not match verified budget')
             if was_enabled:self.c.compute.enable_service(current_service)
             result={'request_id':request_id,'project_id':self.config['project_id'],'status':'SUCCEEDED',
                 'message':'Budget applied and inventories verified. No VM lifecycle action. Rebind installer workspace before maintenance.'}
@@ -209,14 +231,19 @@ print(p.stdout)
 def main(path,argv):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['sync-host-budgets','process-host-budgets'])
-    parser.add_argument('--policy',required=True);args=parser.parse_args(argv)
+    parser.add_argument('--policy',required=True)
+    parser.add_argument('--expected-worker-user-id')
+    args=parser.parse_args(argv)
     if os.geteuid()!=0:raise ValueError('root budget worker required')
+    workflow.existing.backend(path)
     config=policy(args.policy)
     with workflow.context(path,config) as module:
         from openstack_spvm import cluster_cleanup
         import openstack
         connection=openstack.connect(verify='/etc/ssl/certs/ca-certificates.crt',api_timeout=30)
         try:
+            if args.expected_worker_user_id and connection.session.get_user_id()!=args.expected_worker_user_id:
+                raise ValueError('authenticated worker differs from activated publisher identity')
             worker=Worker(config,path,module,connection)
             fd=os.open(worker.root/'worker.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
             try:

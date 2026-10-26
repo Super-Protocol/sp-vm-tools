@@ -583,6 +583,8 @@ storage_pools:
     path: /data/spvm-state
     mount: /data
     reserve_gib: 200
+    # Optional persistent logical admission ceiling (not a disk size).
+    budget_gib: 2700
 ```
 
 On a 64-logical-CPU machine this makes at most 56 vCPUs available at ratio 1.0.
@@ -611,6 +613,124 @@ and actual filesystem pressure. Do not equate sparse qcow2 allocated bytes with
 logical state reservations: four 300 GiB reservations must not fit a 900 GiB
 budget merely because the files have not grown yet. External consumers can still
 exhaust a filesystem, so ongoing free-space checks remain necessary.
+
+### 7.1 Changing budgets after installation
+
+Automatic resource detection remains the default. The administrator can submit a
+custom budget or restore the separately approved automatic baseline through the
+SPVM CLI or **Swarm Clusters → Host resource budgets**. Both increases and
+decreases require an **empty host**. Stopped/ERROR instances in any project,
+Placement allocations, native PCI claims, libvirt domains, guest processes and
+local state/launch reservations block changes. Quotas are not changed.
+
+The web process never receives root or SSH authority. It submits a private
+Barbican intent using the administrator's own project/token. An explicitly
+delegated root worker checks all projects and host-local state, disables Nova
+scheduling, checks again, and may restart only Nova compute and the SPVM helper
+on that empty host. No guest, libvirt daemon, controller or unrelated service is
+restarted by budget application. Successful results require verified native
+CPU/RAM and state-pool Placement inventories. A previously disabled compute
+remains disabled.
+
+Budgets are opt-in. Installing GUI assets alone does not activate root request
+processing. Use a root-owned, non-group/world-writable policy and protected
+parents; preserve a separate baseline rather than deriving automatic defaults
+from an already customized configuration:
+
+```json
+{
+  "schema_version": 1,
+  "config": "/var/lib/spvm-openstack/operator/deployment.yaml",
+  "controller": "control1",
+  "controller_python": "/var/lib/spvm-openstack/client-venv/bin/python",
+  "openrc": "/etc/spvm/auth/budget-admin-openrc.sh",
+  "known_hosts": "/etc/spvm/ssh/known_hosts",
+  "project_id": "REPLACE_PROJECT_ID",
+  "admin_user_ids": ["REPLACE_ALLOWED_ADMIN_ID"],
+  "reader_user_ids": ["REPLACE_WORKER_USER_ID"],
+  "automatic": {
+    "compute1": {
+      "reserved_cpus": 8,
+      "reserved_memory_mb": 65536,
+      "pools": [{"id": "data", "budget_gib": 2700, "reserve_gib": 200}]
+    }
+  }
+}
+```
+
+Use inventory keys in `automatic`; CLI/GUI display Nova inventory/service names.
+The worker needs an administrator identity in the explicitly selected project,
+all-project Nova visibility, Placement inspection and private Barbican ACL
+access. It must be listed in `reader_user_ids`. It needs protected SSH access to
+the existing enrolled hosts and conductor for independent PCI checks. Keep its
+OpenRC root-private; credentials never enter web configuration or the browser.
+
+For an operator-controlled one-shot run, use a trusted SDK environment containing
+the matching client dependencies, and root-protected installer/backend sources:
+
+```bash
+sudo -i
+set -a
+. /etc/spvm/auth/budget-admin-openrc.sh
+set +a
+/opt/spvm/client-venv/bin/python /opt/sp-vm-tools/scripts/openstack/openstack_installer.py \
+  --driver-dir /opt/nova-spvm -- sync-host-budgets \
+  --policy /etc/spvm/host-budget-policy.json
+# After an administrator has explicitly submitted a request:
+/opt/spvm/client-venv/bin/python /opt/sp-vm-tools/scripts/openstack/openstack_installer.py \
+  --driver-dir /opt/nova-spvm -- process-host-budgets \
+  --policy /etc/spvm/host-budget-policy.json
+```
+
+For regular processing, run the following **on the controller**, after deploying
+the matching web backend. Staging refuses an older backend without budget
+routes. Replace example paths with actual protected installation paths. The
+`--web-python` interpreter must be the one used by `spvm-web-nodes.service`:
+
+```bash
+sudo /opt/spvm/client-venv/bin/python /opt/sp-vm-tools/scripts/openstack/openstack_installer.py \
+  --driver-dir /opt/nova-spvm -- stage-host-budget-worker \
+  --policy /etc/spvm/host-budget-policy.json \
+  --known-hosts /etc/spvm/ssh/known_hosts \
+  --python /opt/spvm/client-venv/bin/python \
+  --web-python /srv/spvm-web/venv/bin/python \
+  --web-config /srv/spvm-web/config.json \
+  --worker-user-id REPLACE_WORKER_USER_ID \
+  --output /var/lib/spvm-budget-activation-01
+
+# Review staged policy, runner, web-config diff and units, then explicitly approve:
+sudo /opt/spvm/client-venv/bin/python /opt/sp-vm-tools/scripts/openstack/openstack_installer.py \
+  --driver-dir /opt/nova-spvm -- install-host-budget-worker \
+  --output /var/lib/spvm-budget-activation-01 \
+  --activation-sha256 REPLACE_STAGING_RESULT
+```
+
+Activation is fresh-only and checksum/machine-bound. It backs up the web config,
+adds only explicit project/admin/publisher/worker delegation, restarts the web
+bridge, and enables `spvm-host-budgets.timer` (30 seconds after each completed
+run, initially 60 seconds after timer activation). The worker is serialized and runs as a
+root oneshot service; there is no VM recovery or unsolicited budget adjustment.
+An activation failure preserves its journal and is not replayed automatically.
+To suspend processing, disable only this timer; outstanding intents are not
+cancelled by disabling it. Inspect pending requests before enabling it again.
+
+The CLI supports `openstack spvm host budget list`, `set` and `status`; see the
+driver bundle's `deployment/HOST_BUDGETS.md` for full request examples. A request
+without `--apply` is preview-only. A pending GUI request remains pending if no
+worker is running; do not submit another ID to bypass it.
+
+On success the worker persists CPU/RAM reserves **and pool `budget_gib` /
+`reserve_gib`** in the canonical deployment YAML. Regeneration honors that state
+ceiling; it must not silently donate the whole disk again. Bound installer
+workspaces and helper requests become stale and require explicit regeneration /
+rebinding before maintenance. They are not rewritten behind the operator's back.
+
+An interrupted/post-quarantine failure leaves scheduling disabled for review and
+blocks further budget requests on that host. Inspect root-private evidence in
+`/var/lib/spvm-host-budget-worker/<request-id>` and host backups under
+`/var/backups/spvm-host-budgets/<request-id>`. There is no automatic rollback,
+replay, allocation reclamation or removal of the review gate. Preserve evidence
+when performing an explicitly reviewed manual recovery.
 
 GPU discovery reports BDF, vendor/product, driver and IOMMU isolation. A detected
 card is not automatically free or approved for OpenStack. Administrator approval,

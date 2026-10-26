@@ -178,3 +178,12 @@ and emits deployment.yaml plus the common workflow's Skyline input. Completed
 repeats verify rather than rebuild; failures preserve evidence and refuse replay.
 No services or guests are replaced. See the guide's common workflow section for
 the exact request and the remaining enrollment/clean-install boundaries.
+
+`openstack_host_budgets.py` processes explicit private administrator requests on
+empty hosts only, including for increases. It checks all projects, Placement,
+PCI and host-local state before and after scheduling quarantine, persists native
+reserves and state ceilings, and leaves ambiguous failures gated for manual
+review. `openstack_budget_service.py` stages and explicitly activates its optional
+fresh-only service/timer plus web delegation; source/config drift and unsupported
+web backends are refused. Neither path performs VM recovery or guest lifecycle.
+See English deployment guide §7.1 for one-shot and managed activation commands.
