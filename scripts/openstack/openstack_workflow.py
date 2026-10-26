@@ -32,8 +32,14 @@ def request(filename):
         'add-compute':{'controller','controller_python','openrc','host','enrollment_request'}}
     if (not isinstance(value,dict) or type(value.get('schema_version')) is not int
             or value['schema_version']!=1 or value.get('mode') not in modes
-            or set(value)-{'skyline','platform','preparation'}!=common|modes[value['mode']]):
+            or set(value)-{'skyline','platform','preparation','new_compute'}!=common|modes[value['mode']]):
         raise ValueError('exact explicit workflow request required')
+    if 'new_compute' in value:
+        if value['mode']!='add-compute' or 'skyline' in value:
+            raise ValueError('new-compute preparation is exclusive to add-compute')
+        literal_path(value['new_compute'])
+        import openstack_compute_prepare
+        openstack_compute_prepare.specification(value['new_compute'])
     if 'platform' in value or 'preparation' in value:
         if value['mode']!='fresh' or 'skyline' in value or 'preparation' in value and 'platform' not in value:
             raise ValueError('platform completion/preparation require fresh mode; not staged Skyline adoption')
@@ -107,6 +113,11 @@ def fingerprint(value,path,module):
             paths.extend((filename,json.loads(read(filename))['profile']))
     elif value['mode']=='add-compute' and value['enrollment_request']:
         paths.append(value['enrollment_request'])
+    if 'new_compute' in value:
+        import openstack_compute_prepare
+        paths.append(value['new_compute'])
+        platform_inputs.update({'new-compute-config/'+k:v for k,v in
+            openstack_compute_prepare.config_hashes(value['new_compute']).items()})
     source_root=Path(path).parent.parent
     sources=list(Path(path).parent.glob('*.py'))
     sources.extend(p for p in (Path(path).parent/'skyline').rglob('*')
@@ -168,6 +179,9 @@ def plan_operation(value,path,module,output):
         if result.get('blockers'):raise ValueError('fresh host preparation required; inspect inner plan')
         return {'kind':'fresh-install','changes':True,'plan_sha256':result['plan_sha256']}
     backend=compute_backend(value,module,output/'compute-observations')
+    if 'new_compute' in value:
+        import openstack_compute_prepare
+        return openstack_compute_prepare.plan(value,path,module,output,backend)
     plan=backend.plan(value['host'])
     if plan['mode']=='NOOP' and not plan['blockers']:kind='compute-noop'
     else:
@@ -179,6 +193,10 @@ def plan_operation(value,path,module,output):
 
 
 def apply_operation(value,path,module,output,operation, *, resume=False):
+    if operation['kind']=='new-compute':
+        import openstack_compute_prepare
+        return openstack_compute_prepare.apply(value,path,module,output,
+            compute_backend(value,module,output/'compute-observations'))
     if operation['kind']=='fresh-platform-install':
         if resume:raise ValueError('platform resume is not an ambiguous child replay; review journals first')
         if digest(platform.preflight(value,path,module))!=operation['platform_intent_sha256']:
@@ -261,18 +279,19 @@ def execute(args,path):
             if record and record.get('status') not in ('COMPLETE','RUNNING','NEEDS_REVIEW'):
                 raise ValueError('invalid transaction state')
             kinds={'existing':{'existing-noop':False},'fresh':{'fresh-install':True,'fresh-platform-install':True},
-                   'add-compute':{'compute-noop':False,'compute-enrollment':True}}
+                   'add-compute':{'compute-noop':False,'compute-enrollment':True,'new-compute':True}}
             if (plan['operation']['kind'] not in kinds[value['mode']]
                     or type(plan['operation']['changes']) is not bool
                     or plan['operation']['changes']!=kinds[value['mode']][plan['operation']['kind']]):
                 raise ValueError('unsupported operation')
             # Bind the child approval bytes, not merely the parent's reference.
             if plan['operation']['kind'] not in ('existing-noop','fresh-platform-install'):
-                child=output/('fresh/install-plan.json' if plan['operation']['kind']=='fresh-install' else 'compute-plan.json')
+                child=output/('fresh/install-plan.json' if plan['operation']['kind']=='fresh-install' else
+                    'new-compute-plan.json' if plan['operation']['kind']=='new-compute' else 'compute-plan.json')
                 inner=json.loads(read(child))
                 # Preserve each delegated workflow's published digest ABI:
                 # compute plans use compact JSON, Kolla plans use spaced JSON.
-                child_digest=(digest if plan['operation']['kind']=='fresh-install'
+                child_digest=(digest if plan['operation']['kind'] in ('fresh-install','new-compute')
                               else importlib.import_module('accounting_reconcile').digest)
                 if (inner.get('plan_sha256')!=plan['operation']['plan_sha256']
                         or child_digest({k:v for k,v in inner.items() if k!='plan_sha256'})!=plan['operation']['plan_sha256']):

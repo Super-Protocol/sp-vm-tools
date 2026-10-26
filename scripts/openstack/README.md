@@ -7,7 +7,8 @@ No compatibility copies are maintained in the parent directory.
 
 `openstack_workflow.py` provides the common `plan-openstack` / `apply-openstack`
 entry points: explicit fresh installation, existing scoped NOOP, or prepared
-add-compute NOOP/initial enrollment. Source/input-bound approval, durable parent
+add-compute NOOP/initial enrollment and explicit new-compute scoped Kolla deployment.
+Source/input-bound approval, durable parent
 journal, explicit mutation opt-in and child recovery guards are retained.
 It never guesses a scenario or silently redeploys a working cloud. See guide
 §10.28 for schemas, completion semantics and the separate preparation/enrollment

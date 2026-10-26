@@ -169,6 +169,7 @@ Do not describe a passing basic preflight as a deployed or attested cloud.
 | Initial offline runtime enrollment | Real deny-all-to-project enrollment installed on both empty computes in the cleared-cloud redeployment; never-allocated pool lock is supported without fabricating a claims ledger |
 | Initial portable host ingress scaffold and activation | Real empty-scaffold install/start/enable passed on freed `.247`; Kolla containers unchanged; namespace routing/negative checks also passed |
 | Initial compute quarantine/stop/enroll/start/accept/enable | Full fresh enrollment/activation passed on compute-only `.245` and all-in-one `.247`, protecting other containers/services; clean-OS acceptance remains separate |
+| Separate compute deployment into an existing cloud | Passed on 2026-10-26: `.245` Nova service/container absent, disabled preregistration, scoped Kolla deploy, guarded SPVM enrollment, ordinary VM/shared VIF and occupied NOOP; prepared infrastructure was reused, not a clean OS |
 | Prepared, registered compute activation with journal/resume | Implemented and tested on the two-host lab |
 | Release449 Swarm across two hosts, public HTTPS UI | Re-tested after full cleared-cloud redeployment: three ACTIVE/READY guests, registry presence, Barbican CA, UI/config/GraphQL HTTP200; repeat create reused existing guests |
 | Two simultaneous Swarms and exact neighbor-preserving cleanup | Passed on rebuilt Kolla across both hosts: six ACTIVE/READY guests, one H100 per seed, distinct CA/grants/SG/domains, both public UIs; retiring only the second returned accounting to baseline and preserved the first QEMU processes/UI/shared network |
@@ -3380,7 +3381,7 @@ The deployment machine needs internal service configuration and trust from the
 existing Kolla deployment. Do not manually copy passwords into a public host file.
 Use the existing password store, inventory and generated service configuration.
 
-Current `plan-add-compute` / `add-compute` support a **prepared and already
+The legacy backend `plan-add-compute` / `add-compute` support a **prepared and already
 registered** compute, not enrollment of a bare server. Run backend `--help` and
 `plan-add-compute --help` through the wrapper for exact arguments. Required paths
 include controller Python/OpenRC, Kolla executable/inventory/profile/collections
@@ -3399,6 +3400,104 @@ restart, guest stop or reboot is part of this transaction. Apply requires a
 reviewed plan and its exact SHA256. Resume the same journal; do not invent a new
 transaction to bypass an ambiguous restart. Changed workloads or ownership block
 the operation. Once new VMs exist, do not replay an old empty-host acceptance plan.
+
+### 11.1. Deploy a new compute into an existing cloud
+
+The installer scenario coordinator also supports an explicit `new_compute` input
+for a compute which has **no Nova container or Nova service registration yet**.
+This is a separate mutating operation, not a fallback from failed NOOP checks.
+It reuses the existing controller, password store, API CA and pinned Kolla source.
+It never invokes control-plane deploy, post-deploy, hardware bootstrap or reboot.
+Use the root-owned private deployment context for this path. The native limited
+Kolla playbook may delegate cell/database checks to the controller; `--limit`
+does not mean that no task contacts it. Source/version pins and controller
+lifecycle checks remain mandatory.
+
+Prerequisites remain explicit and must pass their documented preparation phases:
+
+- Add the target's unique inventory alias, SSH address/trust and administrator
+  CPU/RAM reservations, state pools and permitted GPUs to a newly bound deployment
+  configuration/workspace. Keep existing hosts and their resource policies intact.
+- Prepare its CC/libvirt hardware runtime with the separate bootstrap; prepare
+  management/Geneve transport, hostname resolution and guest-network routing.
+- Prepare Docker/dependencies, stage the pinned Nova driver image, and install the
+  matching host helper with its native Nova compute UUID and deny-all bootstrap
+  runtime. Existing matching infrastructure can be reused; unrelated guests, old
+  SPVM disks/claims or an enrolled runtime are not treated as an empty target.
+  Even an empty `leases.json` and its lock left by a previous deployment require
+  explicit reviewed cleanup before this fresh-compute path; the plan refuses
+  them before any deployment rather than silently deleting history.
+- Stage a project-bound per-host runtime enrollment request using the existing
+  cloud's project, publisher/reader identities and shared network. Do not generate
+  replacement administrator credentials, API CA, provider template or network.
+- Retain the active private Kolla configuration directory (including passwords)
+  and a working administrator OpenRC/SDK environment on the deployment controller.
+
+For example, add the optional field to the common `mode=add-compute` request:
+
+```json
+{
+  "schema_version": 1,
+  "mode": "add-compute",
+  "config": "/srv/private/deployment.yaml",
+  "workspace": "/srv/private/bound-workspace",
+  "known_hosts": "/srv/private/known_hosts",
+  "controller": "control01",
+  "controller_python": "/opt/spvm-client/bin/python",
+  "openrc": "/etc/spvm/auth/admin-openrc.sh",
+  "host": "compute02",
+  "enrollment_request": "/srv/private/runtime-requests/compute02.json",
+  "new_compute": "/srv/private/new-compute.json"
+}
+```
+
+The referenced `new-compute.json` has this exact schema:
+
+```json
+{
+  "schema_version": 1,
+  "configdir": "/srv/private/active-kolla-config",
+  "allow_experimental_ubuntu26": false
+}
+```
+
+Use `plan-openstack`, review the output and run `apply-openstack` with the exact
+plan SHA256 and `--allow-changes`. Set the Ubuntu 26 acknowledgement explicitly
+only for that experimental host OS; this does not make it an upstream-supported
+host or substitute for the reviewed container-engine preparation.
+
+The journalled path is:
+
+```text
+verify absent/empty target and unchanged controller
+  -> create exactly one disabled Nova service through Nova versioned objects
+  -> isolated copy of existing Kolla config, with new services disabled
+  -> native Kolla deploy --limit <one compute-only inventory alias>
+  -> require the new Nova service to be UP and DISABLED
+  -> cell discovery without controller container restart
+  -> existing quarantine/stop/SPVM enrollment/start/accept/enable transaction
+```
+
+The isolated extra-vars profile must explicitly override `node_custom_config`:
+the old globals can contain an absolute path into the original workspace. Merely
+copying the directory and appending a per-host override is insufficient. Without
+this override the compute's configuration would silently remain the old one.
+In current Nova, creation of service objects is executed by conductor: setting
+`enable_new_services=false` on the compute alone does **not** guarantee disabled
+registration. The installer therefore creates the exact selected host's disabled
+service through the installed Nova versioned-object API in the owning conductor
+before deploy. No raw SQL, conductor restart or global configuration change is
+used. Existing service records are refused, not overwritten. Cell discovery and
+the eventual enable operation are separate journalled phases.
+
+An interrupted or failed native deployment is recorded as NEEDS_REVIEW and is
+**not automatically replayed**, including `--resume`. Inspect its private log,
+target containers, registration and child journals before planning any recovery.
+A completed parent apply is historical, not a fresh health check. For later
+already-enrolled-host verification, omit `new_compute` and use the NOOP/existing
+workflow. Full fresh-OS preparation, hardware bootstrap and transport creation
+remain distinct acceptance cases; successful new Nova registration alone does
+not certify them or prove that Swarm applications are healthy.
 
 ## 12. Swarm lifecycle, certificates and secrets
 
