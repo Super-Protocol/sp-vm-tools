@@ -190,6 +190,9 @@ def main(argv=None):
         parser.error('backend command required after --; use -- --help to list commands')
     try:
         path = select(args)
+        if remaining[0] in ('sync-host-budgets','process-host-budgets'):
+            from openstack_host_budgets import main as host_budgets
+            return host_budgets(path,remaining)
         if remaining[0]=='stage-kolla-identities':
             from openstack_compute_identity import main as compute_identity
             return compute_identity(path,remaining)
