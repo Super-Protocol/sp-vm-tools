@@ -15,5 +15,6 @@
       "reserve_gib": 200
     }
   ],
-  "gpus": []
+  "gpus": "from-deployment",
+  "gpu_inventory": "from-deployment"
 }

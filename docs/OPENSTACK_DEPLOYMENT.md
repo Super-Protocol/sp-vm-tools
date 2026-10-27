@@ -1,5 +1,8 @@
 # OpenStack with the SPVM Nova driver: deployment and operations
 
+GPU identity/discovery work in progress: [GPU profile preparation](OPENSTACK_GPU_PROFILES.md).
+This worktree is not yet an accepted GPU rollout; follow its explicit limitations.
+
 ## Pre-release interface policy
 
 Only current configuration/request/journal formats are supported until a stable

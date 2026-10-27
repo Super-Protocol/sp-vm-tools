@@ -41,7 +41,10 @@ def policy(filename):
     return value
 
 
-class Worker(PoolWorker):
+from openstack_host_gpus import GpuWorker
+
+
+class Worker(PoolWorker,GpuWorker):
     def __init__(self,config,path,module,connection,root=Path('/var/lib/spvm-host-budget-worker'),policy_path=None):
         from openstack_spvm import host_budgets
         self.model=host_budgets;self.config=config;self.path=Path(path);self.module=module;self.c=connection
@@ -67,7 +70,7 @@ host=Host()
 result=host.observe() if ACTION=='observe' else host.apply(DATA['request_id'],DATA['wanted'],DATA['before'])
 print(json.dumps(result))
 '''
-        return self.runner.remote(name,body)
+        return self.runner.remote(name,body,isolated=True)
 
     def cloud_empty(self,name,snapshot,*,allow_down=False):
         hostname=self.cfg['hosts'][name].get('inventory_name',name);blockers=[]
@@ -92,7 +95,7 @@ p=subprocess.run(['docker','exec','-i','nova_conductor','/var/lib/kolla/venv/bin
 if p.returncode:raise ValueError('PCI observation unavailable')
 print(p.stdout)
 '''
-        pci=self.runner.remote(self.config['controller'],code)[hostname]
+        pci=self.runner.remote(self.config['controller'],code,isolated=True)[hostname]
         if pci['compute_uuid']!=root:raise ValueError('PCI compute identity differs')
         if any(p['status'] not in ('available','deleted') or p.get('instance_uuid') for p in pci['devices']):
             blockers.append('PCI_RESERVATIONS_PRESENT')
@@ -267,8 +270,12 @@ def main(path,argv):
                     from openstack_spvm import host_pools
                     for entry in cluster_cleanup.listing(connection.key_manager,host_pools.PREFIX+'request-'):
                         worker.process_pool(entry)
+                    from openstack_spvm import host_gpus
+                    for entry in cluster_cleanup.listing(connection.key_manager,host_gpus.PREFIX+'request-'):
+                        worker.process_gpu(entry)
                 worker.sync()
                 worker.sync_pools()
+                worker.sync_gpus()
             finally:os.close(fd)
         finally:connection.close()
     print(json.dumps({'status':'HOST_BUDGET_WORKER_COMPLETE'}));return 0

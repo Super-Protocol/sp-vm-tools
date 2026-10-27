@@ -64,7 +64,7 @@ def syntax(files):
     ast.parse(files['libvirt_launcher.py'],filename='libvirt_launcher.py')
     for name in SCRIPTS[:2]:command(['bash','--noprofile','--norc','-n'],body=files[name])
     wrapper=files['start_super_protocol_libvirt.sh'].decode()
-    if not all(m in wrapper for m in ('--nova-state-disk)','--nova-interface-xml)',
+    if not all(m in wrapper for m in ('--nova-state-disk)','--nova-interface-xml)','--nova-aux-pci)',
                                      'Nova requires measured TDX/SEV launch')):
         raise ValueError('Nova measured-launch contract missing')
 

@@ -148,6 +148,7 @@ def main(argv=None):
         'preflight --config deployment.yaml --output /srv/check-01. '
         'Owned preparation commands: plan-container-engine, prepare-container-engine. '
         'Mounted state storage: plan-storage, prepare-storage (outputs resolved deployment YAML). '
+        'GPU identity preparation: prepare-gpus (explicit empty-host detection and resolved YAML). '
         'New-cloud inputs: init-kolla, check-kolla-workspace, list-kolla-tasks. '
         'Fresh compute configuration: stage-kolla-computes. '
         'Initial-cloud checks: plan-kolla-prechecks, run-kolla-prechecks. '
@@ -193,6 +194,9 @@ def main(argv=None):
         parser.error('backend command required after --; use -- --help to list commands')
     try:
         path = select(args)
+        if remaining[0]=='prepare-gpus':
+            from openstack_gpu_prepare import main as gpu_prepare
+            return gpu_prepare(path,remaining)
         if remaining[0] in ('plan-storage','prepare-storage'):
             from openstack_storage_prepare import main as storage_prepare
             return storage_prepare(path,remaining)

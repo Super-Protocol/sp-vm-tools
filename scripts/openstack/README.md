@@ -5,6 +5,10 @@ here; hardware bootstrap and VM launcher scripts remain separate in `scripts/`.
 Keep these modules together: they use sibling imports and source-hash bindings.
 No compatibility copies are maintained in the parent directory.
 
+GPU preparation and explicit empty-host GPU configuration are described in
+[GPU profiles](../../docs/OPENSTACK_GPU_PROFILES.md). Control-plane restarts are
+part of the explicit technical-settings transaction, not display-name updates.
+
 `openstack_workflow.py` provides the common `plan-openstack` / `apply-openstack`
 entry points: explicit fresh installation, existing scoped NOOP, or prepared
 add-compute NOOP/initial enrollment and explicit new-compute scoped Kolla deployment.

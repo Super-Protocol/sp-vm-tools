@@ -19,7 +19,8 @@ from openstack_container_engine import digest, file_hash, write
 
 MODULES=('host_helper.py','host_storage.py','host_network.py','host_provider.py',
          'host_runtime.py','host_execution.py','host_vif_cleanup.py','state_store.py',
-         'seed_reconcile_worker.py','release_service_smoke.py','storage_discovery.py')
+         'seed_reconcile_worker.py','release_service_smoke.py','storage_discovery.py',
+         'gpu_discovery.py','host_gpu_host.py','host_gpu_native.py','host_budget_host.py','runtime_maintenance.py')
 SCRIPTS=('start_super_protocol.sh','start_super_protocol_libvirt.sh','libvirt_launcher.py')
 ACCOUNT='kolla-nova'
 UID=42436
@@ -27,7 +28,7 @@ ROOTS={k:'/var/lib/spvm/'+v for k,v in
        [('network','network'),('provider','providers'),('runtime','runtime'),('execution','execution')]}
 FIXED=('/usr/local/libexec/spvm','/usr/local/libexec/nova-spvm',
        '/usr/local/bin/spvm_cloud.py','/etc/spvm/host-helper.json','/etc/spvm/compute-pools.json',
-       '/etc/spvm/runtime-services.json','/etc/systemd/system/host-helper.service',
+       '/etc/spvm/runtime-services.json','/etc/spvm/gpu-inventory.json','/etc/systemd/system/host-helper.service',
        '/etc/systemd/system/host-helper.socket','/etc/tmpfiles.d/spvm.conf',
        '/etc/polkit-1/rules.d/49-spvm-kolla-nova.rules','/var/lib/nova/compute_id')
 
@@ -40,7 +41,7 @@ def request(path):
             raise ValueError('bounded regular request file required')
         value=json.loads(path.read_text())
     if not isinstance(value,dict) or set(value)-{'registered_release_cache_root'}!={'version','machine_sha256','compute_uuid','release',
-            'allow_debug','tools','cache','pools','gpus'} or type(value['version']) is not int or value['version']!=1:
+            'allow_debug','tools','cache','pools','gpus','gpu_inventory'} or type(value['version']) is not int or value['version']!=1:
         raise ValueError('explicit versioned helper request required')
     if (not re.fullmatch('[a-f0-9]{64}',str(value['machine_sha256']))
             or str(uuid.UUID(value['compute_uuid']))!=value['compute_uuid']
@@ -81,6 +82,10 @@ def request(path):
             or any(not isinstance(p,str) or not re.fullmatch(r'[a-f0-9]{4}:[a-f0-9]{2}:[01][a-f0-9]\.[0-7]',p) for p in value['gpus'])
             or len(value['gpus'])!=len(set(value['gpus']))):
         raise ValueError('explicit unique GPU BDF list required; [] means none')
+    from nova_spvm.gpu_profiles import normalize,authorize,catalog
+    normalize(value['gpu_inventory']);authorize(value['gpu_inventory'],value['gpus'])
+    if set(value['gpus'])!={a for u in catalog(value['gpu_inventory'])['assignments'] for a in u['members']}:
+        raise ValueError('registered PCI list must exactly match eligible GPU/fabric units')
     roots=[Path(p) for p in [*ROOTS.values(),value['cache'],value['tools'],*[p['root'] for p in value['pools']],
                           *([value['registered_release_cache_root']] if 'registered_release_cache_root' in value else [])]]
     if any(a.is_relative_to(b) or b.is_relative_to(a) for i,a in enumerate(roots) for b in roots[i+1:]):
@@ -122,7 +127,7 @@ def source_manifest(backend_path,spec,*,bootstrap=False):
     if path.resolve()!=path or not path.is_file() or path.stat().st_size>1048576:
         raise ValueError('driver capability manifest required')
     value=json.loads(path.read_text())
-    needed={'grant-bound-release-selection','guest-api-registry-presence'}
+    needed={'grant-bound-release-selection','guest-api-registry-presence','gpu-profile-placement-v1','gpu-pci-identity-v1'}
     if 'registered_release_cache_root' in spec:needed.add('administrator-release-registration')
     if spec['release'].endswith('-release'):needed.add('release-only-helper-default')
     if bootstrap:needed.add('deny-all-runtime-bootstrap')
@@ -222,7 +227,7 @@ class Host:
                     raise ValueError('installed executable measured launcher missing')
                 launcher[name]=file_hash(p)
             wrapper=(tools/'scripts/start_super_protocol_libvirt.sh').read_text()
-            if not all(marker in wrapper for marker in ('--nova-state-disk)','--nova-interface-xml)','Nova requires measured TDX/SEV launch')):
+            if not all(marker in wrapper for marker in ('--nova-state-disk)','--nova-interface-xml)','--nova-aux-pci)','Nova requires measured TDX/SEV launch')):
                 raise ValueError('Nova-compatible measured launcher patches are required')
         cache=self.trusted(spec['cache'])
         if cache.exists() and (not cache.is_dir() or cache.stat().st_mode & 0o067):
@@ -255,13 +260,10 @@ class Host:
             if (item['budget_gib']+item['reserve_gib'])*2**30>free.f_bavail*free.f_frsize:
                 raise ValueError('explicit logical state budget plus reserve exceeds free space')
             pools.append({**item,'device_id':mount.stat().st_dev})
-        for address in spec['gpus']:
-            p=self.path('/sys/bus/pci/devices/'+address)
-            if ((p/'vendor').read_text().strip()!='0x10de'
-                    or not (p/'class').read_text().startswith('0x03')
-                    or (p/'driver').resolve().name!='vfio-pci'
-                    or sorted(x.name for x in (p/'iommu_group/devices').iterdir())!=[address]):
-                raise ValueError('selected GPU must be isolated NVIDIA vfio-pci device')
+        from gpu_discovery import discover
+        from nova_spvm.gpu_profiles import digest as gpu_digest
+        if gpu_digest(discover(self.root,previous=spec['gpu_inventory']))!=gpu_digest(spec['gpu_inventory']):
+            raise ValueError('GPU hardware/driver/IOMMU inventory changed after discovery')
         # Preserve the measured hypervisor identity across provisioning.
         protected={}
         for path in ('/usr/bin/qemu-system-x86_64','/usr/bin/virsh','/usr/sbin/libvirtd',
@@ -317,6 +319,7 @@ class Host:
         if 'registered_release_cache_root' in spec:
             config['execution']['registered_release_cache_root']=spec['registered_release_cache_root']
         files={**files,'/etc/spvm/host-helper.json':(json.dumps(config,indent=2).encode(),0o600),
+            '/etc/spvm/gpu-inventory.json':(json.dumps(spec['gpu_inventory'],sort_keys=True).encode(),0o644),
             '/etc/spvm/compute-pools.json':(json.dumps({'compute_uuid':spec['compute_uuid'],
                 'pool_ids':[p['id'] for p in spec['pools']]}).encode(),0o644),
             '/etc/tmpfiles.d/spvm.conf':(b'd /run/spvm 0750 root 42436 -\n',0o644),

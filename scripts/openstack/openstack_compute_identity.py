@@ -65,6 +65,10 @@ def stage(args, backend):
             if pools=='auto':raise ValueError('resolve storage before staging identities')
             raw['pools']=[{k:p[k] for k in ('id','mount','budget_gib','reserve_gib')}|{'root':p['path']}
                 |({'allow_root':True} if p.get('allow_root') else {}) for p in pools if p.get('enabled',True)]
+        raw['gpu_inventory']=cfg['hosts'][name]['gpu_inventory']
+        if raw.get('gpus')=='from-deployment':
+            from nova_spvm.gpu_profiles import catalog
+            raw['gpus']=sorted(a for u in catalog(raw['gpu_inventory'])['assignments'] for a in u['members'])
         spec=helper_request(raw)
         # source audit uses the same machine-id SHA as resource validation.
         machine=audits[name].get('host_identity_sha256')
