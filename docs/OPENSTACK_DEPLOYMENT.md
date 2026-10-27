@@ -1,5 +1,35 @@
 # OpenStack with the SPVM Nova driver: deployment and operations
 
+## Pre-release interface policy
+
+Only current configuration/request/journal formats are supported until a stable
+release is declared. There are no old-version adapters, prototype launch paths,
+or automatic migrations of test installations. Use matching driver, CLI, backend
+and helper sources. Old inputs must be explicitly replaced by the administrator;
+never weaken ownership, admission, signature-presence or data-safety checks.
+
+Creation and expansion use explicit per-node specs and project enrollment.
+Prototype CLI worker counts/GPU-policy launch flags, old `nova-*` helper actions,
+SSH runtime readiness, seed-only v1 join snapshots and old append-journal adoption
+are removed. Current runtime enrollment uses API readiness and `network_ids`,
+even for a single shared network. Debug guest opt-in remains a separate policy.
+
+The web bridge accepts only Barbican provider templates and
+`provider_template_policy`; local `creation_templates` are not supported.
+The GUI uses the matching web API for measurements, not a browser-side adapter
+for older bridges. `openstack spvm spec prepare` reserves names/UUID before
+creation; raw current per-node specs, also used by the web flow, remain valid
+inputs and are not an older schema. Flavor receipts require the current technical
+name and cleanup journals require per-node spec digests (schema 2).
+The retired DevStack `upgrade-existing` / `upgrade-check` package migration
+commands are removed. The runtime no longer has an `experimental_debug_only`
+field: debug permissions are explicit release/helper/registration policies.
+Existing test data/configuration is not adopted, converted or backfilled.
+
+Release bundles require both source and wheel checksums. An explicitly trusted
+current source directory is a distinct supported input, verified by its complete
+tree digest, not an older bundle compatibility mode.
+
 Updated: 2026-10-21. Read the implementation status before running commands.
 
 Current lab checkpoint: OpenStack was cleared and redeployed on both prepared
@@ -96,10 +126,12 @@ To build an offline candidate from reviewed source, use:
 
 ```bash
 python3 examples/test-cluster/bare-metal-spvm/deployment/build_bundle.py \
-  --tag spvm-driver-v0.2.22-rc1 --output /srv/spvm-candidate-01 \
-  --wheel /srv/offline-wheels/nova_spvm-0.2.22-py3-none-any.whl
+  --tag openstack-v0.2.29-rc1 --output /srv/spvm-candidate-01 \
+  --wheel /srv/offline-wheels/nova_spvm-0.2.29-py3-none-any.whl
 ```
 
+Use the version from the selected source's manifest; only `openstack-v<version>`
+tags are accepted (branch release channels remain supported).
 The optional wheel must contain exactly the source package's Python modules and
 the manifest version, with no injected `.pth`/data files. Without `--wheel`, the
 builder uses the existing local build dependencies with network indexes disabled.
@@ -111,7 +143,8 @@ For development, an explicitly reviewed checkout or expanded candidate may be
 selected via `--driver-dir`; this is operator trust, not release verification.
 A clean committed/tagged bundle must be built and tested before GitHub publication.
 
-The accepted private candidate is
+Historical evidence below refers to an earlier development candidate, not an
+accepted current tag/input format. The earlier private candidate was
 `nova-spvm-spvm-driver-v0.2.22-rc1.tar.gz`, SHA256
 `3957ffb68d1d5c4ce8bc69062b3f0ff27d554ca194c9600d57deb2735f885f10`.
 Its wheel SHA256 is
@@ -600,8 +633,9 @@ Project quotas are a separate aggregate limit, not a per-host placement guarante
 Every VM must fit on one eligible host; forcing a host does not bypass capacity.
 
 For state storage use existing, persistently mounted local ext4/XFS filesystems.
-The current audit rejects the root filesystem, symlinks, remote filesystems and
-counting the same filesystem twice. It never partitions, formats or mounts disks.
+The audit rejects symlinks, remote filesystems and counting the same filesystem
+twice. Root-backed storage requires explicit `allow_root: true` with `mount: /`.
+It never partitions, formats or mounts disks.
 Multiple physical filesystems may be separate pools; two directories on one
 filesystem are not two independent capacity sources. One state disk must fit in
 one pool; the installer does not concatenate disks automatically.
@@ -613,6 +647,69 @@ and actual filesystem pressure. Do not equate sparse qcow2 allocated bytes with
 logical state reservations: four 300 GiB reservations must not fit a 900 GiB
 budget merely because the files have not grown yet. External consumers can still
 exhaust a filesystem, so ongoing free-space checks remain necessary.
+
+### 7.0 Discover and prepare mounted state storage
+
+Compute hosts default to `storage_pools: auto`. Existing explicit pool lists are
+preserved; discovery does not overwrite administrator settings. Before resource
+audit, rendering or Kolla initialization, resolve automatic storage on fresh,
+hardware-prepared compute hosts:
+
+```bash
+sudo scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+  plan-storage --config /srv/operator/deployment.yaml \
+  --known-hosts /srv/operator/known_hosts --output /srv/storage-plan-01
+# Inspect storage-plan.json and deployment.resolved.yaml, including root use.
+sudo scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+  prepare-storage --config /srv/operator/deployment.yaml \
+  --known-hosts /srv/operator/known_hosts --output /srv/storage-plan-01 \
+  --plan-sha256 <approved-plan-sha256>
+# Use /srv/storage-plan-01/deployment.resolved.yaml for subsequent installation.
+```
+
+The coordinator uses verified SSH, inspects all compute hosts before mutation,
+and refuses enrolled hosts or any existing domain/guest. Planning is read-only
+on hosts. Preparation creates only empty `spvm-state` directories (root-owned,
+Nova group traversal); it does not format, repartition, mount, delete or move
+anything. Existing nonempty targets are refused. The original YAML is unchanged.
+The plan is bound to source/config/known-host hashes and current observations;
+an attempted transaction is never automatically replayed after interruption.
+
+Discovery accepts mounted local block-backed ext4/XFS. It excludes system,
+network, temporary, loop, read-only, symlink and subtree/bind presentations, and
+deduplicates filesystem identities. Two directories on one filesystem cannot
+provide two active capacities. Distinct filesystems on the same physical drive
+remain distinct pools; this is not hardware fault isolation. Btrfs/ZFS, network
+storage, automatic mounting/formatting and filesystem aggregation are not
+supported by this discovery phase.
+
+Suitable non-root filesystems are selected first. Root is used only as fallback,
+or by explicit opt-in. Default reserve suggestions are max(16 GiB, 10% of observed
+available space) for data filesystems and max(64 GiB, 20%) for root. The remaining
+space is the initial logical pool budget. A reserve is a safety margin checked
+against free space, not a partition or OS quota: external writes can still fill
+the filesystem and block new allocations. Existing reservations are not evicted.
+Root capacity therefore needs particular operational monitoring.
+
+Optional per-host discovery policy:
+
+```yaml
+storage_pools: auto
+storage_discovery:
+  include_root: true         # explicit root inclusion even with data disks
+  exclude_mounts: [/backup]  # exclude / too if root must never be used
+  reserve_gib: 100           # override for each selected non-root filesystem
+  root_reserve_gib: 200      # root-specific override
+```
+
+Do not both include and exclude root. A manually specified root pool instead
+uses `mount: /`, `path: /spvm-state`, `allow_root: true` plus explicit positive
+`budget_gib` and `reserve_gib`. Protected system directories cannot be pool roots.
+Use `enabled: false` to retain an inactive manual definition. An explicit empty
+list disables all SPVM state capacity; it is not a request to rediscover disks.
+For identity staging, the helper template may use `"pools": "from-deployment"`;
+this expands only enabled entries from the resolved configuration. Do not reuse
+an old manually hardcoded helper pool list after changing canonical definitions.
 
 ### 7.1 Changing budgets after installation
 
@@ -739,6 +836,55 @@ GPU selection is currently reviewed in the prepared runtime, **not a completed
 interactive GPU picker in this wrapper**. Native Nova PCI claims determine
 occupancy; SPVM checks must agree with domain assignments. PCI-in-Placement
 reporting remains disabled in the tested profile.
+
+### 7.2 Add, edit, disable or unregister storage pools
+
+Open **Administrator → Compute → Hypervisors → Host resource budgets**, then
+expand **Manage storage pools** for the chosen host. Detected filesystem identity,
+capacity, free space and eligibility are separate from the saved registrations.
+You may add a registration, change its directory/budget/reserve, toggle enabled,
+or remove it. Root use requires an explicit checkbox. **Suggest defaults** only
+replaces a confirmed local draft; discovery never reapplies it automatically.
+
+The CLI equivalent uses the current admin authentication context:
+
+```bash
+openstack spvm host pool list --publisher-user-id "$PUBLISHER_ID" -f json
+# Write the COMPLETE desired list to pools.json, using filesystem_id from
+# that host's catalog (24 hexadecimal characters), not a guessed device name:
+# [{"id":"data","filesystem_id":"<24-hex-id>","path":"/data/spvm-state",
+#   "budget_gib":900,"reserve_gib":100,"enabled":true,"allow_root":false}]
+openstack spvm host pool set compute1 --file pools.json \
+  --generation "$GENERATION" --publisher-user-id "$PUBLISHER_ID" \
+  --worker-user-id "$WORKER_ID"
+# Review; repeat with --apply to submit. Then inspect:
+openstack spvm host pool status "$REQUEST_ID" --publisher-user-id "$PUBLISHER_ID"
+```
+
+The same explicitly delegated root budget worker handles pool requests. Every
+change requires a fully empty host across all projects, even an increase or a
+disable operation. Stale generations, existing claims/data, untrusted paths or
+ambiguous mounts are refused. Unavailable existing mounts require manual recovery.
+There is no automatic data migration or adoption of nonempty target directories.
+Disabled definitions remain in canonical configuration; removal drops only the
+registration. Old directories and their data are never removed. `[]` unregisters
+all pools and removes SPVM state capacity without disabling ordinary Nova VMs.
+
+While scheduling is quarantined, the worker stops only Nova compute/helper,
+updates their registrations, retires only owned empty Placement pool providers,
+then restarts those services and checks inventories. It never restarts libvirt or
+guests. Approved definitions become explicit manual configuration and update the
+automatic state baseline; CPU/RAM baselines are unchanged. Existing bound installer
+workspaces must be explicitly rebound and helper inputs regenerated. Errors after
+quarantine leave scheduling disabled and evidence under
+`/var/lib/spvm-host-budget-worker/<request-id>` and
+`/var/backups/spvm-host-pools/<request-id>` for review, with no automatic replay.
+
+This requires matching web backend, installer worker, Nova compute image and host
+helper with managed-pool API v1. Older compute/helper installations are blocked;
+deploying new HTML alone does not enable the feature. Worker staging also checks
+the required pool web methods. Fixture coverage is not live pool-change or clean
+installation acceptance: those require rollout of the matching new artifacts.
 
 ## 8. Select the driver backend
 
@@ -1065,11 +1211,12 @@ or Swarm CA private keys are generated by this phase. The API registry-presence
 gate remains mandatory; config validation alone is not a signature-presence test.
 
 Release-only installation does not require a dummy debug default/cache. Existing
-legacy debug configurations remain compatible and still require explicit debug
-opt-in. Do not change a running helper's default release/cache as an unreviewed
-migration: execution journals bind those values. The historical protocol capability
-name `experimental-debug-execution-v1` remains for compatibility; it does not force
-selection of a debug guest build or enable SSH in a release guest.
+old debug-only execution configurations are not accepted: explicit release-cache
+enrollment and the registry-presence gate are mandatory. Debug guest admission
+still requires the administrator's explicit opt-in. Do not change a running
+helper's default release/cache: execution journals bind those values. The current
+protocol capability is `host-measured-execution-v1`; old capability aliases are
+not accepted. Guest API readiness is used for debug and release builds alike.
 
 Acceptance on 2026-10-16: a root-local `plan-host-helper` on busy `.245` refused
 the host before creating any plan directory. The revised execution validator also
@@ -1347,7 +1494,8 @@ operator credentials in that file. The driver now supports an explicit
 `bootstrap_deny_all: true` document with `projects: {}`. It composes zero service
 readers, denies every SPVM project before API access, and does not affect ordinary
 non-SPVM guests. Empty projects without that explicit mode remain invalid. The
-flag cannot coexist with enrolled projects or debug-only legacy mode.
+flag cannot coexist with enrolled projects. There is no debug-only runtime
+schema; use the current API-based enrollment for debug and release guests alike.
 
 The selected driver bundle must declare `deny-all-runtime-bootstrap`. Old images
 and bundles, even if their development version string is also `0.2.21`, are not
@@ -3822,11 +3970,13 @@ exact route withdrawal, delegates cloud cleanup to a non-root publisher, removes
 only owned DNS RRsets, and finally removes the selected enrollment file. Shared
 networks, routers, gateway DNS and neighboring clusters are retained.
 
-Legacy retirement policy schema 1 uses the DevStack CLI path. Schema 2 adds the
-required `openstack_cli` absolute path, for example
-`/home/operator/spvm-client-venv/bin/openstack`; all other policy fields remain
-explicit. Set `refresh` to the actual installed publisher policy (portable setup:
-`/etc/spvm/ingress-policy.json`), not a guessed legacy filename. The CLI and auth
+Only retirement policy schema 3 is accepted. It requires an explicit
+`openstack_cli` absolute path, for example `/opt/spvm/client/bin/openstack`, and
+`unpublished_domains`: `null` for a published cluster, or the root-approved
+Swarm/PKI domains plus an empty `service_zones` list for an unpublished birth.
+Older policies/journals are not converted; prepare current inputs explicitly.
+Set `refresh` to the actual installed publisher policy (portable setup:
+`/etc/spvm/ingress-policy.json`), not a guessed filename. The CLI and auth
 script execute only as the selected non-root `run_as` account. Keep the policy,
 DNS credential file and journal root-owned/private. Never source OpenRC as root
 or make `/etc/kolla` world-readable to work around traversal permissions.
@@ -3834,7 +3984,7 @@ or make `/etc/kolla` world-readable to work around traversal permissions.
 With the portable `fallback=reject` listener profile, retirement verifies and
 updates both managed HTTP and TLS fragments in **one host HAProxy config/reload**;
 it does not require Apache or modify Kolla's API HAProxy container. Exact
-before/after proofs reject changed neighboring routes. Legacy `fallback=apache`
+before/after proofs reject changed neighboring routes. Explicit `fallback=apache`
 retains the separate Apache path. Serialize publication, refresh and retirement;
 retirement's internal lock is not authorization for concurrent external writers.
 

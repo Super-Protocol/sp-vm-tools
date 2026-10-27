@@ -11,6 +11,7 @@ import time
 import yaml
 from openstack_container_engine import write
 import openstack_workflow as workflow
+from openstack_host_pools import PoolWorker
 
 
 def policy(filename):
@@ -40,10 +41,11 @@ def policy(filename):
     return value
 
 
-class Worker:
-    def __init__(self,config,path,module,connection,root=Path('/var/lib/spvm-host-budget-worker')):
+class Worker(PoolWorker):
+    def __init__(self,config,path,module,connection,root=Path('/var/lib/spvm-host-budget-worker'),policy_path=None):
         from openstack_spvm import host_budgets
         self.model=host_budgets;self.config=config;self.path=Path(path);self.module=module;self.c=connection
+        self.policy_path=Path(policy_path) if policy_path else None
         self.root=root;root.mkdir(mode=0o700,parents=True,exist_ok=True)
         from openstack_skyline_runtime import trusted
         trusted(root)
@@ -67,11 +69,11 @@ print(json.dumps(result))
 '''
         return self.runner.remote(name,body)
 
-    def cloud_empty(self,name,snapshot):
+    def cloud_empty(self,name,snapshot,*,allow_down=False):
         hostname=self.cfg['hosts'][name].get('inventory_name',name);blockers=[]
         from openstack_spvm.cluster_flow import bounded
         services=[s for s in bounded(self.c.compute.services(binary='nova-compute')) if s.host==hostname]
-        if len(services)!=1 or services[0].state!='up':blockers.append('COMPUTE_NOT_UP')
+        if len(services)!=1 or not allow_down and services[0].state!='up':blockers.append('COMPUTE_NOT_UP')
         for server in bounded(self.c.compute.servers(all_projects=True,details=True)):
             if getattr(server,'compute_host',None)==hostname:blockers.append('NOVA_INSTANCES_PRESENT')
             if server.status=='BUILD' or getattr(server,'task_state',None):blockers.append('INFLIGHT_NOVA_REQUEST')
@@ -101,14 +103,16 @@ print(p.stdout)
         defaults=self.config['automatic'][name];hardware=before['hardware']
         automatic={'mode':'auto','vcpus':hardware['logical_cpus']-defaults['reserved_cpus'],
             'memory_mb':hardware['memory_mb']-defaults['reserved_memory_mb'],'pools':[]}
-        for p in defaults['pools']:
+        baseline={p['id']:p for p in defaults['pools']}
+        for current in before['current']['pools']:
+            p=baseline[current['id']]
             actual=next(v for v in hardware['pools'] if v['id']==p['id'])
             automatic['pools'].append({**p,'budget_gib':min(p['budget_gib'],max(0,actual['available_gib']-p['reserve_gib']))})
         current=before['current']
         if {**current,'mode':'auto'}==automatic:current={**current,'mode':'auto'}
         host=self.cfg['hosts'][name].get('inventory_name',name)
         generation=self.model.digest({'host':host,'compute_uuid':before['compute_uuid'],
-            'machine':before['machine_sha256'],'current':current})
+            'machine':before['machine_sha256'],'current':current,'config_files':before['files']})
         unresolved=[]
         for journal in self.root.glob('*/transaction.json'):
             if journal.parent.name==request_id:continue
@@ -142,6 +146,7 @@ print(p.stdout)
             'reserved_memory_mb':before['hardware']['memory_mb']-wanted['memory_mb']}
         by_id={p['id']:p for p in wanted['pools']}
         for p in cfg['hosts'][name]['storage_pools']:
+            if not p.get('enabled',True):continue
             p.update({k:by_id[p['id']][k] for k in ('budget_gib','reserve_gib')})
         # Validate the complete candidate before replacing canonical intent.
         candidate=self.active/'deployment.after.yaml'
@@ -157,11 +162,19 @@ print(p.stdout)
         while True:
             response=self.c.placement.get('/resource_providers/'+root+'/inventories',microversion='1.39');response.raise_for_status()
             inv=response.json()['inventories']
-            matched=all(inv[k]['total']-inv[k].get('reserved',0)==wanted[field] and inv[k]['allocation_ratio']==1.0
+            matched=all(k in inv and inv[k]['total']-inv[k].get('reserved',0)==wanted[field] and inv[k]['allocation_ratio']==1.0
                 for k,field in (('VCPU','vcpus'),('MEMORY_MB','memory_mb')))
             for pool in wanted['pools']:
-                response=self.c.placement.get('/resource_providers/'+pool_uuid(root,pool['id'])+'/inventories',microversion='1.39');response.raise_for_status()
-                inventory=response.json()['inventories'][RESOURCE]
+                response=self.c.placement.get('/resource_providers/'+pool_uuid(root,pool['id'])+'/inventories',microversion='1.39')
+                # A restarted compute publishes newly configured child providers
+                # asynchronously. Only their absence is a convergence condition;
+                # authentication, transport and other API failures remain errors.
+                if response.status_code==404:
+                    matched=False;continue
+                response.raise_for_status()
+                inventory=response.json()['inventories'].get(RESOURCE)
+                if inventory is None:
+                    matched=False;continue
                 matched=matched and inventory['total']-inventory.get('reserved',0)==pool['budget_gib'] and inventory['allocation_ratio']==1.0
             if matched:return
             if time.monotonic()>deadline:raise ValueError('live inventories did not converge; scheduling remains disabled')
@@ -244,14 +257,18 @@ def main(path,argv):
         try:
             if args.expected_worker_user_id and connection.session.get_user_id()!=args.expected_worker_user_id:
                 raise ValueError('authenticated worker differs from activated publisher identity')
-            worker=Worker(config,path,module,connection)
+            worker=Worker(config,path,module,connection,policy_path=args.policy)
             fd=os.open(worker.root/'worker.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
             try:
                 fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
                 if args.action=='process-host-budgets':
                     entries=cluster_cleanup.listing(connection.key_manager,worker.model.PREFIX+'request-')
                     for entry in entries:worker.process(entry)
+                    from openstack_spvm import host_pools
+                    for entry in cluster_cleanup.listing(connection.key_manager,host_pools.PREFIX+'request-'):
+                        worker.process_pool(entry)
                 worker.sync()
+                worker.sync_pools()
             finally:os.close(fd)
         finally:connection.close()
     print(json.dumps({'status':'HOST_BUDGET_WORKER_COMPLETE'}));return 0

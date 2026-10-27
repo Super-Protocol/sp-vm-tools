@@ -19,7 +19,7 @@ from openstack_container_engine import digest, file_hash, write
 
 MODULES=('host_helper.py','host_storage.py','host_network.py','host_provider.py',
          'host_runtime.py','host_execution.py','host_vif_cleanup.py','state_store.py',
-         'seed_reconcile_worker.py','release_service_smoke.py')
+         'seed_reconcile_worker.py','release_service_smoke.py','storage_discovery.py')
 SCRIPTS=('start_super_protocol.sh','start_super_protocol_libvirt.sh','libvirt_launcher.py')
 ACCOUNT='kolla-nova'
 UID=42436
@@ -33,10 +33,12 @@ FIXED=('/usr/local/libexec/spvm','/usr/local/libexec/nova-spvm',
 
 
 def request(path):
-    path=Path(path)
-    if path.is_symlink() or not path.is_file() or path.stat().st_size>1048576:
-        raise ValueError('bounded regular request file required')
-    value=json.loads(path.read_text())
+    if isinstance(path,dict):value=path
+    else:
+        path=Path(path)
+        if path.is_symlink() or not path.is_file() or path.stat().st_size>1048576:
+            raise ValueError('bounded regular request file required')
+        value=json.loads(path.read_text())
     if not isinstance(value,dict) or set(value)-{'registered_release_cache_root'}!={'version','machine_sha256','compute_uuid','release',
             'allow_debug','tools','cache','pools','gpus'} or type(value['version']) is not int or value['version']!=1:
         raise ValueError('explicit versioned helper request required')
@@ -53,19 +55,24 @@ def request(path):
             raise ValueError('runtime/cache paths must be explicit non-home system paths')
         if key!='tools' and p.parts[1] in ('usr','etc','boot','efi'):
             raise ValueError('cache must remain writable under helper systemd sandbox')
-    if not isinstance(value['pools'],list) or not value['pools']:
+    if not isinstance(value['pools'],list) or len(value['pools'])>64:
         raise ValueError('explicit state pools required')
     names=set()
     for pool in value['pools']:
-        if (not isinstance(pool,dict) or set(pool)!={'id','root','mount','budget_gib','reserve_gib'}
+        if (not isinstance(pool,dict) or set(pool)-{'allow_root'}!={'id','root','mount','budget_gib','reserve_gib'}
                 or not re.fullmatch('[a-z][a-z0-9-]{0,39}',str(pool['id'])) or pool['id'] in names):
             raise ValueError('invalid/duplicate state pool')
         names.add(pool['id'])
         root,mount=Path(pool['root']),Path(pool['mount'])
-        if (not root.is_absolute() or not mount.is_absolute() or mount==Path('/') or root==mount
+        if (not root.is_absolute() or not mount.is_absolute() or root==mount
                 or '..' in root.parts or '..' in mount.parts or not root.is_relative_to(mount)):
-            raise ValueError('state root must be below an explicit non-root mount')
-        if mount.parts[1] in ('home','root','tmp','run','proc','sys','dev','usr','etc','boot','efi'):
+            raise ValueError('state root must be below an explicit mount')
+        if 'allow_root' in pool and type(pool['allow_root']) is not bool:raise ValueError('typed root permission required')
+        if mount==Path('/') and pool.get('allow_root') is not True:raise ValueError('root filesystem requires explicit permission')
+        if (len(root.parts)>1 and root.parts[1] in ('home','root','tmp','run','proc','sys','dev','usr','etc','boot','efi','opt')
+                or any(root==Path(p) or root.is_relative_to(p) for p in ('/var/lib/nova','/var/lib/spvm','/var/log','/var/cache'))):
+            raise ValueError('state directory cannot overlap protected system trees')
+        if len(mount.parts)>1 and mount.parts[1] in ('home','root','tmp','run','proc','sys','dev','usr','etc','boot','efi'):
             raise ValueError('state mount cannot be hidden/read-only under helper systemd sandbox')
         for field in ('budget_gib','reserve_gib'):
             if type(pool[field]) is not int or pool[field]<1:
@@ -131,7 +138,7 @@ def bootstrap_policy(auth_url,region):
             or not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}',str(region))):
         raise ValueError('explicit trusted HTTPS v3 endpoint and region required')
     endpoint.port
-    return {'schema_version':1,'experimental_debug_only':False,'bootstrap_deny_all':True,
+    return {'schema_version':1,'bootstrap_deny_all':True,
             'auth_url':auth_url,'region_name':region,'projects':{}}
 
 
@@ -198,7 +205,7 @@ class Host:
         for path in ('/etc/spvm','/var/lib/nova','/var/lib/spvm/clusters'):
             directory=self.trusted(path)
             if directory.exists() and (not directory.is_dir() or any(directory.iterdir())):
-                raise ValueError('old Nova/SPVM data requires a separate reviewed migration')
+                raise ValueError('fresh host required; existing Nova/SPVM data is not adopted or migrated')
         for unit in ('host-helper.socket','host-helper.service'):
             p=self.command(['systemctl','show',unit,'--property=LoadState','--value'])
             if p.stdout.strip()!='not-found':raise ValueError('existing helper systemd unit refused')
@@ -228,7 +235,8 @@ class Host:
         for item in spec['pools']:
             mount=self.trusted(item['mount'],directory=True)
             state=self.trusted(item['root'])
-            if (not os.path.ismount(mount) or mount.stat().st_dev==self.path('/').stat().st_dev
+            if (not os.path.ismount(mount) or (mount.stat().st_dev==self.path('/').stat().st_dev
+                    and (item['mount']!='/' or item.get('allow_root') is not True))
                     or (state.exists() and (not state.is_dir() or any(state.iterdir())))):
                 raise ValueError('dedicated state mount and empty pool root required')
             ancestor=state

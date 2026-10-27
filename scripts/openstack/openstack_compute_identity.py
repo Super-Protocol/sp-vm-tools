@@ -59,7 +59,13 @@ def stage(args, backend):
         raise ValueError('exact compute helper request mapping required')
     requests={};hashes={args.config:file_hash(args.config),args.audit:file_hash(args.audit),args.requests:file_hash(args.requests)}
     for name,identity in wanted.items():
-        path=mapping['hosts'][name];spec=helper_request(path);hashes[path]=file_hash(path)
+        path=mapping['hosts'][name];raw=json.loads(read(path));hashes[path]=file_hash(path)
+        if raw.get('pools')=='from-deployment':
+            pools=cfg['hosts'][name]['storage_pools']
+            if pools=='auto':raise ValueError('resolve storage before staging identities')
+            raw['pools']=[{k:p[k] for k in ('id','mount','budget_gib','reserve_gib')}|{'root':p['path']}
+                |({'allow_root':True} if p.get('allow_root') else {}) for p in pools if p.get('enabled',True)]
+        spec=helper_request(raw)
         # source audit uses the same machine-id SHA as resource validation.
         machine=audits[name].get('host_identity_sha256')
         if machine is None:machine=audits[name].get('machine_sha256')

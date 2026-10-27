@@ -160,8 +160,10 @@ def probe(request,root=Path('/'),runner=subprocess.run):
             if len(fs)!=1 or fs[0]['target']!=pool['mount'] or fs[0]['fstype'] not in ('ext4','xfs'):
                 blockers.append('STATE_FILESYSTEM_NO_LONGER_LOCAL_SUPPORTED')
             if (not p.is_dir() or any(p.iterdir()) or not os.path.ismount(mount)
-                    or p.stat().st_dev!=mount.stat().st_dev or p.stat().st_dev==root.stat().st_dev
-                    or p.stat().st_dev in devices or any(actual[k]!=pool[k] for k in ('root','mount','budget_gib','reserve_gib'))):
+                    or p.stat().st_dev!=mount.stat().st_dev or (p.stat().st_dev==root.stat().st_dev
+                        and (pool['mount']!='/' or pool.get('allow_root') is not True))
+                    or p.stat().st_dev in devices or any(actual[k]!=pool[k] for k in ('root','mount','budget_gib','reserve_gib'))
+                    or actual.get('allow_root',False)!=pool.get('allow_root',False)):
                 blockers.append('STATE_POOL_NOT_FRESH_OR_BOUND')
             devices.add(p.stat().st_dev)
             free=os.statvfs(p)
