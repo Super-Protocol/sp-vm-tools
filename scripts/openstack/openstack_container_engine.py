@@ -77,6 +77,12 @@ for name in ['/usr/bin/qemu-system-x86_64','/usr/sbin/libvirtd','/usr/bin/virsh'
  '/etc/libvirt/qemu.conf','/etc/libvirt/libvirtd.conf','/etc/libvirt/qemu/tdx.xml']:
  p=Path(name)
  if p.is_file():protected[name]=h(p)
+# A read-only libvirt connection can activate the idle socket-managed daemon.
+# Observe domains first, then capture the settled service identity; otherwise
+# the probe itself makes its plan immediately stale. Preserve strict lifecycle
+# comparison across the subsequent package transaction.
+domains=run(['virsh','-c','qemu:///system','list','--all','--uuid'])
+qemu=run(['pgrep','-f','^(/[^ ]*/)?(qemu-system-[^ ]+|qemu-kvm|cloud-hypervisor)( |$)'])
 services={}
 for name in SERVICE_UNITS:
  value=run(['systemctl','show',name,'--property=LoadState,ActiveState,SubState,MainPID,ActiveEnterTimestampMonotonic,NRestarts'])
@@ -102,8 +108,7 @@ print(json.dumps({'schema_version':1,'machine':h(Path('/etc/machine-id')),
  'os':release.get('ID'),'version':release.get('VERSION_ID'),
  'codename':release.get('VERSION_CODENAME'),'architecture':os.uname().machine,
  'cli':cli,'socket':Path('/var/run/docker.sock').exists(),'unit':unit,
- 'docker':info,'domains':run(['virsh','-c','qemu:///system','list','--all','--uuid']),
- 'qemu':run(['pgrep','-f','^(/[^ ]*/)?(qemu-system-[^ ]+|qemu-kvm|cloud-hypervisor)( |$)']),
+ 'docker':info,'domains':domains,'qemu':qemu,
  'protected':protected,'services':services,'containers':containers,
  'docker_config_sha256':h(config) if config.is_file() else None}))
 '''
@@ -123,7 +128,9 @@ def observe(backend, host, known_hosts=None):
     return value
 
 
-def policy(fact, allow26):
+def policy(fact, allow26, *, compute):
+    if type(compute) is not bool:
+        raise ValueError('explicit compute role required')
     if (not isinstance(fact.get('services'),dict) or set(fact['services'])!=set(SERVICES)
             or not isinstance(fact.get('containers'),dict)
             or any(not isinstance(v,dict) or v.get('code') not in (0,1,4)
@@ -141,10 +148,12 @@ def policy(fact, allow26):
     if (fact['cli'] or fact['socket'] or fact['unit']['code']!=0
             or fact['unit']['value']!='not-found'):
         raise ValueError('incomplete or unreachable Docker; repair manually')
-    if (fact['domains']['code']!=0 or fact['domains']['value']
-            or fact['qemu']['code']!=1 or not fact['protected'].get('/usr/bin/virsh')
+    if fact['qemu']['code']!=1:
+        raise ValueError('Docker install requires a host without active hypervisor processes')
+    if compute and (fact['domains']['code']!=0 or fact['domains']['value']
+            or not fact['protected'].get('/usr/bin/virsh')
             or not fact['protected'].get('/usr/bin/qemu-system-x86_64')):
-        raise ValueError('Docker install requires prepared empty host with no QEMU guests')
+        raise ValueError('compute Docker install requires prepared empty libvirt host')
     return 'INSTALL'
 
 
@@ -190,8 +199,8 @@ def collection_hash(root, expected=None):
 
 def inputs(args, backend):
     cfg = backend.deployment_config(args.config)
-    if args.host not in cfg['hosts'] or 'compute' not in cfg['hosts'][args.host]['roles']:
-        raise ValueError('explicit configured compute host required')
+    if args.host not in cfg['hosts']:
+        raise ValueError('explicit configured OpenStack host required')
     if Path(args.kolla_source).resolve()!=Path(args.kolla_source):
         raise ValueError('absolute resolved Kolla source required')
     revision = subprocess.run(['git','-C',args.kolla_source,'rev-parse','HEAD'],
@@ -240,7 +249,7 @@ def execute(args, backend):
     cfg, bindings = inputs(args,backend)
     host = cfg['hosts'][args.host]
     current = observe(backend,host,args.known_hosts)
-    mode = policy(current,args.allow_experimental_ubuntu26)
+    mode = policy(current,args.allow_experimental_ubuntu26,compute='compute' in host['roles'])
     output = Path(args.output).absolute()
     if output.resolve()!=output:
         raise ValueError('non-symlink output required')
@@ -331,7 +340,7 @@ def execute(args, backend):
             after=observe(backend,host,args.known_hosts)
             journal['host_after']=after
             journal['status']=('CONTAINER_ENGINE_READY'
-                if policy(after,args.allow_experimental_ubuntu26)=='PRESERVE' and preserved(current,after,mode)
+                if policy(after,args.allow_experimental_ubuntu26,compute='compute' in host['roles'])=='PRESERVE' and preserved(current,after,mode)
                 else 'NEEDS_REVIEW')
         except BaseException as error:
             journal.update(status='NEEDS_REVIEW',error_class=type(error).__name__)

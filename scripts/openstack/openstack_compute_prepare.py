@@ -159,6 +159,37 @@ finally:c.close()
 ''',controller=True,auth=True)
 
 
+def verify_network_mtu(runner, cfg):
+    """Reject transport-incompatible existing networks before any enrollment."""
+    import network_mtu
+    interfaces = {}
+    for name, host in cfg['hosts'].items():
+        if not set(host['roles']) & {'compute', 'network'}:
+            continue
+        source = 'INTERFACE=' + repr(host['tunnel_interface']) + '\n' + '''
+import json,subprocess
+p=subprocess.run(['ip','-j','link','show','dev',INTERFACE],check=True,capture_output=True,text=True,timeout=15)
+links=json.loads(p.stdout)
+if len(links)!=1:raise ValueError('exact tunnel interface required')
+print(json.dumps({'mtu':links[0]['mtu']}))
+'''
+        interfaces[name] = runner.remote(name, source)['mtu']
+    report = network_mtu.budget(cfg, interfaces)
+    observed = runner.remote(runner.controller, '''
+import json,openstack
+c=openstack.connect(verify='/etc/ssl/certs/ca-certificates.crt',api_timeout=30)
+try:
+ networks=[]
+ for n in c.network.networks():
+  if len(networks)>=4096:raise ValueError('network inventory exceeds bound')
+  networks.append({'id':n.id,'type':n.provider_network_type,'mtu':n.mtu,'external':n.is_router_external})
+ print(json.dumps({'networks':networks}))
+finally:c.close()
+''', controller=True, auth=True)
+    network_mtu.check_networks(report, observed['networks'])
+    return {**report, 'networks': sorted(observed['networks'], key=lambda n:n['id'])}
+
+
 def plan(value,path,module,output,runner):
     spec=specification(value['new_compute'])
     if 'preparation' in spec:
@@ -174,6 +205,7 @@ def plan(value,path,module,output,runner):
 
 def plan_prepared(value,path,module,output,runner):
     cfg,receipt,wanted,spec,alias=inputs(value,module)
+    mtu = verify_network_mtu(runner, cfg)
     target=facts(runner,value,cfg,wanted);current=cloud(runner)
     os_release=target['os']
     if os_release.get('ID')!='ubuntu' or os_release.get('VERSION_ID') not in ('24.04','26.04'):
@@ -186,7 +218,7 @@ def plan_prepared(value,path,module,output,runner):
         raise ValueError('assigned or inflight server requires review')
     result={'kind':'new-compute-deploy-v1','created_at':int(time.time()),'target':target,
         'controller':controller(runner),'cloud':current,'config_sha256':config_hashes(value['new_compute']),
-        'alias':alias,'stages':['deploy','map','enroll'],'automatic_recovery':False}
+        'alias':alias,'network_mtu':mtu,'stages':['deploy','map','enroll'],'automatic_recovery':False}
     result['plan_sha256']=digest(result);write(output/'new-compute-plan.json',result)
     return {'kind':'new-compute','changes':True,'plan_sha256':result['plan_sha256']}
 
@@ -266,7 +298,8 @@ def apply_prepared(value,path,module,output,runner):
     approved=json.loads(read(output/'new-compute-plan.json'))
     journal=output/'new-compute-transaction.json'
     if journal.exists():raise ValueError('new-compute apply already attempted; explicit operator review required')
-    if (config_hashes(value['new_compute'])!=approved['config_sha256'] or controller(runner)!=approved['controller']
+    if (verify_network_mtu(runner,cfg)!=approved['network_mtu']
+            or config_hashes(value['new_compute'])!=approved['config_sha256'] or controller(runner)!=approved['controller']
             or facts(runner,value,cfg,wanted)!=approved['target'] or cloud(runner)!=approved['cloud']):
         raise ValueError('new-compute observations changed since approval')
     record={'status':'RUNNING','phase':'REGISTERING_DISABLED','plan_sha256':approved['plan_sha256']}

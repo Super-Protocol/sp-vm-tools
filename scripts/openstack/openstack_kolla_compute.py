@@ -27,8 +27,18 @@ def selected_requests(cfg,physical,path):
     specs={};gpus={};identities=set();uuids=set()
     for name in sorted(computes):
         spec=request(value['hosts'][name]);actual=physical['hosts'][name]
-        if (spec['machine_sha256']!=actual['host_identity_sha256'] or spec['machine_sha256'] in identities
-                or spec['compute_uuid'] in uuids or spec['release']!=cfg['guest_release']):
+        # Bind the helper/cache bootstrap build to explicit root-owned host
+        # intent. A mixed cloud may use a release default while a new non-CC
+        # compute explicitly bootstraps from a debug build. Never accept an
+        # arbitrary helper-request build or infer it from detected hardware.
+        selected_release=cfg['hosts'][name].get('bootstrap_release',cfg['guest_release'])
+        if not re.fullmatch(r'build-[1-9][0-9]*-(debug|release)',str(selected_release)):
+            raise ValueError('explicit pinned compute bootstrap release required')
+        if cfg['hosts'][name]['launch_mode']=='untrusted' and not selected_release.endswith('-debug'):
+            raise ValueError('non-CC bootstrap release must be debug')
+        if (spec['launch_mode']!=cfg['hosts'][name]['launch_mode']
+                or spec['machine_sha256']!=actual['host_identity_sha256'] or spec['machine_sha256'] in identities
+                or spec['compute_uuid'] in uuids or spec['release']!=selected_release):
             raise ValueError('helper request must bind unique audited machine/compute/release')
         identities.add(spec['machine_sha256']);uuids.add(spec['compute_uuid'])
         pools={p['id']:p for p in spec['pools']}
@@ -103,6 +113,7 @@ def stage(args,backend_path,backend,nova_inputs):
             # Pinned Kolla already binds /run shared. Nested binds below it
             # propagate self-mounts back to the host and accumulate on recreate.
             nova_compute_extra_volumes=['/etc/spvm/compute-pools.json:/etc/spvm/compute-pools.json:ro',
+                '/etc/spvm/launch-policy.json:/etc/spvm/launch-policy.json:ro',
                 '/etc/spvm/runtime-services.json:/etc/spvm/runtime-services.json:ro'])
         workspace.private_file(output/'kolla/globals.yml',yaml.safe_dump(globals_,sort_keys=True))
         for name,body in overrides.items():workspace.private_file(output/name,body)

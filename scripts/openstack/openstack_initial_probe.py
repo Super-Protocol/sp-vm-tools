@@ -117,8 +117,16 @@ def probe(request,root=Path('/'),runner=subprocess.run):
             blockers.append('HOST_RESERVES_LEAVE_NO_VM_CAPACITY')
         if not path('/dev/kvm').exists():blockers.append('KVM_NOT_PREPARED')
         tdx=path('/sys/module/kvm_intel/parameters/tdx')
-        if not ((tdx.is_file() and tdx.read_text().strip().lower() in ('y','1')) or path('/dev/sev').exists()):
-            blockers.append('TDX_SEV_NOT_PREPARED')
+        mode=spec['launch_mode']
+        if mode=='tdx' and not (tdx.is_file() and tdx.read_text().strip().lower() in ('y','1')):
+            blockers.append('TDX_NOT_PREPARED')
+        elif mode=='sev-snp' and not path('/dev/sev').exists():
+            blockers.append('SEV_SNP_NOT_PREPARED')
+        elif mode not in ('tdx','sev-snp','untrusted'):
+            blockers.append('INVALID_LAUNCH_MODE')
+        policy=json.loads(trusted('/etc/spvm/launch-policy.json').read_text())
+        if policy!={'mode':mode,'allow_debug':spec['allow_debug']}:
+            blockers.append('LAUNCH_POLICY_MISMATCH')
         account=pwd.getpwnam('kolla-nova')
         ipc=path('/run/spvm/host-helper.sock').stat()
         if ((account.pw_uid,account.pw_gid)!=(42436,42436)
@@ -220,7 +228,10 @@ def probe(request,root=Path('/'),runner=subprocess.run):
         if profile in ('host-sdk','initial-readiness'):
             script=('import docker,dbus,requests,json; '
                 'v=docker.__version__; c=docker.DockerClient(base_url="unix:///var/run/docker.sock",timeout=10); '
-                'print(json.dumps({"ready":int(v.split(".")[0])>=7 and c.ping() is True,"version":v})); c.close()')
+                # Pinned Kolla 4b493ef requires docker_py_version_min 3.4.1.
+                # Noble supplies 5.0.3; do not reject its working SDK merely
+                # because the previous experimental host happened to use 7.x.
+                'print(json.dumps({"ready":tuple(map(int,v.split(".")[:3]))>=(3,4,1) and c.ping() is True,"version":v})); c.close()')
             sdk=run(['/usr/bin/python3','-I','-B','-c',script],(0,1))
             value=json.loads(sdk.stdout) if sdk.returncode==0 else {'ready':False}
             if (not isinstance(value,dict) or type(value.get('ready')) is not bool

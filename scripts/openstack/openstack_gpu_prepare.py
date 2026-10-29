@@ -33,8 +33,11 @@ import subprocess
 p=subprocess.run(['virsh','-c','qemu:///system','list','--all','--uuid'],capture_output=True,text=True,timeout=20)
 q=subprocess.run(['pgrep','-f',r'^(/[^ ]*/)?(qemu-system-[^ ]+|qemu-kvm|cloud-hypervisor)( |$)'],capture_output=True,text=True,timeout=10)
 if p.returncode or p.stdout.strip() or q.returncode!=1:raise ValueError('GPU preparation requires an empty host')
-m.prepare_tools()
-print(json.dumps(m.discover(probe=True,previous=previous)))
+inventory=m.discover(probe=False,previous=previous)
+if inventory['devices']:
+ m.prepare_tools()
+ inventory=m.discover(probe=True,previous=previous)
+print(json.dumps(inventory))
 '''
                 proc=subprocess.run(module.ssh_arguments(h)+['sudo','-n','/usr/bin/python3','-I','-'],input=code,
                     text=True,capture_output=True,timeout=900)

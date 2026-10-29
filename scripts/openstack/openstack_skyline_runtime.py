@@ -24,6 +24,16 @@ from openstack_container_engine import digest, write
 LOCK = Path('/run/lock/spvm-skyline-runtime.lock')
 
 
+def gateway_ready(policy):
+    try:
+        addresses={entry[4][0] for entry in socket.getaddrinfo(
+            policy['gateway_hostname'],443,family=socket.AF_INET)}
+    except socket.gaierror:
+        addresses=set()
+    if addresses!={policy['public_ip']}:
+        raise ValueError('register shared gateway DNS at the delegated public IP before web runtime installation')
+
+
 def lock_install():
     info = LOCK.parent.lstat()
     if LOCK.parent.is_symlink() or info.st_uid != 0 or (info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX):
@@ -79,6 +89,8 @@ def inputs(backend, args):
     unit_names = ['spvm-web-nodes.service', 'spvm-web-capacity.service', 'spvm-web-capacity.timer']
     publication = value.get('publication_enabled_in_staged_config') is True
     retirement = value.get('retirement_enabled_in_staged_config') is True
+    if publication:
+        gateway_ready(json.loads((root/'web-publication-policy.json').read_text()))
     if len(files) != 5 + (4 if publication else 0) + (5 if retirement else 0):
         raise ValueError('staged file count differs from delegated capabilities')
     if publication: unit_names += ['spvm-web-publish.service', 'spvm-web-publish.timer']

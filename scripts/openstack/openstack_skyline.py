@@ -17,6 +17,22 @@ import sys
 from openstack_compute_image import docker, ENV, TAG_RE, read, wheel_bytes
 from openstack_container_engine import write
 
+STATIC_ASSETS = {
+    'superprotocol-logo.jpg', 'swarm-node-launcher.js',
+    'swarm-nodes.html', 'swarm-nodes.css', 'swarm-nodes.js',
+    'swarm-clusters.html', 'swarm-clusters.css', 'swarm-clusters.js',
+    'swarm-create.html', 'swarm-create.js', 'swarm-releases.html', 'swarm-releases.js',
+    'spvm-flavors.html', 'spvm-flavors.js', 'spvm-host-budgets.html',
+    'spvm-host-budgets.js', 'spvm-host-budgets.css', 'spvm-host-pools.js',
+    'spvm-host-gpus.js',
+}
+EXPECTED_ASSETS = STATIC_ASSETS | {
+    name + '.gz' for name in STATIC_ASSETS if name.endswith(('.html', '.js', '.css'))
+} | {'index.html'} | {
+    kind + '.bundle.1663167892.js' + suffix
+    for kind in ('auth', 'main', 'common', 'compute') for suffix in ('', '.gz')
+}
+
 
 def context(directory, expected):
     root = Path(directory)
@@ -27,7 +43,8 @@ def context(directory, expected):
     if (set(value) != {'schema_version', 'base_image', 'asset_sha256', 'nginx_source_sha256',
                       'nginx_sha256', 'dockerfile_sha256'} or value['schema_version'] != 1
             or not re.fullmatch(r'[a-z0-9][a-z0-9.:/_-]*@sha256:[0-9a-f]{64}', value['base_image'])
-            or not isinstance(value['asset_sha256'], dict) or not 15 <= len(value['asset_sha256']) <= 23):
+            or not isinstance(value['asset_sha256'], dict)
+            or set(value['asset_sha256']) != EXPECTED_ASSETS):
         raise ValueError('recognized complete Skyline context required')
     for name, digest in value['asset_sha256'].items():
         if (not re.fullmatch(r'[a-zA-Z0-9._-]+', name)

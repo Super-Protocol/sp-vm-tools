@@ -21,7 +21,7 @@ from openstack_compute_image import read, TAG_RE
 
 GUARD=r'''
 def spvm_compute_guard(params, spec, root=None, runner=None):
-    import hashlib,json,os,stat,subprocess
+    import fcntl,hashlib,json,os,stat,subprocess
     from pathlib import Path
     root=Path('/') if root is None else Path(root)
     runner=subprocess.run if runner is None else runner
@@ -66,9 +66,20 @@ def spvm_compute_guard(params, spec, root=None, runner=None):
     for pool in helper['storage']['pools']:
         p=trusted(pool['root']);names={x.name for x in p.iterdir()}
         if names- {'.spvm-state.lock','.spvm-claims.json'}:raise ValueError('pool contains disks/unknown state')
-        if names and (names!={'.spvm-state.lock','.spvm-claims.json'} or
-                json.loads(trusted(str(Path(pool['root'])/'.spvm-claims.json')).read_text())!={}):
-            raise ValueError('state reservations remain')
+        if names:
+            # A read-only StateStore report creates the lock, but no ledger.
+            # This is an unused pool, not a reservation or an older format.
+            if '.spvm-state.lock' not in names:raise ValueError('incomplete pool bookkeeping')
+            lock=trusted(str(Path(pool['root'])/'.spvm-state.lock'));info=lock.stat()
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or info.st_size:
+                raise ValueError('invalid empty pool lock')
+            fd=os.open(lock,os.O_RDONLY|os.O_NOFOLLOW)
+            try:
+                fcntl.flock(fd,fcntl.LOCK_SH|fcntl.LOCK_NB)
+                if ('.spvm-claims.json' in names and
+                        json.loads(trusted(str(Path(pool['root'])/'.spvm-claims.json')).read_text())!={}):
+                    raise ValueError('state reservations remain')
+            finally:os.close(fd)
     for name in ('network','providers','execution','clusters'):
         p=root/'var/lib/spvm'/name
         if p.exists() and any(trusted('/var/lib/spvm/'+name).iterdir()):raise ValueError('host launch state remains')

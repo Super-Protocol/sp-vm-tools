@@ -41,6 +41,11 @@ def execute(backend,args):
     with context(backend,value) as module:
         from storage_discovery import automatic
         cfg=module.deployment_config(args.config)
+        selected={n for n,h in cfg['hosts'].items() if 'compute' in h['roles']}
+        host=getattr(args,'host',None)
+        if host is not None:
+            if host not in selected:raise ValueError('select one configured compute host')
+            selected={host}
         sources={str(p):file_hash(p) for p in [Path(__file__),Path(backend),
             Path(backend).parent/'storage_discovery.py',Path(backend).parent/'storage_prepare_host.py',
             Path(args.config),Path(args.known_hosts)]}
@@ -49,7 +54,7 @@ def execute(backend,args):
         if args.action=='plan-storage':
             output.mkdir(mode=0o700);resolved=yaml.safe_load(Path(args.config).read_text());hosts={}
             for name,h in cfg['hosts'].items():
-                if 'compute' not in h['roles']:continue
+                if name not in selected:continue
                 before=remote(module,h,backend,'observe')
                 if before['blockers']:raise ValueError('fresh compute must be empty and not enrolled; use host pool CLI/GUI for existing hosts')
                 pools=automatic(before,**h.get('storage_discovery',{})) if h['storage_pools']=='auto' else [dict(p) for p in h['storage_pools']]
@@ -63,13 +68,15 @@ def execute(backend,args):
             if not hosts:raise ValueError('compute hosts required for storage preparation')
             candidate=output/'deployment.resolved.yaml';candidate.write_text(yaml.safe_dump(resolved,sort_keys=False))
             module.deployment_config(candidate)
-            plan={'schema_version':1,'source_sha256':sources,'resolved_sha256':file_hash(candidate),'hosts':hosts}
+            plan={'schema_version':1,'source_sha256':sources,'resolved_sha256':file_hash(candidate),
+                'selected_hosts':sorted(selected),'hosts':hosts}
             plan['plan_sha256']=digest(plan);write(output/'storage-plan.json',plan)
             return {'status':'STORAGE_DISCOVERED_NOT_PREPARED','plan_sha256':plan['plan_sha256'],
                 'resolved_config':str(candidate),'hosts':{n:p['pools'] for n,p in hosts.items()}}
         trusted(output)
         plan=json.loads((output/'storage-plan.json').read_text());candidate=output/'deployment.resolved.yaml'
-        if (plan['source_sha256']!=sources or plan['resolved_sha256']!=file_hash(candidate)
+        if (plan.get('selected_hosts')!=sorted(selected)
+                or plan['source_sha256']!=sources or plan['resolved_sha256']!=file_hash(candidate)
                 or plan['plan_sha256']!=args.plan_sha256
                 or digest({k:v for k,v in plan.items() if k!='plan_sha256'})!=args.plan_sha256):
             raise ValueError('unchanged approved storage plan required')
@@ -96,6 +103,7 @@ def main(backend,argv):
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('action',choices=['plan-storage','prepare-storage'])
     for name in ('config','known-hosts','output'):p.add_argument('--'+name,required=True)
+    p.add_argument('--host',help='Prepare only this fresh compute; do not inspect enrolled peers')
     p.add_argument('--plan-sha256');args=p.parse_args(argv)
     if os.geteuid()!=0:raise ValueError('root storage coordination required')
     print(json.dumps(execute(backend,args)));return 0

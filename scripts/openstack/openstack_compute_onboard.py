@@ -214,6 +214,12 @@ def helper_phase(runner,host,request,assembled,files,output,*,apply=False,before
     # No provider configuration, SSH key, cloud password or API token is shipped.
     sources={name:read(Path(__file__).with_name(name)).decode() for name in
         ('openstack_host_helper.py','openstack_container_engine.py')}
+    # A genuinely fresh host does not yet have discovery or driver modules.
+    # Inspect using the same approved bytes that will subsequently be installed,
+    # not imports accidentally supplied by a previous helper installation.
+    sources['gpu_discovery.py']=files['/usr/local/libexec/spvm/gpu_discovery.py'][0].decode()
+    sources['nova_spvm/__init__.py']=files['/usr/local/libexec/nova-spvm/nova_spvm/__init__.py'][0].decode()
+    sources['nova_spvm/gpu_profiles.py']=files['/usr/local/libexec/nova-spvm/nova_spvm/gpu_profiles.py'][0].decode()
     data={'request':request,'launcher':assembled['result_sha256'],'files':files,
           'output':output,'apply':apply,'before':before}
     source='SOURCES='+repr(sources)+'\nDATA='+repr(data)+'\n'+'''
@@ -222,7 +228,8 @@ from pathlib import Path
 os.umask(0o077)
 with tempfile.TemporaryDirectory(prefix='spvm-compute-helper-') as directory:
  root=Path(directory)
- for name,text in SOURCES.items():(root/name).write_text(text)
+ for name,text in SOURCES.items():
+  path=root/name;path.parent.mkdir(mode=0o700,parents=True,exist_ok=True);path.write_text(text)
  sys.path.insert(0,str(root))
  import openstack_host_helper as phase
  from openstack_container_engine import write
@@ -247,9 +254,10 @@ def observe(value,path,module,output,runner):
     """Read-only preparation plan; absent Docker is not a bootstrap failure."""
     import openstack_compute_prepare as deploy
     cfg,receipt,wanted,outer,spec,assembled,files=inputs(value,path,module)
+    mtu = deploy.verify_network_mtu(runner, cfg)
     engine.inputs(engine_args(value,receipt,outer,output/'container-engine','plan-container-engine'),module)
     before=engine.observe(module,cfg['hosts'][value['host']],value['known_hosts'])
-    mode=engine.policy(before,outer['allow_experimental_ubuntu26'])
+    mode=engine.policy(before,outer['allow_experimental_ubuntu26'],compute=True)
     helper_before=helper_phase(runner,value['host'],wanted['helper_request'],assembled,files,
         '/var/lib/spvm-installer/'+cfg['deployment_id']+'/helper-'+digest(str(output))[:24])
     # Container-engine receipts hash the raw file (including its newline);
@@ -271,7 +279,7 @@ def observe(value,path,module,output,runner):
     import openstack_compute_dependencies as dependencies
     public_ca=dependencies.ca(outer['configdir'],cfg['deployment_id'])
     dependency_state=dependencies.observe(runner,value['host'],public_ca)
-    return {'kind':'compute-host-preparation-v1','engine':before,'engine_mode':mode,'peers':peers,
+    return {'kind':'compute-host-preparation-v1','network_mtu':mtu,'engine':before,'engine_mode':mode,'peers':peers,
             'hostnames':names,'dependencies':dependency_state,
             'helper':helper_before,'hostname':nodename,'controller':deploy.controller(runner),
             'cloud':current,'inputs':input_hashes(outer['preparation'],path),

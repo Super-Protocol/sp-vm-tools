@@ -1,5 +1,9 @@
 # OpenStack with the SPVM Nova driver: deployment and operations
 
+Non-CC debug-only compute implementation and current acceptance limits:
+[Non-CC hosts](OPENSTACK_NON_CC.md). This requires matching new components;
+the prior published release alone does not implement the new host contract.
+
 GPU identity/discovery work in progress: [GPU profile preparation](OPENSTACK_GPU_PROFILES.md).
 This worktree is not yet an accepted GPU rollout; follow its explicit limitations.
 
@@ -1800,9 +1804,14 @@ dependency installation remain disabled as in section 10.9. Required transitive
 dependencies may be installed from the host's configured repositories.
 
 The isolated system-Python probe imports Docker SDK, D-Bus and requests, requires
-Docker SDK major version 7 or later (matching the reviewed Kolla requirement),
+Docker SDK version 3.4.1 or later (the minimum in pinned Kolla
+`4b493ef36ace2b90257ecf94feb00e2c6e8014c9`),
 and performs a bounded `ping()` over `unix:///var/run/docker.sock`. It does not
 query guest APIs, run containers or contact an external Docker endpoint.
+Ubuntu 24's distribution SDK 5.0.3 passed this check with Docker 29.9.2 on the
+fresh Azure stand; Ubuntu 26's distribution SDK is 7.1.0. An earlier installer
+incorrectly required major version 7 based on the previous experimental host.
+No system pip replacement is needed solely to satisfy that obsolete restriction.
 Python bytecode writes are disabled for this probe. The fresh-host guard runs
 before the SDK imports. Missing packages can be prepared; if all selected packages
 are already installed but imports/version/ping fail, the plan is blocked with

@@ -4,6 +4,7 @@
   "compute_uuid": "REPLACE_WITH_NEW_COMPUTE_UUID",
   "release": "build-449-release",
   "allow_debug": false,
+  "launch_mode": "tdx",
   "tools": "/opt/sp-vm-tools",
   "cache": "/data/spvm-runtime-cache/build-449-release",
   "pools": [

@@ -150,7 +150,7 @@ def main(argv=None):
         'Mounted state storage: plan-storage, prepare-storage (outputs resolved deployment YAML). '
         'GPU identity preparation: prepare-gpus (explicit empty-host detection and resolved YAML). '
         'New-cloud inputs: init-kolla, check-kolla-workspace, list-kolla-tasks. '
-        'Fresh compute configuration: stage-kolla-computes. '
+        'Fresh compute configuration: stage-kolla-computes. Existing inventory extension: stage-add-compute-workspace. '
         'Initial-cloud checks: plan-kolla-prechecks, run-kolla-prechecks. '
         'Fresh-cloud transaction: plan-kolla-install, run-kolla-install. '
         'Portable SPVM intent: stage-spvm-enrollment (staging only, no API writes). '
@@ -270,6 +270,9 @@ def main(argv=None):
         if remaining[0] in ('plan-kolla-prechecks','run-kolla-prechecks'):
             from openstack_kolla_prechecks import main as initial_prechecks
             return initial_prechecks(path,remaining)
+        if remaining[0]=='stage-add-compute-workspace':
+            from openstack_compute_workspace import main as compute_workspace
+            return compute_workspace(path,remaining)
         if remaining[0]=='stage-kolla-computes':
             from openstack_kolla_compute import main as kolla_compute
             return kolla_compute(path,remaining)

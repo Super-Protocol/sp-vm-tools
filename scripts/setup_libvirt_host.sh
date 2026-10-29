@@ -737,7 +737,7 @@ verify_libvirt_host() {
         echo "Check recent access denials with: journalctl -k --since '-5 min' --no-pager | grep -E 'apparmor=\"DENIED\"|qemu-system'" >&2
         return 1
     fi
-    if ! grep -Eq "<enum[[:space:]][^>]*name=['\"]iommufd['\"]" <<< "${capabilities}"; then
+    if [[ "${mode}" != "untrusted" ]] && ! grep -Eq "<enum[[:space:]][^>]*name=['\"]iommufd['\"]" <<< "${capabilities}"; then
         libvirt_host_error "libvirt domain capabilities do not advertise IOMMUFD for ${qemu}"
         return 1
     fi
@@ -805,6 +805,8 @@ verify_libvirt_host() {
             libvirt_host_error "domain capabilities do not advertise SEV-SNP launch security"
             return 1
         }
+    elif [[ "${mode}" == "untrusted" ]]; then
+        python3 "$(dirname "${BASH_SOURCE[0]}")/verify_kvm.py" --emulator "${qemu}" || return 1
     else
         libvirt_host_error "invalid confidential VM mode: ${mode}"
         return 1
@@ -813,8 +815,8 @@ verify_libvirt_host() {
 
 setup_libvirt_host() {
     local mode=$1 installed_version missing_packages
-    if [[ "${mode}" != "tdx" && "${mode}" != "sev-snp" ]]; then
-        libvirt_host_error "setup_libvirt_host mode must be tdx or sev-snp"
+    if [[ "${mode}" != "tdx" && "${mode}" != "sev-snp" && "${mode}" != "untrusted" ]]; then
+        libvirt_host_error "setup_libvirt_host mode must be tdx, sev-snp or untrusted"
         return 1
     fi
     if [[ $(id -u) -ne 0 ]]; then
@@ -858,7 +860,9 @@ setup_libvirt_host() {
     fi
     configure_libvirt_apparmor || return 1
     configure_qemu_binary_permissions || return 1
-    configure_iommufd || return 1
+    if [[ "${mode}" != "untrusted" ]]; then
+        configure_iommufd || return 1
+    fi
     # shellcheck disable=SC2119
     configure_passt_capabilities || return 1
     configure_passt_unprivileged_ports || return 1

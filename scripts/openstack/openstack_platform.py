@@ -338,6 +338,51 @@ with tempfile.TemporaryDirectory(prefix='spvm-hostnames-') as directory:
         write(output/('hostnames-'+name+'.json'),result)
 
 
+def prepare_host_catalog(value,path,backend,connection,spec,cfg,project,user):
+    """Publish real inventories before capacity starts, including GPU-less hosts.
+
+    Only read-only sync is performed here. The separately staged worker handles
+    explicit administrator requests after GUI installation.
+    """
+    import fcntl
+    from openstack_host_budgets import Worker
+    automatic={name:{**host['compute_resources'],'pools':[
+        {k:p[k] for k in ('id','budget_gib','reserve_gib')}
+        for p in host['storage_pools'] if p.get('enabled',True)]}
+        for name,host in cfg['hosts'].items() if 'compute' in host['roles']}
+    policy={'schema_version':1,'config':value['config'],'controller':spec['controller'],
+        'controller_python':str(Path(spec['sdk_venv'])/'bin/python'),
+        'openrc':'/etc/spvm/auth/admin-openrc.sh','known_hosts':value['known_hosts'],
+        'project_id':project,'admin_user_ids':[user],'reader_user_ids':[user],'automatic':automatic}
+    filename=Path('/etc/spvm/host-budget-policy.json')
+    with filename.open('x') as stream:json.dump(policy,stream,indent=2)
+    filename.chmod(0o600)
+    worker=Worker(policy,path,backend,connection,policy_path=filename)
+    descriptor=os.open(worker.root/'worker.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+    try:
+        fcntl.flock(descriptor,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        worker.sync();worker.sync_pools();worker.sync_gpus()
+    finally:os.close(descriptor)
+    return {'status':'HOST_CATALOGS_INITIALIZED','policy':str(filename),'hosts':sorted(automatic),
+        'budgets_changed':False,'guests_changed':False}
+
+
+def activate_host_worker(path,spec,user,catalog,output):
+    import openstack_budget_service as budgets
+    policy=json.loads(read(catalog['policy']))
+    args=R(policy=catalog['policy'],known_hosts=policy['known_hosts'],
+        python=str(Path(spec['sdk_venv'])/'bin/python'),
+        web_python=str(Path(spec['runtime_dir'])/'venv/bin/python'),
+        web_config=str(Path(spec['runtime_dir'])/'config.json'),worker_user_id=user,output=str(output))
+    staged=budgets.stage(path,args)
+    args.activation_sha256=staged['activation_sha256']
+    result=budgets.install(args)
+    # Prime refresh now, not after the timer's first 60-second delay. The fresh
+    # deployment has no administrator requests; no automatic recovery is added.
+    subprocess.run(['systemctl','start','spvm-host-budgets.service'],check=True,capture_output=True,timeout=300)
+    return result
+
+
 def post_install(value,path,backend,output,core):
     """No resume: every mutating child owns a WAL; ambiguous failures require review."""
     from openstack.connection import Connection
@@ -408,7 +453,9 @@ def post_install(value,path,backend,output,core):
         def stage_enrollment():
             request=output/'enrollment-request.json'
             write(request,{'schema_version':1,'projects':{project:{'publisher_user_ids':[user],'reader_user_ids':[user],
-                'network_ids':[net['network_id']],'releases':[cfg['guest_release']],
+                'network_ids':[net['network_id']],'releases':sorted({cfg['guest_release']} | {
+                    h.get('bootstrap_release',cfg['guest_release']) for h in cfg['hosts'].values()
+                    if 'compute' in h['roles']}),
                 **({'release_registry_user_ids':[user]} if spec.get('release_registration') else {})}}})
             return enrollment.stage(R(workspace=value['workspace'],request=str(request),profiles=spec['profiles'],output=str(output/'enrollment')),path)
         phase('stage-enrollment',stage_enrollment)
@@ -482,7 +529,9 @@ def post_install(value,path,backend,output,core):
                     'reader_user_ids':[user],'allow_debug':all(h['allow_debug'] for h in prepared)}
             policy={'schema_version':1,'run_as':spec['web_user'],'python':str(Path(spec['sdk_venv'])/'bin/python'),
                 'state_dir':spec['state_dir'],'project_id':project,'domain_suffix':zone,'gateway_hostname':gateway,
-                'public_ip':spec['ingress_address'],'timeout':1800}
+                # Azure's public IP is translated to a NIC-local bind address;
+                # publish the configured public address, never the private bind.
+                'public_ip':cfg['network']['public_ip'],'timeout':1800}
             write(output/'web-config.json',config);write(output/'publication-policy.json',policy)
             for directory in ('/etc/spvm/retirement-permits','/etc/spvm/retirement-policies'):
                 Path(directory).mkdir(mode=0o700)
@@ -509,6 +558,8 @@ def post_install(value,path,backend,output,core):
                 web_config=str(output/'web-config.json'),wheel=str(wheels[0]),wheel_sha256=file_hash(wheels[0]),
                 publication_policy=str(output/'publication-policy.json'),retirement_policy=str(output/'retirement-policy.json')))
         phase('web-stage',web_stage)
+        catalog=phase('host-catalogs',lambda:prepare_host_catalog(
+            value,path,backend,connection,spec,cfg,project,user))
         def web_install():
             args=R(action='plan-skyline-runtime',runtime_dir=spec['runtime_dir'],runtime_sha256=file_hash(Path(spec['runtime_dir'])/'runtime-stage.json'),
                    output=str(output/'web-install'),plan_sha256=None)
@@ -517,6 +568,7 @@ def post_install(value,path,backend,output,core):
             try:return web.execute(path,args)
             finally:os.close(lock)
         phase('web-install',web_install)
+        phase('host-worker',lambda:activate_host_worker(path,spec,user,catalog,output/'host-worker'))
         # Full authenticated GUI acceptance is implemented separately to keep
         # tokens/cookies strictly in memory and out of all phase receipts.
         from openstack_platform_verify import verify

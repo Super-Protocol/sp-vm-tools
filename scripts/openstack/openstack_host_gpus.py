@@ -70,7 +70,11 @@ print(json.dumps(result))
             catalog['inventory']=gpu.catalog(observed['inventory'],shared)
             catalog['generation']=gpu.digest({'host':catalog['host'],'inventory':observed,'files':state['files'],'names':names})
             self.publish(model.PREFIX+state['compute_uuid']+'-catalog',catalog)
-            entries[catalog['host']]={'inventory':observed['inventory'],'assignments':catalog['inventory']['assignments'],
+            inventory_name=next(n for n in self.config['automatic']
+                if self.cfg['hosts'][n].get('inventory_name',n)==catalog['host'])
+            launch=self.runner.remote(inventory_name,
+                "import sys,json;sys.path[:0]=['/usr/local/libexec/spvm','/usr/local/libexec/nova-spvm'];from host_launch import report;print(json.dumps(report()))",isolated=True)
+            entries[catalog['host']]={'inventory':observed['inventory'],'assignments':catalog['inventory']['assignments'],'launch':launch,
                 'blockers':sorted(set(observed['blockers']+[v for v in catalog['blockers'] if 'TRANSACTION_REVIEW' in v]))}
             for key,p in catalog['inventory']['profiles'].items():
                 if key in profiles and profiles[key]['identity']!=p['identity']:raise ValueError('GPU profile identity collision')

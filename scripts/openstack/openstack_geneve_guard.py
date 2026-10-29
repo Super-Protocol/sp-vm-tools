@@ -136,7 +136,11 @@ class Host:
             for parent in path.parents:
                 if parent.exists():break
                 missing.append(parent)
-            for parent in reversed(missing):parent.mkdir(mode=0o755)
+            for parent in reversed(missing):
+                parent.mkdir(mode=0o755)
+                # Coordination uses umask 077 for its journals. Installed
+                # executable parents must remain traversable by service users.
+                os.chmod(parent,0o755)
             self.trusted(name)
             with path.open('xb') as output:
                 os.chmod(path,mode);output.write(body);output.flush();os.fsync(output.fileno())

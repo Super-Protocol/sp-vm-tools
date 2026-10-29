@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 from openstack_container_engine import digest, file_hash, write
 
-MODULES=('host_helper.py','host_storage.py','host_network.py','host_provider.py',
+MODULES=('host_helper.py','host_storage.py','host_network.py','host_provider.py','host_launch.py',
          'host_runtime.py','host_execution.py','host_vif_cleanup.py','state_store.py',
          'seed_reconcile_worker.py','release_service_smoke.py','storage_discovery.py',
          'gpu_discovery.py','host_gpu_host.py','host_gpu_native.py','host_budget_host.py','runtime_maintenance.py')
@@ -28,7 +28,7 @@ ROOTS={k:'/var/lib/spvm/'+v for k,v in
        [('network','network'),('provider','providers'),('runtime','runtime'),('execution','execution')]}
 FIXED=('/usr/local/libexec/spvm','/usr/local/libexec/nova-spvm',
        '/usr/local/bin/spvm_cloud.py','/etc/spvm/host-helper.json','/etc/spvm/compute-pools.json',
-       '/etc/spvm/runtime-services.json','/etc/spvm/gpu-inventory.json','/etc/systemd/system/host-helper.service',
+       '/etc/spvm/runtime-services.json','/etc/spvm/launch-policy.json','/etc/spvm/gpu-inventory.json','/etc/systemd/system/host-helper.service',
        '/etc/systemd/system/host-helper.socket','/etc/tmpfiles.d/spvm.conf',
        '/etc/polkit-1/rules.d/49-spvm-kolla-nova.rules','/var/lib/nova/compute_id')
 
@@ -41,8 +41,10 @@ def request(path):
             raise ValueError('bounded regular request file required')
         value=json.loads(path.read_text())
     if not isinstance(value,dict) or set(value)-{'registered_release_cache_root'}!={'version','machine_sha256','compute_uuid','release',
-            'allow_debug','tools','cache','pools','gpus','gpu_inventory'} or type(value['version']) is not int or value['version']!=1:
+            'allow_debug','launch_mode','tools','cache','pools','gpus','gpu_inventory'} or type(value['version']) is not int or value['version']!=1:
         raise ValueError('explicit versioned helper request required')
+    from nova_spvm.launch_policy import admit
+    admit({'mode':value['launch_mode'],'allow_debug':value['allow_debug']},value['release'])
     if (not re.fullmatch('[a-f0-9]{64}',str(value['machine_sha256']))
             or str(uuid.UUID(value['compute_uuid']))!=value['compute_uuid']
             or not re.fullmatch(r'build-[1-9][0-9]*-(debug|release)',str(value['release']))
@@ -127,7 +129,7 @@ def source_manifest(backend_path,spec,*,bootstrap=False):
     if path.resolve()!=path or not path.is_file() or path.stat().st_size>1048576:
         raise ValueError('driver capability manifest required')
     value=json.loads(path.read_text())
-    needed={'grant-bound-release-selection','guest-api-registry-presence','gpu-profile-placement-v1','gpu-pci-identity-v1'}
+    needed={'grant-bound-release-selection','guest-api-registry-presence','gpu-profile-placement-v1','gpu-pci-identity-v1','explicit-host-launch-policy-v1'}
     if 'registered_release_cache_root' in spec:needed.add('administrator-release-registration')
     if spec['release'].endswith('-release'):needed.add('release-only-helper-default')
     if bootstrap:needed.add('deny-all-runtime-bootstrap')
@@ -227,7 +229,7 @@ class Host:
                     raise ValueError('installed executable measured launcher missing')
                 launcher[name]=file_hash(p)
             wrapper=(tools/'scripts/start_super_protocol_libvirt.sh').read_text()
-            if not all(marker in wrapper for marker in ('--nova-state-disk)','--nova-interface-xml)','--nova-aux-pci)','Nova requires measured TDX/SEV launch')):
+            if not all(marker in wrapper for marker in ('--nova-state-disk)','--nova-interface-xml)','--nova-aux-pci)','Nova requires explicit host launch policy')):
                 raise ValueError('Nova-compatible measured launcher patches are required')
         cache=self.trusted(spec['cache'])
         if cache.exists() and (not cache.is_dir() or cache.stat().st_mode & 0o067):
@@ -319,6 +321,8 @@ class Host:
         if 'registered_release_cache_root' in spec:
             config['execution']['registered_release_cache_root']=spec['registered_release_cache_root']
         files={**files,'/etc/spvm/host-helper.json':(json.dumps(config,indent=2).encode(),0o600),
+            '/etc/spvm/launch-policy.json':(json.dumps({'mode':spec['launch_mode'],
+                'allow_debug':spec['allow_debug']},sort_keys=True).encode(),0o644),
             '/etc/spvm/gpu-inventory.json':(json.dumps(spec['gpu_inventory'],sort_keys=True).encode(),0o644),
             '/etc/spvm/compute-pools.json':(json.dumps({'compute_uuid':spec['compute_uuid'],
                 'pool_ids':[p['id'] for p in spec['pools']]}).encode(),0o644),
