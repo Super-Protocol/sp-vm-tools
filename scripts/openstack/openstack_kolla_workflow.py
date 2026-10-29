@@ -205,7 +205,7 @@ def execute(args, backend_path, backend):
                     target.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
                     workspace.private_file(target,read(origin/name))
             workspace.private_file(output/'ansible.cfg', '[defaults]\nhost_key_checking = True\nretry_files_enabled = False\n'
-                '[ssh_connection]\nssh_args = -F /dev/null -o IdentityAgent=none -o IdentitiesOnly=yes '
+                '[ssh_connection]\nusetty = False\nssh_args = -F /dev/null -o IdentityAgent=none -o IdentitiesOnly=yes '
                 '-o StrictHostKeyChecking=yes -o UserKnownHostsFile='+shlex.quote(str(args.known_hosts))+'\n')
         for phase in PHASES[len(record['completed']):]:
             for name, approved in receipt['files'].items():

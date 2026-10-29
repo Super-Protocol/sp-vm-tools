@@ -150,8 +150,22 @@ def input_files(filename):
     for p in root.rglob('*'):
         if p.is_symlink():raise ValueError('provider symlinks refused')
         if p.is_file():paths.append(p)
-    if not (Path(value['sdk_venv'])/'pyvenv.cfg').is_file():raise ValueError('prepared SDK environment required')
+    check_sdk_access(value)
     return {str(p):file_hash(p) for p in paths}
+
+
+def check_sdk_access(value):
+    root=Path(value['sdk_venv'])
+    if not (root/'pyvenv.cfg').is_file():raise ValueError('prepared SDK environment required')
+    # The same pinned client is used by non-root ingress/publication services.
+    # Reject a private operator-only path before Kolla or enrollment mutates.
+    for user in sorted({value['web_user'],INGRESS_USER}):
+        for command in ([str(root/'bin/python'),'-c','import openstack, openstack_spvm'],
+                        [str(root/'bin/openstack'),'--version']):
+            result=subprocess.run(['sudo','-n','-u',user,'--',*command],
+                                  capture_output=True,text=True,timeout=30)
+            if result.returncode:
+                raise ValueError('SDK must be executable/importable by configured web and ingress service users; use a root-owned service-readable environment outside private operator directories')
 
 
 def sdk_digest(filename):

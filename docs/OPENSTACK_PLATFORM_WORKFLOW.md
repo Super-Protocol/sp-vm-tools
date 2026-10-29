@@ -45,6 +45,12 @@ the hosts, a non-root operator account and the reviewed driver bundle/SDK enviro
 Set `SPVM_INSTALLER_PYTHON` to a Python containing the matching driver client,
 OpenStackSDK, keystoneauth and YAML dependencies. No system-wide pip is used.
 
+Deployment SSH keys may use `no-pty`. Generated Ansible configurations explicitly
+set `[ssh_connection] usetty = False`; package preparation, API trust, prechecks
+and deployment use noninteractive SSH and `sudo` without allocating a terminal.
+Do not weaken a deployment key's restrictions to fix `PTY allocation request
+failed on channel 0`. Noninteractive `sudo` remains a prerequisite.
+
 The existing artifact preparation stages still supply a clean pinned Kolla
 source/collections, generated fresh password/TLS workspace, built custom Nova
 and Skyline images, compute image delivery, installed bootstrap-deny-all helpers,
@@ -87,6 +93,21 @@ Existing-cloud adoption must use the already registered Nova identity instead.
 
 ## Prepare input files
 
+Review the provider directory's services version and any explicit ACME override
+before import. Templates are immutable snapshots of those inputs: a fresh
+installation does not inherit earlier Barbican-only edits or silently replace
+a migration services tag or an explicit certificate-provider choice. VM/CA
+readiness and public UI/TLS readiness remain separate checks.
+
+The prepared `sdk_venv` is also used by the non-root web and ingress services.
+Install the pinned client and SDK into a root-owned, service-readable location
+such as `/opt/spvm-openstack-client`, not beneath `/root` or a mode-0700 operator
+transaction directory. Planning checks Python imports and CLI execution as both
+service accounts before deployment. Keep provider files, auth scripts and
+transaction directories private; do not make the whole operator tree readable
+to fix a client-path permission error. Package code in this SDK must contain no
+operator credentials.
+
 Candidate 0.2.24 adds optional administrator registration of additional public
 SPVM releases through Skyline. It is disabled by default. To enable it on a fresh
 platform, prepare `registered_release_cache_root` in **every** helper request
@@ -106,6 +127,26 @@ gates, fresh-install opt-in, existing-install maintenance, and disabling debug
 after diagnostics. The required helper boolean must be explicit; omission is
 not an implicit permission. Enabling web registration alone cannot enable host
 debug launches.
+
+### Mixed compute bootstrap builds
+
+The project bootstrap release allowlist is the exact union of builds prepared
+in the bound helper requests. For example, TDX computes can prepare
+`build-449-release` while an explicitly debug-only non-CC compute prepares
+`build-447-debug`. Do not require every host to prepare the same bootstrap
+build, and do not add unprepared builds to this static allowlist.
+
+Runtime staging projects that catalog onto each compute: its static release
+list contains only that host's prepared bootstrap build. A project-wide catalog
+is not authorization to launch every image on every host. Additional registered
+builds still require isolated registered caches, trusted registration approval,
+host debug opt-in when applicable, and independent compute/helper/launcher
+admission. Release images remain forbidden on `untrusted` hosts.
+
+A failed installation transaction is not a resume token. Preserve its journals
+and inspect completed side effects before choosing a separately recorded
+operator recovery or a cleared-state retry. Never mark a refused parent
+transaction successful merely because a later reviewed completion succeeds.
 
 Registration creates a private Glance marker and project/image-bound private
 Barbican approval after checking the official GitHub release and `vm.json` asset.

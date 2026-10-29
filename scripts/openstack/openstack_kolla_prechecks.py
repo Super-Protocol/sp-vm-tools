@@ -169,7 +169,7 @@ def execute(args,backend_path,backend):
         try:
             config=output/'ansible.cfg'
             workspace.private_file(config,'[defaults]\nhost_key_checking = True\nretry_files_enabled = False\n'
-                '[ssh_connection]\nssh_args = -F /dev/null -o IdentityAgent=none -o IdentitiesOnly=yes '
+                '[ssh_connection]\nusetty = False\nssh_args = -F /dev/null -o IdentityAgent=none -o IdentitiesOnly=yes '
                 '-o StrictHostKeyChecking=yes -o UserKnownHostsFile='+shlex.quote(str(args.known_hosts))+'\n')
             env={k:v for k,v in os.environ.items() if not k.startswith(('ANSIBLE_','KOLLA_','PYTHON','OS_'))}
             env.update(PYTHONDONTWRITEBYTECODE='1',ANSIBLE_CONFIG=str(config),

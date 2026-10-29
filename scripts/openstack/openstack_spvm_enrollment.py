@@ -41,14 +41,18 @@ def document(raw, binding):
                 or any(not isinstance(r,str) or not re.fullmatch('build-[1-9][0-9]*-(debug|release)',r) for r in releases)
                 or len(set(releases))!=len(releases)):
             raise ValueError('explicit unique release allowlist required')
-        # Portable fresh helper currently has exactly one prepared release cache.
-        # Never authorize a release whose measured cache/helper gate is not bound.
+        # This project catalog is the union of explicitly prepared bootstrap
+        # builds. It is not a promise that every build can run on every host.
+        prepared=set()
         for host in binding['hosts'].values():
             helper=json.loads(read(host['request_file']))
             if 'release_registry_user_ids' in spec and 'registered_release_cache_root' not in helper:
                 raise ValueError('registered release caches must be explicitly prepared on every compute')
-            if set(releases)!={helper['release']} or (helper['release'].endswith('-debug') and not helper['allow_debug']):
-                raise ValueError('release not prepared/authorized on every selected compute')
+            prepared.add(helper['release'])
+            if helper['release'] not in releases or (helper['release'].endswith('-debug') and not helper['allow_debug']):
+                raise ValueError('compute bootstrap release must be explicitly prepared and authorized')
+        if set(releases)!=prepared:
+            raise ValueError('project bootstrap releases must match the prepared compute release union')
         if 'release_registry_user_ids' in spec:
             identifiers(spec['release_registry_user_ids'])
             if not set(spec['release_registry_user_ids']) <= set(spec['publisher_user_ids']):

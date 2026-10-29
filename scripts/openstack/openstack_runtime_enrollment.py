@@ -37,8 +37,16 @@ def stage(args,path):
         spec=helper_request(host['request_file'])
         if spec['machine_sha256']!=host['machine_sha256'] or spec['compute_uuid']!=host['compute_uuid']:
             raise ValueError('helper identity differs from bound compute')
+        # Keep the compute contract strict: only its local prepared cache is a
+        # static release. Additional registered builds still require explicit
+        # registry approval, debug opt-in and independent host launch policy.
+        runtime={**enrollment['runtime'],'projects':{}}
+        for project,policy in enrollment['runtime']['projects'].items():
+            if spec['release'] not in policy['releases']:
+                raise ValueError('project does not authorize this compute bootstrap release')
+            runtime['projects'][project]={**policy,'releases':[spec['release']]}
         requests[name]=backend.request({'schema_version':1,'helper_request':spec,
-            'bootstrap_runtime':binding['bootstrap_runtime'],'runtime':enrollment['runtime'],
+            'bootstrap_runtime':binding['bootstrap_runtime'],'runtime':runtime,
             'image_id':binding['image_id'],'image_context_sha256':binding['image_context_sha256'],
             'enrollment_sha256':enrollment['enrollment_sha256']})
     if workspace.check(root)!=receipt:raise ValueError('workspace changed during staging')

@@ -157,7 +157,7 @@ def execute(args,backend_path,backend):
         try:
             if any(not ready(f,selected,intent) for f in before.values()):
                 workspace.private_file(output/'ansible.cfg','[defaults]\nhost_key_checking = True\n'
-                    'retry_files_enabled = False\n[ssh_connection]\nssh_args = -F /dev/null '
+                    'retry_files_enabled = False\n[ssh_connection]\nusetty = False\nssh_args = -F /dev/null '
                     '-o IdentityAgent=none -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes '
                     '-o UserKnownHostsFile='+shlex.quote(str(args.known_hosts))+'\n')
                 inventory={'all':{'hosts':{n:{'ansible_host':h['address'],'ansible_user':h['user'],
