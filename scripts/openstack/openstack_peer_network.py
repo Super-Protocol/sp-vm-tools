@@ -37,7 +37,21 @@ def insertions(before,after):
     return result
 
 
+def contraction(before,after,field,address):
+    if ({k:v for k,v in before.items() if k!=field}!={k:v for k,v in after.items() if k!=field}
+            or before[field]!=sorted(set(before[field]))
+            or after[field]!=sorted(set(before[field])-{address})):
+        raise ValueError('remove only the retired compute peer')
+
+
+def deletions(before,after):
+    # Reversing insert-only validation proves unchanged chain/order/jumps.
+    insertions(after,before)
+    return [['-D',*row[1:]] for row in before if row not in after]
+
+
 class Peer:
+    removing=False
     def __init__(self,root=Path('/'),runner=subprocess.run):
         self.root=Path(root);self.runner=runner;self.owner=os.getuid()
 
@@ -78,7 +92,8 @@ class Peer:
         for entry in entries:
             module=self.load(entry);old=module.validate(json.loads(self.read(entry['path'],65536)))
             new=module.validate(entry['policy']);kind=entry['kind']
-            extension(old,new,'peers' if kind=='geneve' else 'probe_sources',entry['new_address'])
+            change=contraction if self.removing else extension
+            change(old,new,'peers' if kind=='geneve' else 'probe_sources',entry['new_address'])
             result[kind]={'before':old,'after':new,'state':self.state(module,old,kind),
                 'file_sha256':hashlib.sha256(self.read(entry['path'],65536)).hexdigest()}
         return result
@@ -131,7 +146,8 @@ class Peer:
                             if oldjumps!=newjumps:raise ValueError('NAT jumps must remain unchanged')
                             tables[table]=(oldrows,newrows)
                     for table,(oldrows,newrows) in tables.items():
-                        for rule in insertions(oldrows,newrows):
+                        changes=deletions if self.removing else insertions
+                        for rule in changes(oldrows,newrows):
                             p=self.runner(['iptables','-w','5','-t',table,*rule],capture_output=True,text=True,timeout=45)
                             if p.returncode:raise ValueError('peer rule insertion failed; inspect journal')
                     after=self.state(module,new,kind)
@@ -146,3 +162,8 @@ class Peer:
                 write(journal,{'status':'NEEDS_REVIEW','services_restarted':False});raise
             return {'status':'PEER_NETWORK_READY','services_restarted':False}
         finally:os.close(fd)
+
+
+class RemovingPeer(Peer):
+    """Explicit remove-compute only; never selected by onboarding."""
+    removing=True

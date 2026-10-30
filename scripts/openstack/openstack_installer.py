@@ -163,6 +163,7 @@ def main(argv=None):
         'Individual phases: stage-skyline-console, build-skyline-console, stage-skyline-runtime. '
         'Fresh web services: plan-skyline-runtime, install-skyline-runtime (never overwrite occupied units). '
         'Prepared empty compute: plan-compute-activation, activate-compute. '
+        'Retire a reachable empty compute-only host: plan-remove-compute, remove-compute. '
         'Scoped compute image: plan-kolla-compute-container, reconcile-kolla-compute-container. '
         'Read-only aggregate and next stage: initial-host-status. '
         'Occupied Kolla cloud, scoped read-only verification: verify-kolla-existing. '
@@ -233,6 +234,9 @@ def main(argv=None):
         if remaining[0] in ('plan-compute-activation','activate-compute'):
             from openstack_compute_activation import main as compute_activation
             return compute_activation(path,remaining)
+        if remaining[0] in ('plan-remove-compute','remove-compute'):
+            from openstack_compute_removal import main as compute_removal
+            return compute_removal(path,remaining)
         if remaining[0] in ('plan-spvm-publication','publish-spvm-ui'):
             from openstack_publication import main as publication
             return publication(path,remaining)

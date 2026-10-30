@@ -1,5 +1,8 @@
 # Fresh platform workflow: prepared hosts to Skyline Swarm management
 
+For the separate, empty compute-only retirement workflow, see
+[Retiring an OpenStack compute host](OPENSTACK_COMPUTE_REMOVAL.md).
+
 This workflow extends `plan-openstack` / `apply-openstack` with a `platform`
 specification. It runs existing owned phases in order and resolves project,
 user, network and security-group IDs from the **new** cloud. It never launches
