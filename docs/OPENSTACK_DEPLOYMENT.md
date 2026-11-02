@@ -549,6 +549,78 @@ registration. The live Swarm was not shut down to manufacture an empty target.
 
 ## 6. Plan networks and public ingress before installation
 
+### 6.1. Administrator-owned transport and optional encryption
+
+The administrator is responsible for provisioning the inter-host transport before
+installation: interfaces, addresses, routing, access controls and, if selected,
+VPN keys/peers and boot persistence. The installer does not create a WireGuard
+VPN or distribute its private keys. Transport encryption is **not a mandatory
+OpenStack prerequisite or an installer feature gate**. An existing unencrypted
+LAN/VLAN can be used when the administrator accepts its security properties.
+The current workflow still requires the documented dedicated, reachable management
+interfaces/addresses; making encryption optional does not remove these topology
+and connectivity requirements or make arbitrary public-interface layouts supported.
+
+Here, "private management network" means an administrator-controlled internal
+connectivity and access boundary, not necessarily an encrypted VPN. WireGuard is
+one supported transport choice, not a synonym for management networking. A VLAN,
+RFC1918 address or dedicated interface alone does not establish encryption or
+prove isolation from other tenants. If existing infrastructure provides adequate
+connectivity and isolation, no additional VPN needs to be created by this project.
+
+Keep these layers distinct:
+
+| Layer | Responsibility and encryption boundary |
+| --- | --- |
+| Inter-host management/underlay | Prepared by the administrator; may be a LAN/VLAN or an explicitly configured encrypted transport. |
+| Shared Neutron guest network | Created by platform setup. Geneve encapsulation does not itself encrypt guest packets. Security groups restrict access but do not encrypt traffic. |
+| Swarm overlay | Managed by Swarm inside guests; protects its own overlay traffic, not OpenStack management services or every guest connection. |
+| Service TLS | Protects only connections actually configured to use and verify TLS. An HTTPS dashboard does not prove DB, messaging, storage or migration traffic is encrypted. |
+
+Without transport encryption, packets on unencrypted service connections and
+Geneve traffic may be observable by an attacker with access to the underlying
+network. Depending on the protocol and its authentication/integrity settings,
+that access may also enable spoofing, tampering, credential/session theft or
+denial of service. Confidential VMs protect specified guest execution boundaries;
+TDX/SEV-SNP do not automatically encrypt packets once they leave that boundary.
+Swarm's WireGuard overlay does not mitigate exposure of RabbitMQ, MariaDB,
+OpenStack control-plane connections, host-to-guest probes or unrelated guest
+traffic. Do not assume that every one of these connections uses TLS merely
+because API ingress does.
+
+For links crossing public, shared or otherwise untrusted infrastructure, strongly
+prefer an authenticated encrypted transport, or explicitly configure and verify
+appropriate protection for **every** relevant service/data path. The latter is
+not automatically supplied by this installer. Choosing unencrypted transport is
+an administrator security decision, not a claim of equivalent protection.
+Unrestricted Internet exposure of internal services is never an acceptable
+substitute for a management network. Restrict DB, messaging, internal APIs,
+virtualization sockets and tunnel endpoints to intended peers, including IPv6.
+Do not bind them to public addresses without a separately reviewed architecture.
+
+Before applying the installation, the administrator must verify:
+
+- Stable, non-overlapping management addresses, routes and a reserved API VIP;
+  intended peers can communicate and unauthorized sources cannot.
+- Only necessary service/tunnel ports are allowed; guest networks, management
+  paths and public ingress have deliberate forwarding boundaries.
+- MTU supports the chosen encapsulation stack. Geneve over a VPN adds overhead;
+  working SSH or ping alone does not establish guest-network health.
+- Routing, firewall rules and any selected VPN survive reboot. Confirm expected
+  service bind addresses and actual TLS settings after deployment; preflight
+  connectivity success is not a security audit or proof of encryption.
+- The deployment record identifies the transport, whether it encrypts traffic,
+  its firewall/isolation policy and any explicitly accepted exposure. Never put
+  private keys or credentials in that record or in Git.
+
+An encrypted underlay protects only the traffic routed through it, between its
+endpoints; it does not protect against a compromised endpoint or replace service
+authentication, TLS verification or guest security groups. VPN key rotation,
+peer administration and transport availability remain administrator duties.
+No host networking is changed merely by documenting this policy.
+
+### 6.2. Platform networks and ingress
+
 Provide stable, unique hostnames, management addresses, management and tunnel
 interfaces, an API VIP and the selected external-network topology. Ensure targets
 can reach the controller's internal services using the intended private network.
