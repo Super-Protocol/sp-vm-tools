@@ -63,7 +63,10 @@ or provision WireGuard peers/keys. Those are explicit earlier preparation stages
 not an implied OS-to-cloud one-liner. See the main deployment guide.
 
 For host network preparation, the approved management transport and its addresses
-must already be UP, dedicated and non-default. Existing WireGuard AllowedIPs and
+must already be UP. The default profile requires a dedicated non-default path.
+The explicit [shared-interface profile](OPENSTACK_SHARED_INTERFACE.md) instead
+uses existing primary IPv4 addresses, no extra VIP, distinct backend ports and
+persistent peer guards. No VPN is required in either profile. Existing WireGuard AllowedIPs and
 routes must cover the declared guest probes/replies. The optional recipe runs
 owned Geneve guards, management VIP/routes and isolated NAT; it does not attach
 the public bond to OVS or invent a new per-Swarm network.

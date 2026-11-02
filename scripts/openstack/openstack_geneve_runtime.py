@@ -45,6 +45,21 @@ def rules(policy):
     return [['-N',chain],*members],jump
 
 
+def management_prefix(rows,policy):
+    """Only a non-accepting SPVM input guard may precede the Geneve guard."""
+    first=next((r for r in rows if r[:2]==['-A','INPUT']),None)
+    if not first or len(first) not in (6,8):return None
+    fields=dict(zip(first[2::2],first[3::2]))
+    if set(fields) not in ({'-d','-j'},{'-i','-d','-j'}) or fields.get('-i',policy['interface'])!=policy['interface'] or fields['-d']!=policy['local_ip']+'/32':return None
+    chain=fields['-j']
+    if not re.fullmatch('SPVM_MGT_[A-F0-9]{12}',chain):return None
+    owned=[r for r in rows if r[:2]==['-A',chain]]
+    # Such a chain can only return to INPUT or reject packets; it cannot bypass
+    # the Geneve allowlist by accepting traffic or jumping into another chain.
+    if not owned or any('-j' not in r or r[r.index('-j')+1] not in ('RETURN','DROP') for r in owned):return None
+    return first
+
+
 def snapshot(policy,runner=subprocess.run):
     validate(policy)
     rows=[shlex.split(line) for line in command(['iptables','-w','5','-S'],runner).splitlines() if line.strip()]
@@ -66,7 +81,9 @@ def snapshot(policy,runner=subprocess.run):
     state='ABSENT'
     if owned or jumps:
         if owned!=expected or len(jumps)!=1:raise ValueError('existing Geneve chain differs or is incomplete')
-        if next((row for row in rows if row[:2]==['-A','INPUT']),None)!=jumps[0]:
+        prefix=management_prefix(rows,policy)
+        preceding=[row for row in rows if row[:2]==['-A','INPUT']][:2 if prefix else 1]
+        if preceding!=([prefix,jumps[0]] if prefix else [jumps[0]]):
             raise ValueError('Geneve jump must precede other INPUT rules')
         state='READY'
     nat=command(['iptables','-w','5','-t','nat','-S'],runner)
@@ -80,7 +97,9 @@ def reconcile(policy,runner=subprocess.run):
     if before['owned']=='READY':return False
     members,jump=rules(policy)
     for row in members:command(['iptables','-w','5',*row],runner)
-    command(['iptables','-w','5','-I','INPUT','1',*jump[2:]],runner)
+    rows=[shlex.split(line) for line in command(['iptables','-w','5','-S'],runner).splitlines() if line.strip()]
+    position='2' if management_prefix(rows,policy) else '1'
+    command(['iptables','-w','5','-I','INPUT',position,*jump[2:]],runner)
     after=snapshot(policy,runner)
     if after!={**before,'owned':'READY'}:raise ValueError('unrelated firewall state changed')
     return True

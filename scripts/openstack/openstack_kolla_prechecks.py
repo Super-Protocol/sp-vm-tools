@@ -75,7 +75,7 @@ def inputs(args,backend_path,backend):
             or globals_.get('enable_nova_libvirt_container') is not False
             or globals_.get('nova_compute_image_full')!=binding['image_reference']):
         raise ValueError('preserving measured runtime profile and bound image required')
-    code=read(Path(__file__).with_name('openstack_initial_probe.py')).decode()
+    code=read(Path(__file__).with_name('openstack_network_probe.py')).decode()+'\n'+read(Path(__file__).with_name('openstack_initial_probe.py')).decode()
     source_hashes={p:hashlib.sha256(body).hexdigest() for p,(body,mode) in sources(backend_path).items()}
     launcher,_,_=recipe(backend_path)
     requests={}
@@ -88,6 +88,11 @@ def inputs(args,backend_path,backend):
         wanted={'machine_sha256':binding['machines'][name],'roles':host['roles'],'interfaces':sorted(required),
                 'allow_ubuntu26':args.allow_experimental_ubuntu26,
                 'api_vip':cfg['network']['api_vip'] if 'control' in host['roles'] and globals_.get('enable_keepalived') is False else None}
+        if cfg['network'].get('management_mode')=='shared-interface':
+            wanted['shared_network']={'deployment_id':cfg['deployment_id'],'interface':host['management_interface'],
+                'address':host['address'],'peers':sorted(h['address'] for n,h in cfg['hosts'].items() if n!=name),
+                'vip':cfg['network']['api_vip'] if 'control' in host['roles'] else None,
+                'runtime_sha256':file_hash(Path(__file__).with_name('openstack_network_runtime.py'))}
         if 'compute' in host['roles']:
             member=binding['hosts'][name]
             if file_hash(member['request_file'])!=member['request_sha256']:raise ValueError('helper request drift')
@@ -112,7 +117,7 @@ def inputs(args,backend_path,backend):
         'config_sha256':digest(cfg),'known_hosts_sha256':file_hash(trust),
         'identity_files_sha256':{n:file_hash(h['identity_file']) for n,h in cfg['hosts'].items()},
         'installer_sha256':{n:file_hash(Path(__file__).with_name(n)) for n in
-            ('openstack_kolla_prechecks.py','openstack_initial_probe.py','openstack_kolla_workspace.py')},
+            ('openstack_kolla_prechecks.py','openstack_initial_probe.py','openstack_kolla_workspace.py','openstack_network_probe.py','openstack_network_runtime.py')},
         'requests':requests}
     return cfg,receipt,source,code,fingerprint
 

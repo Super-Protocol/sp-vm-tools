@@ -109,7 +109,7 @@ def passwords_valid(value, template):
             raise ValueError('generated credential is missing; details suppressed')
 
 
-def certificates(output,vip,log):
+def certificates(output,vip,log,*,localhost=False):
     root=output/'kolla/certificates'
     ca=root/'ca'
     ca.mkdir(parents=True,mode=0o700)
@@ -120,7 +120,7 @@ def certificates(output,vip,log):
         '-addext','keyUsage=critical,keyCertSign,cRLSign'],log,cwd=output)
     command(['openssl','req','-new','-newkey','rsa:3072','-nodes',
         '-keyout',str(root/'api.key'),'-out',str(root/'api.csr'),'-subj','/CN='+vip,
-        '-addext','subjectAltName=IP:'+vip,'-addext','basicConstraints=critical,CA:FALSE',
+        '-addext','subjectAltName=IP:'+vip+(',DNS:localhost,IP:127.0.0.1' if localhost else ''),'-addext','basicConstraints=critical,CA:FALSE',
         '-addext','keyUsage=critical,digitalSignature,keyEncipherment',
         '-addext','extendedKeyUsage=serverAuth'],log,cwd=output)
     command(['openssl','x509','-req','-in',str(root/'api.csr'),'-CA',str(ca/'ca.crt'),
@@ -227,7 +227,9 @@ def init(args,backend):
                 log,cwd=output,env=environment)
         os.chmod(output/'kolla/passwords.yml',0o600)
         passwords_valid(yaml.safe_load((output/'kolla/passwords.yml').read_bytes()),yaml.safe_load(template))
-        certificates(output,cfg['network']['api_vip'],log)
+        if cfg['network'].get('management_mode')=='shared-interface':
+            certificates(output,cfg['network']['api_vip'],log,localhost=True)
+        else:certificates(output,cfg['network']['api_vip'],log)
         receipt={'schema_version':1,'status':'KOLLA_INPUTS_INITIALIZED_NOT_DEPLOYED',
             'deployment_id':cfg['deployment_id'],'config_sha256':digest(cfg),
             'render_lock_sha256':digest(lock),'kolla_revision':cfg['kolla']['revision'],

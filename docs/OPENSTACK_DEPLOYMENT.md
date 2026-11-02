@@ -565,9 +565,12 @@ VPN keys/peers and boot persistence. The installer does not create a WireGuard
 VPN or distribute its private keys. Transport encryption is **not a mandatory
 OpenStack prerequisite or an installer feature gate**. An existing unencrypted
 LAN/VLAN can be used when the administrator accepts its security properties.
-The current workflow still requires the documented dedicated, reachable management
-interfaces/addresses; making encryption optional does not remove these topology
-and connectivity requirements or make arbitrary public-interface layouts supported.
+The default workflow requires dedicated, reachable management interfaces/addresses.
+The explicit fresh-install [shared-interface profile](OPENSTACK_SHARED_INTERFACE.md)
+also supports the existing primary IPv4 interface and controller address with
+persistent peer-only guards and distinct Kolla frontend/backend ports. Making
+encryption optional does not remove the selected profile's connectivity or access
+control requirements or make arbitrary public-interface layouts supported.
 
 Here, "private management network" means an administrator-controlled internal
 connectivity and access boundary, not necessarily an encrypted VPN. WireGuard is
@@ -659,8 +662,10 @@ ingress address and verify that this address actually serves the ingress.
 Each cluster requires distinct swarm and PKI domains and owned DNS records.
 Do not overwrite another cluster's routes or zone records.
 
-Reserve public 80/443 for Swarm ingress; keep OpenStack API ingress on the planned
-private VIP/ports. Trust the OpenStack CA in CLI environments **and containers**.
+Reserve public 80/443 for Swarm ingress. The default profile keeps OpenStack API
+ingress on the planned private VIP/ports; shared-interface uses the existing
+controller IP with persistent peer guards and tunnel-only administrative access.
+Trust the OpenStack CA in CLI environments **and containers**.
 Do not work around certificate failures with `--insecure`. Public Swarm TLS and
 private OpenStack API TLS are separate certificate lifecycles.
 
@@ -2203,7 +2208,10 @@ the shell wrapper when staging tools, and do not restore old Python-module copie
 at the `scripts/` root. Hardware bootstrap and measured launchers were not moved.
 
 The new `plan-management` / `prepare-management` commands use an **existing,
-addressed, connected private management network**. A private LAN is sufficient;
+addressed, connected private management network** in the default dedicated profile.
+For an existing primary/public interface, select the explicit
+[shared-interface profile](OPENSTACK_SHARED_INTERFACE.md); do not simply bypass
+dedicated-mode checks or invent a VPN interface. A private LAN is sufficient;
 WireGuard is not mandatory. An already configured wg-quick transport is supported
 through an explicit dependency. This phase does not install WireGuard, generate
 or transfer keys, rewrite Netplan/NetworkManager/networkd, assign primary host IPs

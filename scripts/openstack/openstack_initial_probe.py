@@ -11,6 +11,9 @@ import shutil
 import stat
 import subprocess
 
+if 'check_shared_network' not in globals():
+    from openstack_network_probe import check_shared_network
+
 
 def native_ovs_conflicts(run):
     """Never take over native OVS or its shared sockets during a fresh deploy."""
@@ -107,6 +110,9 @@ def probe(request,root=Path('/'),runner=subprocess.run):
     if not set(request['interfaces'])<=interfaces:blockers.append('REQUIRED_INTERFACE_MISSING')
     if request.get('api_vip') and not any(a.get('local')==request['api_vip'] for i in addresses for a in i.get('addr_info',[])):
         blockers.append('PERSISTENT_PRIVATE_API_VIP_MISSING')
+    if request.get('shared_network'):
+        try:result['shared_network']=check_shared_network(request,root,runner)
+        except Exception:blockers.append('SHARED_NETWORK_OR_FIREWALL_NOT_READY')
     result.update(os_version=version,kernel=os.uname().release,
         docker_version=run(['docker','info','--format','{{.ServerVersion}}']).stdout.strip())
     if 'compute' in request['roles'] and not request.get('guard_only',False):

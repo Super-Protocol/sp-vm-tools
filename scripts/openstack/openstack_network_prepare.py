@@ -35,7 +35,9 @@ def inputs(args,backend):
     nat=request['nat']
     if set(nat)!={'host','egress_interface','transit_address','router_ip','probe_ports'} or nat['host']!=networks[0]:
         raise ValueError('explicit host-NAT configuration required')
-    guest=ip.IPv4Network(request['guest_cidr'],strict=True);runtime.private(cfg['network']['api_vip'])
+    is_shared=cfg['network'].get('management_mode')=='shared-interface'
+    usable=runtime.unicast if is_shared else runtime.private
+    guest=ip.IPv4Network(request['guest_cidr'],strict=True);usable(cfg['network']['api_vip'])
     transit=ip.IPv4Interface(nat['transit_address'])
     if str(transit.network)!=cfg['network']['transit_cidr']:raise ValueError('transit differs from deployment config')
     machines=set();addresses=set()
@@ -44,13 +46,17 @@ def inputs(args,backend):
                 or set(node)-{'machine_sha256','management_address','route_interface','transport_unit'}
                 or not re.fullmatch('[a-f0-9]{64}',str(node['machine_sha256'])) or node['machine_sha256'] in machines):
             raise ValueError('unique audited host identities required')
-        address=ip.IPv4Interface(node['management_address']);runtime.private(str(address.ip));runtime.interface(node['route_interface'])
+        address=ip.IPv4Interface(node['management_address']);usable(str(address.ip));runtime.interface(node['route_interface'])
         runtime.interface(cfg['hosts'][name]['management_interface'])
+        if is_shared and (str(address.ip)!=cfg['hosts'][name]['address']
+                or node['route_interface']!=cfg['hosts'][name]['management_interface']
+                or node.get('transport_unit') is not None):
+            raise ValueError('shared-interface requires existing host IPv4/interface without VPN dependency')
         if node.get('transport_unit') not in (None,'wg-quick@'+node['route_interface']+'.service'):
             raise ValueError('invalid existing transport unit')
         if (str(address)!=node['management_address'] or address.ip in addresses or address.ip in guest
                 or address.network.overlaps(transit.network) or address.network.overlaps(guest)
-                or str(address.ip)==cfg['network']['api_vip']):
+                or (str(address.ip)==cfg['network']['api_vip'] and not (is_shared and name==request['vip_owner']))):
             raise ValueError('management addresses collide or overlap guest/transit/VIP')
         machines.add(node['machine_sha256']);addresses.add(address.ip)
     if ip.IPv4Address(cfg['network']['api_vip']) in guest or ip.IPv4Address(cfg['network']['api_vip']) in transit.network:
@@ -61,6 +67,9 @@ def inputs(args,backend):
            'phase':phase,'management_interface':host['management_interface'],'route_interface':node['route_interface'],
            'management_address':node['management_address'],'guest_cidr':str(guest),'guest_route':None,
            'transport_unit':node.get('transport_unit')}
+        if is_shared:
+            p.update(management_mode='shared-interface',peers=sorted(str(ip.IPv4Interface(v['management_address']).ip)
+                for n,v in request['hosts'].items() if n!=name))
         if phase=='management':
             p['vip']=cfg['network']['api_vip'] if name==request['vip_owner'] else None
             if name!=nat['host'] and 'compute' in host['roles']:
@@ -89,6 +98,7 @@ def inputs(args,backend):
                            for q in Path(backend.__file__).parent.rglob('*.py')},
         'peer_routes':sorted(str(a) for a in addresses if a!=ip.IPv4Interface(own['management_address']).ip)}
     if args.host!=request['vip_owner']:binding['peer_routes'].append(cfg['network']['api_vip'])
+    binding['peer_routes']=sorted(set(binding['peer_routes']))
     return cfg,p,binding
 
 
@@ -140,6 +150,7 @@ class Host(guard.Host):
                 raise ValueError('existing systemd Docker daemon must already be active')
             management={k:p[k] for k in ('schema_version','deployment_id','machine_sha256','management_interface',
                         'route_interface','management_address','guest_cidr','transport_unit')}
+            if runtime.shared(p):management.update(management_mode=p['management_mode'],peers=p['peers'])
             management.update(phase='management',guest_route=None,
                 vip=cfg['network']['api_vip'] if 'control' in cfg['hosts'][b['host']]['roles'] else None)
             mu,mfiles=artifacts(cfg,management)
@@ -184,7 +195,7 @@ class Host(guard.Host):
                    '--property=LoadState','--value'],self.runner).strip()!='not-found':raise ValueError('existing transit unit')
         # Management phase must not touch either firewall table.
         untouched={}
-        if p['phase']=='management':
+        if p['phase']=='management' and not runtime.shared(p):
             untouched={t:digest(runtime.run(['iptables','-w','5','-t',t,'-S'],self.runner)) for t in ('filter','nat')}
         return {'host_guard':facts,'protected':state['protected'],'firewall_untouched':untouched,'state':state}
 

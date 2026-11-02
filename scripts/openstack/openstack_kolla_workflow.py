@@ -14,6 +14,7 @@ import time
 
 from openstack_compute_image import read
 from openstack_container_engine import digest, file_hash, write
+import openstack_network_probe as network_probe
 import openstack_kolla_prechecks as prechecks
 import openstack_kolla_workspace as workspace
 
@@ -105,8 +106,10 @@ for identity in REQUEST.get('protected_container_ids',[]):
 services={s:run(['systemctl','show',s,'--property=LoadState,ActiveState,SubState,MainPID,ActiveEnterTimestampMonotonic,ExecMainStartTimestampMonotonic,NRestarts'],(0,1,4))
  for s in ['docker.service','libvirtd.service','virtqemud.service','qgs.service','qgsd.service','pccs.service','host-helper.socket']}
 if any('LoadState=' not in value for value in services.values()):raise ValueError('service observation unavailable')
-print(json.dumps({'schema_version':1,'blockers':[],'machine':machine,'files':files,'services':services,'containers':containers}))
+shared_network=check_shared_network(REQUEST)
+print(json.dumps({'schema_version':1,'blockers':[],'machine':machine,'files':files,'services':services,'containers':containers,'shared_network':shared_network}))
 '''
+GUARD=Path(network_probe.__file__).read_text()+'\n'+GUARD
 
 
 def fingerprint(args, backend_path, backend):
