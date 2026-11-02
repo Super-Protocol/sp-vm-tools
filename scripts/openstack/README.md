@@ -1,5 +1,11 @@
 # OpenStack installer implementation
 
+Local operator tooling is prepared by `prepare-environment.sh` and its stdlib-only
+`prepare_environment.py` module. They check (never install) system prerequisites,
+create separate installer/Kolla venvs and local collections, and do not contact
+deployment hosts. See `../../docs/OPENSTACK_ENVIRONMENT.md` for commands, repeat
+semantics and the distinction between environment readiness and deployment.
+
 Public entry point: `../install-openstack.sh`. All Python installer modules live
 here; hardware bootstrap and VM launcher scripts remain separate in `scripts/`.
 Keep these modules together: they use sibling imports and source-hash bindings.

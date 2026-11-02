@@ -254,14 +254,22 @@ architectures are intended; the current OpenStack integration acceptance was TDX
 
 ## 3. Operator workstation/controller prerequisites
 
-Run deployment operations from the Kolla deployment/controller machine, not from
+Prepare local operator tooling with
+[the environment preparer](OPENSTACK_ENVIRONMENT.md). It checks system dependencies
+without installing them, then creates isolated installer/Kolla venvs and collections.
+It can run on a separate Linux workstation; it does not establish that every
+subsequent deployment phase supports remote-controller execution.
+
+Run deployment operations from the Kolla deployment machine, not from
 inside a guest. Use a dedicated deploy user with reviewed SSH access and
 non-interactive `sudo` on targets. Trust SSH host keys through an independent
 channel; do not disable `StrictHostKeyChecking`.
 
-You need Python 3, Bash, OpenSSH and Git. The backend needs PyYAML; commands that
+You need compatible Python 3, Bash, OpenSSH, OpenSSL and Git. The backend needs PyYAML; commands that
 query OpenStack additionally need the compatible client/SDK dependencies listed in
-the selected swarm-cloud driver package. Do not install into system Python:
+the selected swarm-cloud driver package. Do not install into system Python.
+Prefer the preparer above for both local environments. The following is only
+the minimal **manual alternative** for the installer frontend, not Kolla or SDK setup:
 
 ```bash
 python3 -m venv /srv/spvm-installer-venv
