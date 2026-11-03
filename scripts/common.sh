@@ -42,6 +42,37 @@ download_pinned_package() {
     fi
 }
 
+install_spvm_launcher_prerequisites() {
+    local work="${1:?private bootstrap work directory required}"
+    local requirement program package
+    local missing=()
+    [[ "${work}" == /* && "${work}" != / && -d "${work}" && ! -L "${work}" ]] || {
+        echo 'ERROR: existing absolute bootstrap work directory required' >&2
+        return 1
+    }
+    [[ $(id -u) == 0 ]] || { echo 'ERROR: launcher preparation requires root' >&2; return 1; }
+    for requirement in curl:curl jq:jq zstd:zstd unzip:unzip nc:netcat-openbsd wget:wget; do
+        program="${requirement%%:*}"; package="${requirement#*:}"
+        command -v "${program}" >/dev/null 2>&1 || missing+=("${package}")
+    done
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        apt-get update || return 1
+        DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get install -y \
+            --no-upgrade --no-install-recommends "${missing[@]}" || return 1
+    fi
+    if ! command -v uplink >/dev/null 2>&1; then
+        # The privileged launch helper cannot install into its read-only /usr.
+        # Reuse the version/hash already tested by the non-CC bootstrap.
+        mkdir -p "${work}/spvm-launcher" || return 1
+        download_pinned_package "${work}/spvm-launcher/uplink.zip" \
+            'https://github.com/storj/storj/releases/download/v1.165.6/uplink_linux_amd64.zip' \
+            '6998d64c7671393898b6be839911b1e7b22d4e1b0a0646631c57a62f9b0ee966' || return 1
+        unzip -q "${work}/spvm-launcher/uplink.zip" -d "${work}/spvm-launcher/unpacked" || return 1
+        install -m 0755 "${work}/spvm-launcher/unpacked/uplink" /usr/local/bin/uplink || return 1
+    fi
+    uplink version >/dev/null || { echo 'ERROR: installed Uplink is not executable' >&2; return 1; }
+}
+
 install_noble_stable_kernel() {
     local work="$1"
     local archive="https://archive.ubuntu.com/ubuntu"

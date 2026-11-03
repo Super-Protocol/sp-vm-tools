@@ -433,6 +433,7 @@ bootstrap() {
         echo -e "${RED}ERROR: libvirt host setup failed${NC}"
         return 1
     }
+    install_spvm_launcher_prerequisites "${TMP_DIR}" || return 1
 
     print_section_header "Hardware Configuration"
     if command -v lspci >/dev/null; then

@@ -198,6 +198,25 @@ class Host:
             if status=='exists':raise ValueError('existing Nova account has no matching group')
         return status
 
+    def launcher_prerequisites(self):
+        """Fail before helper installation, never let a VM install host tools."""
+        protected={};missing=[]
+        for name in ('uplink','nc','zstd','curl','jq','unzip'):
+            candidates=[self.path(directory)/name for directory in
+                        ('/usr/local/bin','/usr/sbin','/usr/bin','/sbin','/bin')]
+            found=next((p for p in candidates if p.is_file() and os.access(p,os.X_OK)),None)
+            if found is None:
+                missing.append(name);continue
+            resolved=found.resolve()
+            if not resolved.is_relative_to(self.root):raise ValueError('launcher tool escapes host root')
+            logical='/'+resolved.relative_to(self.root).as_posix()
+            self.trusted(logical)
+            protected[logical]=file_hash(resolved)
+        if missing:
+            raise ValueError('missing launcher prerequisites: '+', '.join(missing)+
+                             '; run the updated host bootstrap before provisioning the helper')
+        return protected
+
     def inspect(self,spec,launcher=None):
         identity=hashlib.sha256(self.path('/etc/machine-id').read_text().strip().encode()).hexdigest()
         if identity!=spec['machine_sha256']:
@@ -267,7 +286,7 @@ class Host:
         if gpu_digest(discover(self.root,previous=spec['gpu_inventory']))!=gpu_digest(spec['gpu_inventory']):
             raise ValueError('GPU hardware/driver/IOMMU inventory changed after discovery')
         # Preserve the measured hypervisor identity across provisioning.
-        protected={}
+        protected=self.launcher_prerequisites()
         for path in ('/usr/bin/qemu-system-x86_64','/usr/bin/virsh','/usr/sbin/libvirtd',
                      '/etc/libvirt/qemu.conf','/etc/libvirt/libvirtd.conf'):
             p=self.path(path)

@@ -47,14 +47,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates wget ovmf \
     curl jq zstd unzip netcat-openbsd pciutils util-linux e2fsprogs
 bootstrap_work=$(mktemp -d /tmp/spvm-noncc.XXXXXXXX)
 trap 'rm -rf -- "${bootstrap_work}"' EXIT
-if ! command -v uplink >/dev/null 2>&1; then
-    # Avoid the launcher's floating latest installer at first guest launch.
-    download_pinned_package "${bootstrap_work}/uplink.zip" \
-        'https://github.com/storj/storj/releases/download/v1.165.6/uplink_linux_amd64.zip' \
-        '6998d64c7671393898b6be839911b1e7b22d4e1b0a0646631c57a62f9b0ee966'
-    unzip -q "${bootstrap_work}/uplink.zip" -d "${bootstrap_work}/uplink"
-    install -m 0755 "${bootstrap_work}/uplink/uplink" /usr/local/bin/uplink
-fi
+install_spvm_launcher_prerequisites "${bootstrap_work}"
 if [[ "${UBUNTU_VERSION}" == 24.04 ]]; then
     # Reuse the checksum-pinned project QEMU, without installing its CC kernel.
     assert_no_running_libvirt_domains

@@ -62,10 +62,14 @@ with tempfile.TemporaryDirectory(prefix='spvm-network-stage-') as directory:
    if p.exists() and (not p.is_file() or p.read_bytes()!=body or p.stat().st_mode & 0o777!=mode
                      or not installed and name!=module.RUNTIME):
     raise ValueError('occupied or conflicting management artifact before cache preparation')
-  from openstack_management_cache import prepare as prepare_cache
-  prepare_cache({'machine_sha256':binding['machine_sha256'],'interface':policy['management_interface'],
-   'address':policy['management_address'],'vip':policy.get('vip'),
-   'allow_reload':DATA['repair_stale_networkd_cache']},target.parent/(target.name+'-address'))
+  # Shared-interface management uses the existing primary address, including
+  # its default route. Never send that interface to the dummy-only cache repair
+  # path: Host.inspect and the runtime validate the existing address instead.
+  if policy.get('management_mode')!='shared-interface':
+   from openstack_management_cache import prepare as prepare_cache
+   prepare_cache({'machine_sha256':binding['machine_sha256'],'interface':policy['management_interface'],
+    'address':policy['management_address'],'vip':policy.get('vip'),
+    'allow_reload':DATA['repair_stale_networkd_cache']},target.parent/(target.name+'-address'))
  if host.path('/etc/systemd/system/'+unit).exists():
   host.inspect(cfg,policy,binding,files,unit,installed=True)
   target.mkdir(mode=0o700);write(target/'verified.json',{'status':'OWNED_NETWORK_PHASE_VERIFIED','phase':phase})

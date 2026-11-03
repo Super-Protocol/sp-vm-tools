@@ -40,6 +40,13 @@ means the controller's **already assigned address**, not an additional VIP.
 - Use matching updated installer and swarm-cloud backend components. An older
   published bundle does not understand `management_mode`; do not edit its
   verified manifest or assume that a frontend update changes an old backend.
+- Complete the updated TDX/SNP/non-CC host bootstrap before helper provisioning.
+  All three bootstraps prepare launcher tools (`uplink`, `nc`, `zstd`, `curl`,
+  `jq`, `unzip`). Missing Uplink is installed from the pinned, SHA256-verified
+  v1.165.6 archive; an existing executable is preserved and checked. The helper
+  preparation rejects missing tools before installing services. Its sandbox
+  deliberately makes `/usr` read-only: starting a VM is not a host-package
+  installation step. Updating only the GUI or driver cannot supply these tools.
 
 ## What preparation changes (and what it preserves)
 
@@ -55,6 +62,13 @@ The only added routes are the reviewed guest probe routes; only the isolated
 transit veth pair is created. No host network service, guest or existing
 OpenStack service is restarted by this preparation. Unowned firewall chains and
 the FORWARD default policy are preserved; partial ownership/conflicts stop apply.
+
+The coordinator must not invoke dedicated dummy-interface networkd cache repair
+for this profile, even when `repair_stale_networkd_cache` is enabled in the
+preparation request. A primary interface legitimately carries a default route,
+and its existing API address retains the original prefix rather than becoming a
+separate `/32` VIP. Shared-interface address validation remains mandatory in the
+owned management phase; skipping dummy repair does not skip that validation.
 
 ## Firewall and security implications
 
@@ -114,10 +128,22 @@ on the existing controller IP. API backend listeners move to distinct ports:
 
 Nova console backend ports are likewise separated. ProxySQL and Horizon are
 disabled in this profile. MariaDB uses the native HAProxy TCP frontend; do not
-assume ProxySQL frontend TLS is active. RabbitMQ's management HAProxy frontend
+assume ProxySQL frontend TLS is active. The render must explicitly set
+`enable_external_mariadb_load_balancer: true`; otherwise pinned Kolla omits the
+3306 frontend when ProxySQL is disabled. This setting does not bypass the
+management peer guard or make database access public. RabbitMQ's management HAProxy frontend
 is disabled (it has no separate upstream listener-port variable); native
 management remains peer-only. The pinned RabbitMQ service definition is read
 from Git rather than copied from a potentially modified working tree.
+
+The backend render also emits `config/skyline/gunicorn.py` from the pinned Kolla
+template. Upstream Gunicorn uses the frontend `skyline_apiserver_port` despite
+the service healthcheck and HAProxy backend using `skyline_apiserver_listen_port`.
+The reviewed override changes only this bind variable, so the API listens on
+19998 rather than colliding with the 9998 frontend. Template/override-hook drift
+is rejected instead of silently producing an unavailable GUI. The new file is
+included in the normal render lock and private Kolla workspace; no image rebuild
+or manual host edit is needed for a fresh install with the corrected backend.
 
 API frontend TLS verification remains mandatory. Generated shared-profile server
 certificates also include `localhost` and `127.0.0.1` SANs for administrative
