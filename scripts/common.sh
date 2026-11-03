@@ -70,7 +70,12 @@ install_spvm_launcher_prerequisites() {
         unzip -q "${work}/spvm-launcher/uplink.zip" -d "${work}/spvm-launcher/unpacked" || return 1
         install -m 0755 "${work}/spvm-launcher/unpacked/uplink" /usr/local/bin/uplink || return 1
     fi
-    uplink version >/dev/null || { echo 'ERROR: installed Uplink is not executable' >&2; return 1; }
+    # First-run analytics consent must not block an unattended bootstrap.
+    # Keep stdin closed as well so a future prompt fails rather than waiting.
+    uplink version --interactive=false --analytics=false </dev/null >/dev/null || {
+        echo 'ERROR: installed Uplink is not executable' >&2
+        return 1
+    }
 }
 
 install_noble_stable_kernel() {
