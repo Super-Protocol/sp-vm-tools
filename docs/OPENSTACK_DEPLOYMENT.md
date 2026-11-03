@@ -630,6 +630,19 @@ authentication, TLS verification or guest security groups. VPN key rotation,
 peer administration and transport availability remain administrator duties.
 No host networking is changed merely by documenting this policy.
 
+Do not assume that selecting a private `api_interface` restricts every upstream
+listener. In the 2026-11-03 WireGuard acceptance, OVN DB client ports 6641/6642
+and ProxySQL ports 6132/6133 still listened on all IPv4 addresses. The
+administrator's persistent firewall restricted them to local traffic and the
+authenticated management interface; public-IP probes then confirmed rejection.
+Audit all TCP/UDP listeners after deployment, not only Keystone or Skyline.
+Keep Geneve restricted to registered transport peers as well. An encrypted VPN
+alone does not prevent clients reaching wildcard listeners on a public NIC.
+These deployment-specific firewall rules are administrator underlay policy,
+not an automatically installed general-purpose host firewall. See
+[the cleared-host WireGuard acceptance](OPENSTACK_WIREGUARD_ACCEPTANCE_2026_11_03.md)
+for the tested topology and its limits.
+
 ### 6.2. Platform networks and ingress
 
 Provide stable, unique hostnames, management addresses, management and tunnel
