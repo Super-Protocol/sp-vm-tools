@@ -30,7 +30,7 @@ def verify(spec,path,connection,auth,binding):
     for name,sha in stage['files_sha256'].items():
         if name.startswith('units/'):files['/etc/systemd/system/'+Path(name).name]=sha
     result=installed.verify({'image_id':spec['console_image_id'],'files_sha256':files,
-        'units':['spvm-web-nodes.service','spvm-web-capacity.timer','spvm-web-publish.timer'],
+        'units':['spvm-web-nodes.service','spvm-web-capacity.timer'],
         'manifest':spec['console_manifest'],'origin':origin},assets.verify,fetch,probe)
     jar=http.cookiejar.CookieJar();session=build_opener(HTTPSHandler(context=context),HTTPCookieProcessor(jar))
     base=origin+'/api/openstack/skyline/api/v1'
@@ -55,9 +55,9 @@ def verify(spec,path,connection,auth,binding):
             if status!=200:raise ValueError('authenticated Swarm catalog unavailable')
             catalogs[route]=document
         creation=catalogs['cluster-catalog']
-        if (not creation['templates'] or not creation['images'] or not creation['profiles']
-                or catalogs['clusters']['clusters'] or not catalogs['provider-templates']['templates']):
-            raise ValueError('new platform catalog is incomplete or already contains a Swarm')
+        if (creation['templates'] or creation['images'] or creation['profiles']
+                or catalogs['clusters']['clusters'] or catalogs['provider-templates']['templates']):
+            raise ValueError('installation must leave image, flavor, provider and Swarm catalogs empty')
         capacity=json.loads(Path('/run/spvm-web-capacity/capacity.json').read_text())
         if (capacity.get('schema_version')!=1 or not 0<=time.time()-capacity['observed_at']<=120
                 or set(capacity['hosts'])!={h['compute_uuid'] for h in binding['hosts'].values()}

@@ -151,9 +151,8 @@ def probe(request,root=Path('/'),runner=subprocess.run):
         execution=helper['execution']
         if (helper['allowed_peer_uids']!=[42436] or helper['storage']['compute_uuid']!=spec['compute_uuid']
                 or helper['runtime']['registered_gpus']!=spec['gpus']
-                or execution['release']!=spec['release'] or execution['tools']!=spec['tools']
-                or execution['cache']!=spec['cache'] or execution['allow_debug_launch'] is not spec['allow_debug']
-                or execution['release_caches']!={spec['release']:spec['cache']}
+                or execution['tools']!=spec['tools'] or execution['allow_debug_launch'] is not spec['allow_debug']
+                or {'release','cache','release_caches'} & set(execution)
                 or execution.get('registered_release_cache_root')!=spec.get('registered_release_cache_root')
                 or execution['source_sha256']!=request['launcher_sha256']
                 or execution['release_gate']!='guest-api-registry-presence-v1'):

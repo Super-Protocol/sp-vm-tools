@@ -37,22 +37,18 @@ def document(raw, binding):
                 or any(not isinstance(n,str) or str(uuid.UUID(n))!=n for n in networks)
                 or len(set(networks))!=len(networks)):
             raise ValueError('canonical unique shared Neutron network UUIDs required')
-        if (not isinstance(releases,list) or not 1<=len(releases)<=16
+        if (not isinstance(releases,list) or not 0<=len(releases)<=16
                 or any(not isinstance(r,str) or not re.fullmatch('build-[1-9][0-9]*-(debug|release)',r) for r in releases)
                 or len(set(releases))!=len(releases)):
             raise ValueError('explicit unique release allowlist required')
-        # This project catalog is the union of explicitly prepared bootstrap
-        # builds. It is not a promise that every build can run on every host.
-        prepared=set()
+        # No image is selected by host provisioning. Empty static enrollment
+        # authorizes no build; dynamic images need administrator registry proof.
         for host in binding['hosts'].values():
             helper=json.loads(read(host['request_file']))
             if 'release_registry_user_ids' in spec and 'registered_release_cache_root' not in helper:
                 raise ValueError('registered release caches must be explicitly prepared on every compute')
-            prepared.add(helper['release'])
-            if helper['release'] not in releases or (helper['release'].endswith('-debug') and not helper['allow_debug']):
-                raise ValueError('compute bootstrap release must be explicitly prepared and authorized')
-        if set(releases)!=prepared:
-            raise ValueError('project bootstrap releases must match the prepared compute release union')
+            from nova_spvm.launch_policy import validate
+            validate({'mode':helper['launch_mode'],'allow_debug':helper['allow_debug']})
         if 'release_registry_user_ids' in spec:
             identifiers(spec['release_registry_user_ids'])
             if not set(spec['release_registry_user_ids']) <= set(spec['publisher_user_ids']):
@@ -79,8 +75,8 @@ def stage(args, backend_path):
     sys.path.insert(0,str(source))
     from openstack_spvm import spec
     # Use exactly the CLI's resource validation/flavor encoding, not a second ABI.
-    profiles=json.loads(read(args.profiles))
-    if not isinstance(profiles,list) or not 1<=len(profiles)<=64:raise ValueError('explicit per-node resource profiles required')
+    profiles=json.loads(read(args.profiles)) if args.profiles else []
+    if not isinstance(profiles,list) or not 0<=len(profiles)<=64:raise ValueError('resource profile list required')
     flavors={}
     for resource in profiles:
         resource=spec.resources(resource)
@@ -107,7 +103,8 @@ def stage(args, backend_path):
 def main(backend_path,argv):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['stage-spvm-enrollment'])
-    for name in ('workspace','request','profiles','output'):parser.add_argument('--'+name,required=True)
+    for name in ('workspace','request','output'):parser.add_argument('--'+name,required=True)
+    parser.add_argument('--profiles',help='Optional explicit flavor creation; omitted creates no flavors')
     args=parser.parse_args(argv)
     try:print(json.dumps(stage(args,backend_path)));return 0
     except Exception:

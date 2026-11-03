@@ -2,11 +2,10 @@
   "version": 1,
   "machine_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "compute_uuid": "REPLACE_WITH_NEW_COMPUTE_UUID",
-  "release": "build-449-release",
   "allow_debug": false,
   "launch_mode": "tdx",
   "tools": "/opt/sp-vm-tools",
-  "cache": "/data/spvm-runtime-cache/build-449-release",
+  "registered_release_cache_root": "/data/spvm-registered-releases",
   "pools": [
     {
       "id": "data",

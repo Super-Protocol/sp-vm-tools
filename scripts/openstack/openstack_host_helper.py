@@ -40,18 +40,18 @@ def request(path):
         if path.is_symlink() or not path.is_file() or path.stat().st_size>1048576:
             raise ValueError('bounded regular request file required')
         value=json.loads(path.read_text())
-    if not isinstance(value,dict) or set(value)-{'registered_release_cache_root'}!={'version','machine_sha256','compute_uuid','release',
-            'allow_debug','launch_mode','tools','cache','pools','gpus','gpu_inventory'} or type(value['version']) is not int or value['version']!=1:
+    if not isinstance(value,dict) or set(value)!={'version','machine_sha256','compute_uuid',
+            'allow_debug','launch_mode','tools','registered_release_cache_root','pools','gpus','gpu_inventory'} or type(value['version']) is not int or value['version']!=1:
         raise ValueError('explicit versioned helper request required')
-    from nova_spvm.launch_policy import admit
-    admit({'mode':value['launch_mode'],'allow_debug':value['allow_debug']},value['release'])
+    # Provision a host, not a VM. Every launch still requires an explicit build
+    # from its verified grant and independent Nova/helper/launcher admission.
+    from nova_spvm.launch_policy import validate
+    validate({'mode':value['launch_mode'],'allow_debug':value['allow_debug']})
     if (not re.fullmatch('[a-f0-9]{64}',str(value['machine_sha256']))
             or str(uuid.UUID(value['compute_uuid']))!=value['compute_uuid']
-            or not re.fullmatch(r'build-[1-9][0-9]*-(debug|release)',str(value['release']))
-            or type(value['allow_debug']) is not bool
-            or (value['release'].endswith('-debug') and not value['allow_debug'])):
-        raise ValueError('invalid machine/compute/release binding')
-    for key in ('cache','tools', *(['registered_release_cache_root'] if 'registered_release_cache_root' in value else [])):
+            or type(value['allow_debug']) is not bool):
+        raise ValueError('invalid machine/compute binding')
+    for key in ('registered_release_cache_root','tools'):
         p=Path(value[key])
         if (not p.is_absolute() or p==Path('/') or '..' in p.parts
                 or p.parts[1] in ('home','root','tmp','run','proc','sys','dev')):
@@ -88,8 +88,7 @@ def request(path):
     normalize(value['gpu_inventory']);authorize(value['gpu_inventory'],value['gpus'])
     if set(value['gpus'])!={a for u in catalog(value['gpu_inventory'])['assignments'] for a in u['members']}:
         raise ValueError('registered PCI list must exactly match eligible GPU/fabric units')
-    roots=[Path(p) for p in [*ROOTS.values(),value['cache'],value['tools'],*[p['root'] for p in value['pools']],
-                          *([value['registered_release_cache_root']] if 'registered_release_cache_root' in value else [])]]
+    roots=[Path(p) for p in [*ROOTS.values(),value['tools'],value['registered_release_cache_root'],*[p['root'] for p in value['pools']]]]
     if any(a.is_relative_to(b) or b.is_relative_to(a) for i,a in enumerate(roots) for b in roots[i+1:]):
         raise ValueError('storage/cache/tools/runtime roots must not overlap')
     return value
@@ -130,8 +129,7 @@ def source_manifest(backend_path,spec,*,bootstrap=False):
         raise ValueError('driver capability manifest required')
     value=json.loads(path.read_text())
     needed={'grant-bound-release-selection','guest-api-registry-presence','gpu-profile-placement-v1','gpu-pci-identity-v1','explicit-host-launch-policy-v1'}
-    if 'registered_release_cache_root' in spec:needed.add('administrator-release-registration')
-    if spec['release'].endswith('-release'):needed.add('release-only-helper-default')
+    needed.update({'administrator-release-registration','image-independent-host-provisioning'})
     if bootstrap:needed.add('deny-all-runtime-bootstrap')
     if value.get('schema_version')!=1 or not needed<=set(value.get('capabilities',[])):
         raise ValueError('selected driver bundle cannot configure this measured release')
@@ -250,13 +248,9 @@ class Host:
             wrapper=(tools/'scripts/start_super_protocol_libvirt.sh').read_text()
             if not all(marker in wrapper for marker in ('--nova-state-disk)','--nova-interface-xml)','--nova-aux-pci)','Nova requires explicit host launch policy')):
                 raise ValueError('Nova-compatible measured launcher patches are required')
-        cache=self.trusted(spec['cache'])
-        if cache.exists() and (not cache.is_dir() or cache.stat().st_mode & 0o067):
-            raise ValueError('existing cache must be private except for traversal')
-        if 'registered_release_cache_root' in spec:
-            dynamic=self.trusted(spec['registered_release_cache_root'])
-            if dynamic.exists() and (not dynamic.is_dir() or dynamic.stat().st_mode & 0o067):
-                raise ValueError('registered release cache root must be private')
+        dynamic=self.trusted(spec['registered_release_cache_root'])
+        if dynamic.exists() and (not dynamic.is_dir() or dynamic.stat().st_mode & 0o067):
+            raise ValueError('registered release cache root must be private')
         pools,devices=[],set()
         for item in spec['pools']:
             mount=self.trusted(item['mount'],directory=True)
@@ -326,19 +320,16 @@ class Host:
             # Provider payloads and lease journals are helper-private. Their
             # backend validators require 0700, not QEMU traversal permissions.
             self.directory(path,0o700 if key in ('provider','runtime') else 0o710)
-        for path in [spec['cache'],*[p['root'] for p in spec['pools']],
-                     *([spec['registered_release_cache_root']] if 'registered_release_cache_root' in spec else [])]:
+        for path in [*[p['root'] for p in spec['pools']],spec['registered_release_cache_root']]:
             self.directory(path,0o710)
         config={'allowed_peer_uids':[UID],'backend_timeout':1700,'request_timeout':30,
             'storage':{'compute_uuid':spec['compute_uuid'],'pools':observed['pools']},
             'network':{'root':ROOTS['network']},'provider':{'root':ROOTS['provider']},
             'runtime':{'root':ROOTS['runtime'],'cid_min':100,'cid_max':65535,'registered_gpus':spec['gpus']},
             'execution':{'root':ROOTS['execution'],'tools':spec['tools'],'source_sha256':observed['launcher'],
-                'release':spec['release'],'cache':spec['cache'],'timeout':1200,
-                'allow_debug_launch':spec['allow_debug'],'release_caches':{spec['release']:spec['cache']},
+                'timeout':1200,'allow_debug_launch':spec['allow_debug'],
+                'registered_release_cache_root':spec['registered_release_cache_root'],
                 'release_gate':'guest-api-registry-presence-v1'}}
-        if 'registered_release_cache_root' in spec:
-            config['execution']['registered_release_cache_root']=spec['registered_release_cache_root']
         files={**files,'/etc/spvm/host-helper.json':(json.dumps(config,indent=2).encode(),0o600),
             '/etc/spvm/launch-policy.json':(json.dumps({'mode':spec['launch_mode'],
                 'allow_debug':spec['allow_debug']},sort_keys=True).encode(),0o644),
@@ -367,7 +358,7 @@ class Host:
         ping="import sys;sys.path.insert(0,'/usr/local/libexec/nova-spvm');from nova_spvm.protocol import call;r=call('/run/spvm/host-helper.sock','ping',timeout=10);assert {'host-state-v1','host-interface-stage-v1','host-provider-transfer-v1','host-runtime-prepare-v1','host-runtime-observe-v1'}<=set(r['capabilities']);assert r['deployment_ready'] is False"
         self.command(['sudo','-n','-u',ACCOUNT,'/usr/bin/python3','-I','-c',ping])
         return {'status':'HOST_HELPER_INSTALLED_NOT_ENROLLED','compute_uuid':spec['compute_uuid'],
-                'release':spec['release'],'registered_gpu_count':len(spec['gpus']),
+                'registered_gpu_count':len(spec['gpus']),
                 'guests_launched':False,'nova_driver_activated':False}
 
 
@@ -446,7 +437,7 @@ def execute(args,backend_path,host=None):
 def main(backend_path,argv):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['plan-host-helper','prepare-host-helper'])
-    parser.add_argument('--request',required=True,help='Explicit host identity, pools, GPU list and release JSON')
+    parser.add_argument('--request',required=True,help='Host identity, pools, GPU list and launch policy; no guest build')
     parser.add_argument('--output',required=True,help='Private root-owned local plan/journal directory')
     parser.add_argument('--plan-sha256')
     parser.add_argument('--launcher-stage',help='Verified private launcher staging; tools destination must be absent')
@@ -456,7 +447,7 @@ def main(backend_path,argv):
     args=parser.parse_args(argv)
     try:
         result=execute(args,backend_path)
-        print(json.dumps({k:v for k,v in result.items() if k in ('status','plan_sha256','compute_uuid','release','guests_launched','nova_driver_activated')}))
+        print(json.dumps({k:v for k,v in result.items() if k in ('status','plan_sha256','compute_uuid','guests_launched','nova_driver_activated')}))
         return 0
     except Exception as exc:
         frame=traceback.extract_tb(exc.__traceback__)[-1]

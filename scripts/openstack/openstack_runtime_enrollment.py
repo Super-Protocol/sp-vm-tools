@@ -37,14 +37,18 @@ def stage(args,path):
         spec=helper_request(host['request_file'])
         if spec['machine_sha256']!=host['machine_sha256'] or spec['compute_uuid']!=host['compute_uuid']:
             raise ValueError('helper identity differs from bound compute')
-        # Keep the compute contract strict: only its local prepared cache is a
-        # static release. Additional registered builds still require explicit
-        # registry approval, debug opt-in and independent host launch policy.
+        # Static project enrollment is administrator intent, never an installer
+        # default. Filter it by explicit host policy; dynamic registry approval
+        # is still verified independently for each later VM launch.
         runtime={**enrollment['runtime'],'projects':{}}
         for project,policy in enrollment['runtime']['projects'].items():
-            if spec['release'] not in policy['releases']:
-                raise ValueError('project does not authorize this compute bootstrap release')
-            runtime['projects'][project]={**policy,'releases':[spec['release']]}
+            from nova_spvm.launch_policy import admit,PolicyError
+            releases=[]
+            for release in policy['releases']:
+                try:admit({'mode':spec['launch_mode'],'allow_debug':spec['allow_debug']},release)
+                except PolicyError:continue
+                releases.append(release)
+            runtime['projects'][project]={**policy,'releases':releases}
         requests[name]=backend.request({'schema_version':1,'helper_request':spec,
             'bootstrap_runtime':binding['bootstrap_runtime'],'runtime':runtime,
             'image_id':binding['image_id'],'image_context_sha256':binding['image_context_sha256'],

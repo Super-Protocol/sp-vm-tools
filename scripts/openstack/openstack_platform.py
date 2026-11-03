@@ -16,15 +16,14 @@ import socket
 import ssl
 import subprocess
 from types import SimpleNamespace as R
-import uuid
 
 from openstack_compute_image import read
 from openstack_container_engine import digest, file_hash, write
 import openstack_kolla_workspace as workspace
 from openstack_compute_identity import identities,verify_rule
 
-FIELDS={'schema_version','controller','sdk_venv','network','profiles','provider_directory',
-        'template_name','web_user','operator_user','runtime_dir','state_dir','origins','host_sources',
+FIELDS={'schema_version','controller','sdk_venv','network',
+        'web_user','operator_user','runtime_dir','state_dir','origins','host_sources',
         'ingress_address','base_haproxy_config','quota_from_host_budgets','console_manifest'}
 INGRESS_USER='spvm-ingress'
 
@@ -112,7 +111,7 @@ def specification(filename):
         raise ValueError('exact fresh platform completion specification required')
     if 'release_registration' in value and type(value['release_registration']) is not bool:
         raise ValueError('explicit boolean release registration opt-in required')
-    for key in ('sdk_venv','network','profiles','provider_directory','runtime_dir','state_dir','base_haproxy_config','console_manifest'):
+    for key in ('sdk_venv','network','runtime_dir','state_dir','base_haproxy_config','console_manifest'):
         p=Path(value[key])
         if not p.is_absolute() or p.resolve()!=p or any(c.isspace() for c in str(p)):
             raise ValueError('canonical whitespace-free platform paths required')
@@ -130,8 +129,6 @@ def specification(filename):
         u=urlsplit(origin)
         if u.scheme!='https' or not u.hostname or u.username or u.password or u.path or u.query or u.fragment:
             raise ValueError('credential-free HTTPS browser origins required')
-    import re
-    if not re.fullmatch('[a-z][a-z0-9-]{0,62}',value['template_name']):raise ValueError('DNS-safe template name required')
     account_policy(value)
     ingress_account_policy(value)
     return value
@@ -141,15 +138,7 @@ def input_files(filename):
     value=specification(filename)
     if value['base_haproxy_config']=='/etc/haproxy/haproxy.cfg':
         raise ValueError('use an immutable operator copy of the initial HAProxy baseline')
-    paths=[Path(filename),Path(value['network']),Path(value['profiles']),Path(value['base_haproxy_config']),Path(value['console_manifest'])]
-    root=Path(value['provider_directory'])
-    if not root.is_dir() or root.is_symlink():raise ValueError('existing approved provider directory required')
-    # Do not leak the values, including nested credentials, into the public plan.
-    from openstack_spvm import secrets,provider_templates
-    provider_templates.validate_files(secrets.provider_files(str(root)))
-    for p in root.rglob('*'):
-        if p.is_symlink():raise ValueError('provider symlinks refused')
-        if p.is_file():paths.append(p)
+    paths=[Path(filename),Path(value['network']),Path(value['base_haproxy_config']),Path(value['console_manifest'])]
     check_sdk_access(value)
     return {str(p):file_hash(p) for p in paths}
 
@@ -188,7 +177,8 @@ def require_web_separation(path):
         raise ValueError('selected driver bundle must support separate-web-ingress-identities; build/select an updated release before fresh deployment')
     if 'private-publication-input-handoff' not in value.get('capabilities',[]):
         raise ValueError('selected driver bundle must support private-publication-input-handoff; select an updated release')
-    for capability in ('restricted-service-credentials','automatic-web-retirement-permits','matched-web-client-wheel'):
+    for capability in ('restricted-service-credentials','automatic-web-retirement-permits','matched-web-client-wheel',
+                       'image-independent-host-provisioning'):
         if capability not in value.get('capabilities',[]):
             raise ValueError('selected driver bundle must support '+capability+'; select an updated release')
 
@@ -408,7 +398,6 @@ def post_install(value,path,backend,output,core):
     import openstack_runtime_enrollment as runtime
     import openstack_ingress as ingress
     import openstack_skyline_runtime as web
-    from openstack_spvm import secrets,provider_templates
     from initial_compute import Backend
     from compute_transaction import execute as activate
     import yaml
@@ -467,11 +456,9 @@ def post_install(value,path,backend,output,core):
         def stage_enrollment():
             request=output/'enrollment-request.json'
             write(request,{'schema_version':1,'projects':{project:{'publisher_user_ids':[user],'reader_user_ids':[user],
-                'network_ids':[net['network_id']],'releases':sorted({cfg['guest_release']} | {
-                    h.get('bootstrap_release',cfg['guest_release']) for h in cfg['hosts'].values()
-                    if 'compute' in h['roles']}),
+                'network_ids':[net['network_id']],'releases':[],
                 **({'release_registry_user_ids':[user]} if spec.get('release_registration') else {})}}})
-            return enrollment.stage(R(workspace=value['workspace'],request=str(request),profiles=spec['profiles'],output=str(output/'enrollment')),path)
+            return enrollment.stage(R(workspace=value['workspace'],request=str(request),profiles=None,output=str(output/'enrollment')),path)
         phase('stage-enrollment',stage_enrollment)
         enrollment_path=str(output/'enrollment/enrollment-plan.json')
         def project_resources():
@@ -526,11 +513,6 @@ def post_install(value,path,backend,output,core):
             target=Path('/etc/spvm/web-project-enrollment.json')
             with target.open('x') as stream:json.dump(enrolled,stream)
             target.chmod(0o640);os.chown(target,0,group)
-            files=secrets.provider_files(spec['provider_directory']);zone=provider_templates.validate_files(files)
-            provider=yaml.safe_load(files['swarm/config.yaml']);gateway=provider.get('gateway_hostname')
-            if not isinstance(gateway,str) or not gateway.endswith('.'+zone):raise ValueError('gateway must belong to provider zone')
-            request_id=str(uuid.uuid4());write(output/'template-intent.json',{'name':spec['template_name'],'request_id':request_id})
-            provider_templates.create(connection.key_manager,enrolled,spec['template_name'],files,request_id)
             config={'profile_url':'https://'+cfg['network']['api_vip']+':9998/api/v1/profile',
                 'auth_url':binding['bootstrap_runtime']['auth_url'],'ca_file':ca,'origins':spec['origins'],'state_dir':spec['state_dir'],
                 'capacity_file':'/run/spvm-web-capacity/capacity.json','clusters':{},
@@ -541,28 +523,10 @@ def post_install(value,path,backend,output,core):
                     raise ValueError('release registration requires prepared isolated cache roots on every compute')
                 config['release_registration']={'project_id':project,'admin_user_ids':[user],
                     'reader_user_ids':[user],'allow_debug':all(h['allow_debug'] for h in prepared)}
-            policy={'schema_version':1,'run_as':spec['web_user'],'python':str(Path(spec['sdk_venv'])/'bin/python'),
-                'state_dir':spec['state_dir'],'project_id':project,'domain_suffix':zone,'gateway_hostname':gateway,
-                # Azure's public IP is translated to a NIC-local bind address;
-                # publish the configured public address, never the private bind.
-                'public_ip':cfg['network']['public_ip'],'timeout':1800}
-            write(output/'web-config.json',config);write(output/'publication-policy.json',policy)
-            for directory in ('/etc/spvm/retirement-permits','/etc/spvm/retirement-policies'):
-                Path(directory).mkdir(mode=0o700)
-            dns_url=provider['powerdns_api_url'].rstrip('/')
-            if not dns_url.endswith('/api/v1/servers/localhost'):dns_url+='/api/v1/servers/localhost'
-            write(Path('/etc/spvm/retirement-dns.json'),{'api_url':dns_url,'api_key':provider['powerdns_api_key'],'zones':[zone+'.']})
-            automatic={'schema_version':1,'project_id':project,'publisher_user_ids':[user],
-                'domain_suffix':zone,'gateway_hostname':gateway,'network_ids':[net['network_id']],'run_as':INGRESS_USER,
-                'auth_script':'/etc/spvm/retirement-auth/openrc.sh','ca_bundle':ca,
-                'openstack_cli':str(Path(spec['sdk_venv'])/'bin/openstack'),
-                'registry':'/etc/spvm/ingress-registry.json','refresh':'/etc/spvm/ingress-policy.json',
-                'ports':'/etc/spvm/ingress-http-ports.json','dns_credentials':'/etc/spvm/retirement-dns.json'}
-            write(Path('/etc/spvm/automatic-retirement-policy.json'),automatic)
-            retirement={'schema_version':1,'run_as':spec['web_user'],'python':str(Path(spec['sdk_venv'])/'bin/python'),
-                'state_dir':spec['state_dir'],'project_id':project,'admin_user_ids':[user],
-                'permits_dir':'/etc/spvm/retirement-permits','auto_permit_policy':'/etc/spvm/automatic-retirement-policy.json'}
-            write(output/'retirement-policy.json',retirement)
+            # Installation owns no provider credentials, domains or Swarm.
+            # Domain-scoped publication/retirement delegation is an explicit
+            # administrator operation after provider setup, never guessed here.
+            write(output/'web-config.json',config)
             source=Path(path).parent/'skyline/stage_runtime.py'
             definition=importlib.util.spec_from_file_location('platform_web_stage',source)
             stager=importlib.util.module_from_spec(definition);definition.loader.exec_module(stager)
@@ -570,7 +534,7 @@ def post_install(value,path,backend,output,core):
             if len(wheels)!=1:raise ValueError('one verified bundle client wheel required')
             return stager.stage(R(output=spec['runtime_dir'],sdk_venv=spec['sdk_venv'],web_user=spec['web_user'],
                 web_config=str(output/'web-config.json'),wheel=str(wheels[0]),wheel_sha256=file_hash(wheels[0]),
-                publication_policy=str(output/'publication-policy.json'),retirement_policy=str(output/'retirement-policy.json')))
+                publication_policy=None,retirement_policy=None))
         phase('web-stage',web_stage)
         catalog=phase('host-catalogs',lambda:prepare_host_catalog(
             value,path,backend,connection,spec,cfg,project,user))

@@ -100,7 +100,6 @@ hosts:
     # SSH/network/storage fields omitted here; use the full deployment example.
     roles: [compute]
     launch_mode: untrusted
-    bootstrap_release: build-447-debug
     compute_resources:
       reserved_cpus: 2
       reserved_memory_mb: 8192
@@ -108,24 +107,17 @@ hosts:
 
 Do not put `launch_mode` on a service-only host. For CC compute select `tdx` or
 `sev-snp` explicitly; detection does not select or downgrade the configured mode.
-`bootstrap_release` pins this compute's initial helper/cache build. If omitted,
-the explicit cloud-wide `guest_release` is used. A mixed cloud whose default is
-`build-449-release` must explicitly select a debug bootstrap build for each
-untrusted compute; otherwise validation refuses installation. The helper request
-must match that root-owned per-host selection exactly. An arbitrary debug build
-in a helper request is not accepted, and this setting does not override the
-host launch mode or allow release guests on non-CC. It is not a restriction on
-all future enrolled guest images; later image registration has separate authority
-and build/cache checks. Fresh platform enrollment includes the explicitly selected
-bootstrap builds; existing-cloud enrollment needs an explicit operator update.
-The matching helper request must contain:
+Installation selects no guest build. The old `bootstrap_release` and
+`guest_release` fields are rejected. Every later launch requires an authorized
+registered image and explicit build. For an untrusted host, the matching helper
+request must contain:
 
 ```json
-{"launch_mode": "untrusted", "allow_debug": true, "release": "build-447-debug"}
+{"launch_mode": "untrusted", "allow_debug": true, "registered_release_cache_root": "/data/spvm-registered-releases"}
 ```
 
 This is a fragment, not a complete helper request. The full schema also requires
-machine/compute identity, pinned launcher/cache, storage pools and GPU inventory.
+machine/compute identity, pinned launcher, storage pools and GPU inventory.
 An empty GPU inventory and `gpus: []` are normal. GPU tooling is not installed
 when no GPU/fabric devices are discovered.
 

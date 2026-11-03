@@ -1,5 +1,27 @@
 # OpenStack with the SPVM Nova driver: deployment and operations
 
+## Current installation boundary
+
+Install infrastructure first, configure Swarm afterwards. The current deployment
+schema does not accept `guest_release`, `provider_config`, `domains` or per-host
+`bootstrap_release`. The platform schema no longer accepts `profiles`,
+`provider_directory` or `template_name`. Installation creates no initial image,
+flavor, provider template or Swarm. Administrators manage these with the CLI/UI
+after installation; provider secrets are not installer inputs.
+
+Helpers have no default build/cache: each launch requires an explicitly
+authorized image/build and passes independent host-mode, debug/release and
+signature/readiness checks. An empty static allowlist permits no builds.
+Dynamic image registration requires explicit administrator registration opt-in.
+The management UI does not itself activate domain-scoped ingress publication or
+retirement delegation; configure those explicitly after provider setup.
+
+Use matching components with `image-independent-host-provisioning`; older
+experimental bundles/configurations are rejected, not migrated. See
+[the current platform contract](OPENSTACK_PLATFORM_WORKFLOW.md#current-contract-infrastructure-first)
+and updated JSON/YAML examples. Dated acceptance reports and historical command
+transcripts below are evidence for their named revisions, not current schemas.
+
 Non-CC debug-only compute implementation and current acceptance limits:
 [Non-CC hosts](OPENSTACK_NON_CC.md). This requires matching new components;
 the prior published release alone does not implement the new host contract.

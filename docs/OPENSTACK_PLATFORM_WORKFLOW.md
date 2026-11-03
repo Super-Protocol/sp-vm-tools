@@ -1,5 +1,46 @@
 # Fresh platform workflow: prepared hosts to Skyline Swarm management
 
+## Current contract: infrastructure first
+
+The current installer deploys OpenStack and its SPVM driver/helper/CLI/GUI without
+selecting a guest build or reading provider credentials. Deployment YAML must not
+contain `guest_release`, `provider_config`, `domains` or per-host
+`bootstrap_release`. The platform JSON must not contain `profiles`,
+`provider_directory` or `template_name`. See the updated example files.
+
+Fresh completion expects empty image, flavor, provider-template and cluster
+catalogs. It still prepares project access, shared Neutron networking, storage
+and compute budgets, helpers, capacity reporting and the management UI. It does
+not create a Swarm or require its domains. Guest images, flavors and named
+provider templates are administrator operations through the CLI/UI afterwards;
+cluster-specific domains are chosen when creating a cluster.
+
+Set `release_registration: true` in the platform JSON to enable administrator
+image registration. This grants no guest build automatically: static enrollment
+starts with `releases: []`. Without registration opt-in or an explicit later
+administrator enrollment, no SPVM guest image is authorized. Debug additionally
+requires the host and image registration policies to permit debug. A non-CC
+compute still rejects release images, including direct Nova API requests.
+
+Helper requests specify the protected `registered_release_cache_root`, launcher,
+host mode and debug policy, but no `release` or `cache`. Every launch supplies its
+explicit build; the helper independently checks host admission and derives only
+that build's isolated cache directory. No default image or fallback exists.
+
+The empty ingress scaffold is installed without provider DNS credentials or
+domain-scoped publication/retirement authority. Before web cluster publication
+and deletion, an administrator must explicitly configure the domain-scoped
+publication and retirement policies using the matching runtime staging tools.
+Uploading a provider template alone does not grant privileged DNS/ingress access.
+The installed catalogs/UI are not proof that these workers are activated.
+
+All components must agree on `image-independent-host-provisioning`. Rebuild or
+select a matching bundle; an older downloaded archive cannot be used with the new
+inputs. Replace experimental requests/workspaces explicitly; there is no format
+migration or automatic flavor reassignment. Local synthetic checks do not prove
+a new live installation. The dated checkpoint below describes the previous
+workflow, including its previously preloaded catalogs, not this new contract.
+
 For the separate, empty compute-only retirement workflow, see
 [Retiring an OpenStack compute host](OPENSTACK_COMPUTE_REMOVAL.md).
 
@@ -42,7 +83,7 @@ uninterrupted cleared-host run described above.
 ## Prerequisites and current boundary
 
 Hardware bootstrap remains separate. Prepare BIOS/TDX/SEV, VFIO, libvirt/QEMU and
-the measured release cache first. Provide a trusted root operator environment on
+the launcher prerequisites first. Provide a trusted root operator environment on
 the selected single controller, strict SSH known-hosts, noninteractive sudo on
 the hosts, a non-root operator account and the reviewed driver bundle/SDK environment.
 Set `SPVM_INSTALLER_PYTHON` to a Python containing the matching driver client,
@@ -78,7 +119,7 @@ adoption/upgrade remain separate work. Run on empty hosts only.
 ## Generate native compute identities before installing helpers
 
 Do not invent a random compute UUID. Use a recent `audit.json` from the deployment
-preflight and the helper request mapping, whose storage/GPU/release settings were
+preflight and the helper request mapping, whose storage/GPU/host-policy settings were
 already reviewed:
 
 ```bash

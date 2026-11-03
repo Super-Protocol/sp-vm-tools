@@ -51,7 +51,7 @@ def stage(args, backend_path, backend, nova_inputs):
     with tempfile.TemporaryDirectory(prefix='spvm-new-compute-intent-') as temporary:
         mapping=Path(temporary)/'requests.json'
         write(mapping,{'schema_version':1,'hosts':{args.host:args.request}})
-        selected={'hosts':{args.host:cfg['hosts'][args.host]},'guest_release':cfg['guest_release']}
+        selected={'hosts':{args.host:cfg['hosts'][args.host]}}
         selected_physical={**physical,'hosts':{args.host:physical['hosts'][args.host]}}
         specs,_=selected_requests(selected,selected_physical,mapping)
     spec=specs[args.host]
