@@ -200,6 +200,14 @@ def preflight(value,path,backend):
     """Read-only early identity and local-controller proof, before native deploy."""
     require_web_separation(path)
     spec=specification(value['platform']);cfg=backend.deployment_config(value['config'])
+    control_manifest=Path(path).parent.parent/'manifest.json'
+    if not control_manifest.is_file():control_manifest=Path(path).parent.parent/'nova-spvm/manifest.json'
+    if 'host-control-api-v1' not in json.loads(read(control_manifest)).get('capabilities',[]):
+        raise ValueError('host administration requires a matching host-control-api-v1 driver bundle; no SSH fallback')
+    for runtime_path in (Path(__file__).resolve(),Path(path).resolve(),Path(value['config']).resolve(),
+                         Path(spec['sdk_venv']).resolve()):
+        if runtime_path.is_relative_to('/home') or runtime_path.is_relative_to('/root/.ssh'):
+            raise ValueError('runtime coordinator sources, SDK and configuration must be outside hidden personal-home/SSH directories')
     if spec.get('release_registration'):
         manifest=Path(path).parent.parent/'manifest.json'
         if not manifest.is_file():manifest=Path(path).parent.parent/'nova-spvm/manifest.json'
@@ -342,7 +350,7 @@ with tempfile.TemporaryDirectory(prefix='spvm-hostnames-') as directory:
         write(output/('hostnames-'+name+'.json'),result)
 
 
-def prepare_host_catalog(value,path,backend,connection,spec,cfg,project,user):
+def prepare_host_catalog(value,path,backend,connection,spec,cfg,project,user,executors):
     """Publish real inventories before capacity starts, including GPU-less hosts.
 
     Only read-only sync is performed here. The separately staged worker handles
@@ -355,9 +363,10 @@ def prepare_host_catalog(value,path,backend,connection,spec,cfg,project,user):
         for p in host['storage_pools'] if p.get('enabled',True)]}
         for name,host in cfg['hosts'].items() if 'compute' in host['roles']}
     policy={'schema_version':1,'config':value['config'],'controller':spec['controller'],
-        'controller_python':str(Path(spec['sdk_venv'])/'bin/python'),
-        'openrc':'/etc/spvm/auth/admin-openrc.sh','known_hosts':value['known_hosts'],
-        'project_id':project,'admin_user_ids':[user],'reader_user_ids':[user],'automatic':automatic}
+        'controller_machine_sha256':hashlib.sha256(Path('/etc/machine-id').read_bytes().strip()).hexdigest(),
+        'openrc':'/etc/spvm/auth/admin-openrc.sh','project_id':project,
+        'admin_user_ids':[user],'reader_user_ids':[executors['publisher_user_id']],'automatic':automatic,
+        'executors':executors['executors'],'dispatcher_credentials':executors['dispatcher_credentials']}
     filename=Path('/etc/spvm/host-budget-policy.json')
     with filename.open('x') as stream:json.dump(policy,stream,indent=2)
     filename.chmod(0o600)
@@ -368,16 +377,16 @@ def prepare_host_catalog(value,path,backend,connection,spec,cfg,project,user):
         worker.sync();worker.sync_pools();worker.sync_gpus()
     finally:os.close(descriptor)
     return {'status':'HOST_CATALOGS_INITIALIZED','policy':str(filename),'hosts':sorted(automatic),
+        'publisher_user_id':executors['publisher_user_id'],
         'budgets_changed':False,'guests_changed':False}
 
 
 def activate_host_worker(path,spec,user,catalog,output):
     import openstack_budget_service as budgets
-    policy=json.loads(read(catalog['policy']))
-    args=R(policy=catalog['policy'],known_hosts=policy['known_hosts'],
+    args=R(policy=catalog['policy'],
         python=str(Path(spec['sdk_venv'])/'bin/python'),
         web_python=str(Path(spec['runtime_dir'])/'venv/bin/python'),
-        web_config=str(Path(spec['runtime_dir'])/'config.json'),worker_user_id=user,output=str(output))
+        web_config=str(Path(spec['runtime_dir'])/'config.json'),worker_user_id=catalog['publisher_user_id'],output=str(output))
     staged=budgets.stage(path,args)
     args.activation_sha256=staged['activation_sha256']
     result=budgets.install(args)
@@ -536,8 +545,11 @@ def post_install(value,path,backend,output,core):
                 web_config=str(output/'web-config.json'),wheel=str(wheels[0]),wheel_sha256=file_hash(wheels[0]),
                 publication_policy=None,retirement_policy=None))
         phase('web-stage',web_stage)
+        from openstack_host_control import prepare as prepare_host_control
+        executors=phase('host-executors',lambda:prepare_host_control(
+            value,path,backend,connection,cfg,project,user,output/'host-executors'))
         catalog=phase('host-catalogs',lambda:prepare_host_catalog(
-            value,path,backend,connection,spec,cfg,project,user))
+            value,path,backend,connection,spec,cfg,project,user,executors))
         def web_install():
             args=R(action='plan-skyline-runtime',runtime_dir=spec['runtime_dir'],runtime_sha256=file_hash(Path(spec['runtime_dir'])/'runtime-stage.json'),
                    output=str(output/'web-install'),plan_sha256=None)

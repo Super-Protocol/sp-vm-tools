@@ -410,8 +410,9 @@ The installer must make an independent decision for each host:
 Preflight records `preserve-existing`, `install-with-kolla` or `blocked`.
 Rendering with a fresh preflight writes host-level `spvm_external_docker` and
 `enable_docker_repo` settings. The reviewed
-`deployment/patches/kolla-external-docker.patch` from the driver bundle must be
-applied to the matching `openstack.kolla` collection before bootstrap. It skips
+`deployment/patches/kolla-external-docker.patch` from the driver bundle is applied
+automatically to a private copy of the matching `openstack.kolla` collection by
+`init-kolla`. The operator does not run `patch` or modify the source environment. It skips
 the Docker role's package/configuration path for preserved daemons and checks
 `docker info` instead. Upstream does not automatically understand this variable.
 
@@ -436,22 +437,12 @@ This phase deliberately runs only `openstack.kolla.docker`, not the broader
 libvirt, reboot a host, launch guests, install the Nova driver, enroll compute
 or finish OpenStack installation.
 
-To make the reviewed collection identity explicit, calculate the SHA256 of the
-collection tree using the same read-only helper (after reviewing/applying the
-Docker-preservation patch). Record this digest with the deployment lock:
-
-```bash
-cd /srv/sp-vm-tools/scripts/openstack
-python3 -c 'from openstack_container_engine import collection_hash; print(collection_hash("/srv/ansible-collections"))'
-```
-
-`/srv/ansible-collections` must contain
-`ansible_collections/openstack/kolla` and matching dependencies. All non-bytecode
-regular files in this supplied tree are included in the digest. Internal file
-symlinks (used by upstream collection tests/licenses) include both resolved target
-identity and content hash. External, broken and directory symlinks are rejected.
-A locally calculated digest identifies the reviewed contents; it is
-not an independently authenticated upstream signature.
+Initialize a new Kolla workspace first using the original collections produced
+by `prepare-environment` (section 10.1). It prepares and hashes a private copy
+automatically. Container-engine preparation reads the pinned source, prepared
+collections, their SHA256 and Ansible executable from that workspace; callers
+do not calculate or pass collections hashes. Hashes identify selected local
+contents, not an independently authenticated upstream signature.
 
 Create a plan for exactly one configured compute host:
 
@@ -459,10 +450,7 @@ Create a plan for exactly one configured compute host:
 bash /srv/sp-vm-tools/scripts/install-openstack.sh \
   --driver-dir /srv/swarm-cloud -- plan-container-engine \
   --config /srv/deployment/deployment.yaml --host compute-02 \
-  --kolla-source /srv/kolla-ansible \
-  --collections /srv/ansible-collections \
-  --collections-sha256 REPLACE_WITH_REVIEWED_TREE_SHA256 \
-  --ansible-playbook /srv/kolla-venv/bin/ansible-playbook \
+  --workspace /srv/deployment/new-cloud \
   --output /srv/deployment/docker-compute-02
 ```
 
@@ -939,45 +927,53 @@ local state/launch reservations block changes. Quotas are not changed.
 
 The web process never receives root or SSH authority. It submits a private
 Barbican intent using the administrator's own project/token. An explicitly
-delegated root worker checks all projects and host-local state, disables Nova
-scheduling, checks again, and may restart only Nova compute and the SPVM helper
+delegated root-local controller coordinator checks all projects and current admin
+role membership, disables Nova scheduling, and sends typed private Barbican jobs
+to each compute's separately enrolled local root executor. There is **no runtime
+SSH, personal-key copy, agent forwarding or arbitrary Python/shell command RPC**
+in this resource-management path. Local actors check emptiness again and may
+restart only Nova compute and the SPVM helper
 on that empty host. No guest, libvirt daemon, controller or unrelated service is
 restarted by budget application. Successful results require verified native
 CPU/RAM and state-pool Placement inventories. A previously disabled compute
 remains disabled.
 
-Budgets are opt-in. Installing GUI assets alone does not activate root request
-processing. Use a root-owned, non-group/world-writable policy and protected
-parents; preserve a separate baseline rather than deriving automatic defaults
-from an already customized configuration:
+Installing GUI assets alone does not activate root request processing. The fresh
+platform installer provisions this `host-control-api-v1` contract before publishing
+host catalogs. It creates one dedicated dispatcher **Keystone member identity**
+and one distinct executor identity per compute. Their application credentials
+permit only the required Barbican GET/POST/PUT operations: no compute, identity
+or DELETE APIs. These are not Unix/SSH accounts. Passwords used for provisioning
+exist only in memory; no SSH key or sudo rule is created. Actual token scope,
+private-secret isolation and forbidden API writes are checked with disposable
+canaries before activation. A failed or ambiguous installation is retained for
+review, never adopted or retried automatically.
 
-```json
-{
-  "schema_version": 1,
-  "config": "/var/lib/spvm-openstack/operator/deployment.yaml",
-  "controller": "control1",
-  "controller_python": "/var/lib/spvm-openstack/client-venv/bin/python",
-  "openrc": "/etc/spvm/auth/budget-admin-openrc.sh",
-  "known_hosts": "/etc/spvm/ssh/known_hosts",
-  "project_id": "REPLACE_PROJECT_ID",
-  "admin_user_ids": ["REPLACE_ALLOWED_ADMIN_ID"],
-  "reader_user_ids": ["REPLACE_WORKER_USER_ID"],
-  "automatic": {
-    "compute1": {
-      "reserved_cpus": 8,
-      "reserved_memory_mb": 65536,
-      "pools": [{"id": "data", "budget_gib": 2700, "reserve_gib": 200}]
-    }
-  }
-}
-```
+The root-private `/etc/spvm/host-budget-policy.json` is generated, not assembled
+from guessed user/machine IDs. It binds `controller_machine_sha256`, the canonical
+`config`, `openrc`, project/admin IDs, the separate publisher in `reader_user_ids`,
+`dispatcher_credentials`, per-host `automatic` baselines and exact `executors`.
+Each executor binding contains `host`, `compute_uuid`, `machine_sha256`, `user_id`.
+The `automatic`/`executors` inventory-key sets must match. Old SSH policies with
+`known_hosts`/`controller_python` are rejected; no migration is provided.
 
-Use inventory keys in `automatic`; CLI/GUI display Nova inventory/service names.
-The worker needs an administrator identity in the explicitly selected project,
-all-project Nova visibility, Placement inspection and private Barbican ACL
-access. It must be listed in `reader_user_ids`. It needs protected SSH access to
-the existing enrolled hosts and conductor for independent PCI checks. Keep its
-OpenRC root-private; credentials never enter web configuration or the browser.
+The coordinator still needs a protected administrator API context for all-project
+Nova/Placement checks and scheduling quarantine. It reads native PCI claims
+through a fixed **local** conductor query, not SSH. Commands, catalogs and results
+are published under the distinct dispatcher identity, never the operator's user
+ID reused by ingress/retirement/readiness credentials. Keep operator auth and
+`/etc/spvm/host-control-dispatcher-credentials.json` root-private. Each compute
+receives only its own `/etc/spvm/host-control-credentials.json` and exact binding
+in `/etc/spvm/host-control-policy.json` (all credential/policy JSON files `0600`).
+
+Each compute, including a combined controller/compute, runs
+`spvm-host-control.service`. It uses a root-owned, stdlib-only installed module
+set under `/usr/local/libexec/spvm-host-control`, not the controller SDK venv.
+It polls every five seconds and reuses/renews its scoped token. API endpoints must
+use trusted HTTPS; service units hide `/home` and `/root/.ssh` and unset SSH-agent
+variables. Put runtime sources/interpreters/configuration outside `/home`.
+Operator SSH remains necessary for **explicit installation/retirement**, not
+resource administration. Other installer workflows are not claimed to be SSH-free.
 
 For an operator-controlled one-shot run, use a trusted SDK environment containing
 the matching client dependencies, and root-protected installer/backend sources:
@@ -985,7 +981,7 @@ the matching client dependencies, and root-protected installer/backend sources:
 ```bash
 sudo -i
 set -a
-. /etc/spvm/auth/budget-admin-openrc.sh
+. /etc/spvm/auth/admin-openrc.sh
 set +a
 /opt/spvm/client-venv/bin/python /opt/sp-vm-tools/scripts/openstack/openstack_installer.py \
   --driver-dir /opt/nova-spvm -- sync-host-budgets \
@@ -1005,7 +1001,6 @@ routes. Replace example paths with actual protected installation paths. The
 sudo /opt/spvm/client-venv/bin/python /opt/sp-vm-tools/scripts/openstack/openstack_installer.py \
   --driver-dir /opt/nova-spvm -- stage-host-budget-worker \
   --policy /etc/spvm/host-budget-policy.json \
-  --known-hosts /etc/spvm/ssh/known_hosts \
   --python /opt/spvm/client-venv/bin/python \
   --web-python /srv/spvm-web/venv/bin/python \
   --web-config /srv/spvm-web/config.json \
@@ -1025,8 +1020,37 @@ bridge, and enables `spvm-host-budgets.timer` (30 seconds after each completed
 run, initially 60 seconds after timer activation). The worker is serialized and runs as a
 root oneshot service; there is no VM recovery or unsolicited budget adjustment.
 An activation failure preserves its journal and is not replayed automatically.
-To suspend processing, disable only this timer; outstanding intents are not
-cancelled by disabling it. Inspect pending requests before enabling it again.
+To suspend dispatch, stop the timer and any active coordinator service; stop
+`spvm-host-control.service` on a compute to suspend its local consumption. An
+already admitted job is not cancelled by stopping the timer. Inspect pending
+requests and private phases before maintenance or re-enabling processing.
+
+Jobs bind the project, trusted Barbican creator, exact compute/machine/executor,
+request UUID and command digest. Admission expires after at most 120 seconds
+(five seconds of clock-skew tolerance); a running operation may finish later.
+Messages are bounded to 64 KiB and scans are bounded. A mutation is journaled
+under `/var/lib/spvm/host-control/<command-uuid>` before execution. A duplicate
+can republish its durable outcome but cannot replay a mutation. Interrupted or
+failed mutations block further mutations until explicit review; read probes can
+continue. Successfully verified transient queue records are deleted by the
+controller, not the executor. Ambiguous records and mutation evidence are retained.
+
+This remains privileged administration: a compromised controller/dispatcher can
+request the allowlisted changes, and compute root can control that compute.
+Barbican policy/availability, trusted TLS and protected actor sources remain
+dependencies; ACL access alone is never an administrator grant. Revocation needs
+stopping dispatch/consumption and revoking the dedicated application credentials
+and user as appropriate; existing tokens are subject to middleware caches.
+Explicit compute retirement stops its executor, revokes its credentials, disables
+its dedicated Keystone account and drops its fleet binding. No existing SSH-managed
+cloud is automatically converted. A separately added compute must enroll an
+executor before entering resource delegation; Nova registration alone is not
+resource-management enrollment. Serial fleet coordination/polling performance
+needs separate large-fleet acceptance.
+
+See the matching bundle's `deployment/HOST_CONTROL.md` for the complete trust
+boundary and failure/revocation rules. Local synthetic tests do not establish
+live Barbican policy enforcement, systemd activation or Placement convergence.
 
 The CLI supports `openstack spvm host budget list`, `set` and `status`; see the
 driver bundle's `deployment/HOST_BUDGETS.md` for full request examples. A request
@@ -1198,8 +1222,8 @@ inventory hosts. This is initial-cloud setup, **not** an add-compute operation.
 Use the pinned Kolla checkout and its compatible dependency virtual environment.
 The command invokes the checkout's own `kolla_ansible/cmd/genpwd.py` against a
 pristine `etc/kolla/passwords.yml` obtained from the pinned commit, not from a
-working deployment. The same reviewed collection-tree digest from section 5 is
-required. A fresh passing bound preflight is needed to produce the render; local
+working deployment. Collections are prepared and hashed automatically as described
+below. A fresh passing bound preflight is needed to produce the render; local
 workspace creation is not a substitute for refreshing host observations before
 an actual deployment.
 
@@ -1211,7 +1235,6 @@ bash /srv/sp-vm-tools/scripts/install-openstack.sh \
   --kolla-source /srv/kolla-ansible \
   --kolla-python /srv/kolla-venv/bin/python \
   --collections /srv/ansible-collections \
-  --collections-sha256 REPLACE_WITH_REVIEWED_TREE_SHA256 \
   --ack-new-cloud --output /srv/deployment/new-cloud
 ```
 
@@ -1221,10 +1244,52 @@ refused, so a repeated command cannot silently regenerate credentials or a CA.
 Initialization failure leaves `journal.json` with a review status and private
 artifacts; do not retry into that directory or remove it without inspection.
 
+`--collections` names the original, unmodified collections directory from the
+prepared environment. `init-kolla` creates `new-cloud/collections`, verifies the
+exact supported Docker role and applies the pinned driver modification without
+external `patch`, fuzzy matching or downloads. This happens before generating
+passwords/TLS and performs no SSH, host package installation or cloud operation.
+Unknown/already modified role inputs are rejected with an actionable diagnostic;
+use original environment collections and a new workspace. Source trees and the
+workspace must not overlap. The source environment and Python packages remain
+unchanged. There is no `--collections-sha256` option for initialization.
+
+The workspace receipt records the source-tree, pinned patch, original Docker
+role, prepared-tree and prepared collections hashes. Sources are rechecked after
+copying; concurrent changes stop initialization. Only regular files/directories
+and internal file symlinks are accepted; those symlinks are materialized, not
+preserved. Directory links, external/broken/cyclic links and special files are
+refused. Bytecode caches are excluded. Copying is bounded to 100,000 entries,
+1 GiB total and 32 MiB per file. Directories are private 0700; files are 0600 or
+0700 when owner execution is needed. No privileges or group/world access from
+the original tree are copied.
+
+All subsequent Kolla/Ansible phases use the prepared workspace copy and recorded
+hash. Adding a compute copies this prepared tree into the new workspace,
+preserving owner-executable files and rebinding its path without reapplying the
+patch or needing the original collections. Workspace verification detects content
+and executable-bit changes. Do not edit or repair a prepared tree. Experimental
+workspaces without preparation provenance must be recreated explicitly; no
+backward-compatibility adapter or migration is provided.
+
+Local acceptance (2026-11-05): the updated frontend initialized
+`/var/lib/spvm-openstack-install-01/kolla-01` using prepared environment-01 and
+driver source `48a8d9094b62f1e923587fa0792eba75f395259c`. No new driver build was
+needed: that bundle already carries the pinned patch. Workspace/TLS verification
+and Kolla `--list-tasks` passed with `remote_tasks_executed: false`.
+The original collections tree remained unchanged (preparation tree SHA256
+`697be826ff5d303d862c1f79d4fafaa0dbd77ae5be10ea19e2d58e0698cbe5d0`);
+the prepared collections SHA256 is
+`d26def4c48e1e071851e30facc094450a1d2da29f4b7b2e10283187c23118ad7`.
+This is local initialization/task-parsing evidence, not deployment, real Kolla
+prechecks, Docker installation or acceptance of `.245`/`.247`. Private passwords
+and CA keys remain only in the private workspace, not in this repository.
+
 The workspace contains:
 
 ```text
 new-cloud/
+├── collections/                   # private automatically prepared Ansible collections
 ├── hosts.ini
 ├── host-profile.yml
 ├── workspace.json                 # private provenance and file hashes

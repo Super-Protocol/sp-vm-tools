@@ -2,6 +2,7 @@
 import argparse
 import copy
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -19,17 +20,24 @@ def policy(filename):
     for p in (path,*path.parents):
         s=p.lstat()
         if p.is_symlink() or s.st_uid!=0 or s.st_mode&0o022:raise ValueError('root-owned budget policy required')
+    if not path.is_file() or path.stat().st_nlink!=1 or path.stat().st_size>4194304:
+        raise ValueError('bounded, single-link worker policy file required')
     value=json.loads(path.read_text())
-    fields={'schema_version','config','controller','controller_python','openrc','known_hosts',
-            'project_id','admin_user_ids','reader_user_ids','automatic'}
+    fields={'schema_version','config','controller','controller_machine_sha256','openrc',
+            'project_id','admin_user_ids','reader_user_ids','automatic','executors','dispatcher_credentials'}
     if type(value) is not dict or set(value)!=fields or type(value['schema_version']) is not int or value['schema_version']!=1:
         raise ValueError('exact budget worker delegation required')
-    for key in ('config','controller_python','openrc','known_hosts'):
+    for key in ('config','openrc','dispatcher_credentials'):
         workflow.literal_path(value[key],canonical=False)
-    from nova_spvm.authority import user_ids
-    user_ids(value['admin_user_ids']);user_ids(value['reader_user_ids'])
     if type(value['automatic']) is not dict or not 1<=len(value['automatic'])<=256:
         raise ValueError('explicit per-host automatic baselines required')
+    from openstack_spvm.host_control import binding
+    if (type(value['executors']) is not dict or set(value['executors'])!=set(value['automatic'])
+            or value['controller_machine_sha256']!=hashlib.sha256(Path('/etc/machine-id').read_bytes().strip()).hexdigest()):
+        raise ValueError('local controller and exact per-host executors required; no SSH worker policy accepted')
+    for target in value['executors'].values():binding(target)
+    from nova_spvm.authority import user_ids
+    user_ids(value['admin_user_ids']);user_ids(value['reader_user_ids'])
     for defaults in value['automatic'].values():
         if type(defaults) is not dict or set(defaults)!={'reserved_cpus','reserved_memory_mb','pools'}:
             raise ValueError('exact automatic host defaults required')
@@ -53,24 +61,49 @@ class Worker(PoolWorker,GpuWorker):
         from openstack_skyline_runtime import trusted
         trusted(root)
         if root.stat().st_mode&0o077:raise ValueError('private worker journal directory required')
-        self.cfg=module.deployment_config(config['config'])
+        self.cfg=module.deployment_config(config['config'],transport=False)
+        if config['controller_machine_sha256']!=hashlib.sha256(Path('/etc/machine-id').read_bytes().strip()).hexdigest():
+            raise ValueError('host resource coordinator must run on its enrolled controller')
         if connection.session.get_project_id()!=config['project_id']:raise ValueError('worker auth project differs')
         host_budgets.admin(connection)
-        self.publisher=connection.session.get_user_id()
-        if self.publisher not in config['reader_user_ids']:
-            raise ValueError('worker identity is not an approved request reader')
+        if connection.session.get_user_id() not in config['admin_user_ids']:
+            raise ValueError('coordinator requires an enrolled operator API identity')
+        from host_control_api import Manager
+        credential=trusted(config['dispatcher_credentials'])
+        if (not credential.is_file() or credential.stat().st_nlink!=1 or credential.stat().st_size>65536
+                or credential.stat().st_mode&0o777!=0o600):raise ValueError('private bounded dispatcher credential file required')
+        self.dispatcher=Manager(json.loads(credential.read_bytes()))
+        self.publisher=self.dispatcher.get_user_id()
+        if self.publisher not in config['reader_user_ids'] or self.publisher in config['admin_user_ids']:
+            raise ValueError('separate enrolled dispatcher/publisher identity required')
         if not set(config['automatic'])<=set(self.cfg['hosts']):raise ValueError('unknown delegated host')
-        from compute_workflow import Backend
-        self.runner=Backend(self.cfg,config['controller'],config['controller_python'],config['openrc'],root/'observations')
+        if set(config['executors'])!=set(config['automatic']):raise ValueError('exact executor fleet required')
+        for name,target in config['executors'].items():
+            if 'compute' not in self.cfg['hosts'][name]['roles']:raise ValueError('only compute hosts may have resource executors')
+            if target['host']!=self.cfg['hosts'][name].get('inventory_name',name):raise ValueError('executor host binding differs')
+        from openstack_spvm.host_control import Channel
+        self.channel=Channel(connection,config['executors'],self.dispatcher)
 
     def local(self,name,action,**data):
-        source=(self.path.parent/'host_budget_host.py').read_text()
-        body='ACTION='+repr(action)+'\nDATA='+repr(data)+'\n'+source+'''
-host=Host()
-result=host.observe() if ACTION=='observe' else host.apply(DATA['request_id'],DATA['wanted'],DATA['before'])
-print(json.dumps(result))
-'''
-        return self.runner.remote(name,body,isolated=True)
+        return self.channel.call(name,'budget-'+action,**data)
+
+    def controller_pci(self,hostname):
+        # Fixed read-only Nova object query, local to the enrolled controller.
+        from accounting_cloud import PCI_CODE
+        result=subprocess.run(['docker','exec','-i','nova_conductor',
+            '/var/lib/kolla/venv/bin/python','-c',PCI_CODE],input=json.dumps([hostname]),
+            capture_output=True,text=True,timeout=90)
+        if result.returncode or len(result.stdout)>4194304:raise ValueError('PCI observation unavailable')
+        return json.loads(result.stdout)[hostname]
+
+    def authorized_creator(self,creator):
+        if creator not in self.config['admin_user_ids']:return False
+        # A stale allowlist must not preserve an administrator's revoked role.
+        if self.c.identity.get_user(creator).is_enabled is not True:return False
+        roles=list(self.c.identity.roles(name='admin'))
+        if len(roles)!=1:raise ValueError('unique administrator role required')
+        return any(a.role['id']==roles[0].id for a in self.c.identity.role_assignments(
+            user_id=creator,scope_project_id=self.config['project_id'],effective=True))
 
     def cloud_empty(self,name,snapshot,*,allow_down=False):
         hostname=self.cfg['hosts'][name].get('inventory_name',name);blockers=[]
@@ -80,6 +113,10 @@ print(json.dumps(result))
         for server in bounded(self.c.compute.servers(all_projects=True,details=True)):
             if getattr(server,'compute_host',None)==hostname:blockers.append('NOVA_INSTANCES_PRESENT')
             if server.status=='BUILD' or getattr(server,'task_state',None):blockers.append('INFLIGHT_NOVA_REQUEST')
+        for migration in bounded(self.c.compute.migrations()):
+            if (getattr(migration,'source_compute',None)==hostname or getattr(migration,'dest_compute',None)==hostname) and migration.status not in (
+                    'confirmed','reverted','completed','error','failed','cancelled'):
+                blockers.append('NOVA_MIGRATION_PRESENT')
         root=snapshot['compute_uuid']
         response=self.c.placement.get('/resource_providers?in_tree='+root,microversion='1.39');response.raise_for_status()
         tree=response.json()['resource_providers']
@@ -88,14 +125,7 @@ print(json.dumps(result))
         for provider in tree:
             response=self.c.placement.get('/resource_providers/'+provider['uuid']+'/allocations',microversion='1.39');response.raise_for_status()
             if response.json()['allocations']:blockers.append('PLACEMENT_ALLOCATIONS_PRESENT')
-        from accounting_cloud import PCI_CODE
-        code='CODE='+repr(PCI_CODE)+'\nHOST='+repr(hostname)+'\n'+'''import subprocess,json
-p=subprocess.run(['docker','exec','-i','nova_conductor','/var/lib/kolla/venv/bin/python','-c',CODE],
- input=json.dumps([HOST]),capture_output=True,text=True,timeout=90)
-if p.returncode:raise ValueError('PCI observation unavailable')
-print(p.stdout)
-'''
-        pci=self.runner.remote(self.config['controller'],code,isolated=True)[hostname]
+        pci=self.controller_pci(hostname)
         if pci['compute_uuid']!=root:raise ValueError('PCI compute identity differs')
         if any(p['status'] not in ('available','deleted') or p.get('instance_uuid') for p in pci['devices']):
             blockers.append('PCI_RESERVATIONS_PRESENT')
@@ -131,7 +161,7 @@ print(p.stdout)
         old=cluster_flow.record(self.c.key_manager,name,[self.publisher])
         if old and cluster_flow.parse_json(old[1])==payload:return
         if old:self.c.key_manager.delete_secret(old[0],ignore_missing=False)
-        secrets.put_private(self.c.key_manager,name,json.dumps(payload,sort_keys=True),
+        secrets.put_private(self.dispatcher,name,json.dumps(payload,sort_keys=True),
             list(set(self.config['admin_user_ids']+self.config['reader_user_ids']+[self.publisher])))
 
     def sync(self):
@@ -154,7 +184,7 @@ print(p.stdout)
         # Validate the complete candidate before replacing canonical intent.
         candidate=self.active/'deployment.after.yaml'
         candidate.write_text(yaml.safe_dump(cfg,sort_keys=False))
-        self.module.deployment_config(candidate)
+        self.module.deployment_config(candidate,transport=False)
         if filename.read_bytes()!=old:raise ValueError('canonical deployment changed during budget application')
         from runtime_maintenance import atomic
         atomic(filename,yaml.safe_dump(cfg,sort_keys=False).encode(),filename.stat().st_mode&0o777)
@@ -187,7 +217,7 @@ print(p.stdout)
         from openstack_spvm import cluster_flow,secret_reader
         metadata=secret_reader.read_json(self.c.key_manager,'/secrets/'+entry)
         creator=metadata.get('creator_id')
-        if creator not in self.config['admin_user_ids']:return
+        if not self.authorized_creator(creator):return
         name=metadata['name'];request_id=name.removeprefix(self.model.PREFIX+'request-')
         secret_reader.canonical_uuid(request_id)
         saved=cluster_flow.record(self.c.key_manager,name,[creator]);body=cluster_flow.parse_json(saved[1])
@@ -253,14 +283,15 @@ def main(path,argv):
     if os.geteuid()!=0:raise ValueError('root budget worker required')
     workflow.existing.backend(path)
     config=policy(args.policy)
-    with workflow.context(path,config) as module:
+    from contextlib import nullcontext
+    with nullcontext(workflow.existing.backend(path)) as module:
         from openstack_spvm import cluster_cleanup
         import openstack
         connection=openstack.connect(verify='/etc/ssl/certs/ca-certificates.crt',api_timeout=30)
         try:
-            if args.expected_worker_user_id and connection.session.get_user_id()!=args.expected_worker_user_id:
-                raise ValueError('authenticated worker differs from activated publisher identity')
             worker=Worker(config,path,module,connection,policy_path=args.policy)
+            if args.expected_worker_user_id and worker.publisher!=args.expected_worker_user_id:
+                raise ValueError('authenticated dispatcher differs from activated publisher identity')
             fd=os.open(worker.root/'worker.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
             try:
                 fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)

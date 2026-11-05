@@ -23,10 +23,14 @@ def context(path,args):
     module=backend(path)
     from compute_removal import Backend
     delegation=policy(args.policy)
+    # Removal is an explicit operator installation-lifecycle command. Its SSH
+    # settings come from this CLI invocation, never the runtime worker policy.
+    from ssh_transport import policy as ssh_policy
+    args.known_hosts=ssh_policy()['known_hosts']
     original=module.ssh_arguments
     def ssh(host):
         values=original(host)
-        values[1:1]=['-F','/dev/null','-o','ForwardAgent=no','-o','UserKnownHostsFile='+delegation['known_hosts']]
+        values[1:1]=['-F','/dev/null','-o','ForwardAgent=no','-o','UserKnownHostsFile='+args.known_hosts]
         return values
     module.ssh_arguments=ssh
     cfg=module.deployment_config(delegation['config'])
@@ -40,8 +44,8 @@ def context(path,args):
             or binding['binding_sha256']!=digest(body) or receipt['compute_binding']!=digest(body)
             or set(binding['hosts'])!={n for n,h in cfg['hosts'].items() if 'compute' in h['roles']}):
         raise ValueError('current config and complete bound workspace required')
-    runner=Backend(cfg,delegation['controller'],delegation['controller_python'],delegation['openrc'],
-                   Path(args.output)/'observations',known_hosts=delegation['known_hosts'])
+    runner=Backend(cfg,delegation['controller'],sys.executable,delegation['openrc'],
+                   Path(args.output)/'observations',known_hosts=args.known_hosts)
     return module,delegation,cfg,receipt,binding,runner
 
 
@@ -169,20 +173,39 @@ def refresh_catalogs(runner,delegation,path,policy_path):
     code='TOOLS='+repr(str(Path(__file__).parent))+'\nBACKEND='+repr(str(path))+'\nPOLICY='+repr(str(policy_path))+'\n'+r'''
 import sys,json,subprocess,openstack
 sys.path.insert(0,TOOLS)
-import openstack_workflow as workflow
+from openstack_kolla_existing import backend
 from openstack_host_budgets import Worker,policy
 config=policy(POLICY)
-with workflow.context(BACKEND,config) as module:
- c=openstack.connect(verify='/etc/ssl/certs/ca-certificates.crt',api_timeout=30)
- try:
-  worker=Worker(config,BACKEND,module,c,policy_path=POLICY)
-  worker.sync();worker.sync_pools();worker.sync_gpus()
- finally:c.close()
+module=backend(BACKEND)
+c=openstack.connect(verify='/etc/ssl/certs/ca-certificates.crt',api_timeout=30)
+try:
+ worker=Worker(config,BACKEND,module,c,policy_path=POLICY)
+ worker.sync();worker.sync_pools();worker.sync_gpus()
+finally:c.close()
 p=subprocess.run(['systemctl','start','spvm-web-capacity.service'],capture_output=True,timeout=120)
 if p.returncode:raise ValueError('capacity collection failed')
 print(json.dumps({'status':'REMAINING_HOST_CATALOGS_REFRESHED','hosts':sorted(config['automatic'])}))
 '''
     return runner.remote(delegation['controller'],code,controller=True,auth=True)
+
+
+def revoke_executor(runner,delegation,host):
+    target=delegation['executors'][host]
+    source='USER='+repr(target['user_id'])+'\nPROJECT='+repr(delegation['project_id'])+'\n'+r'''
+import openstack,json
+c=openstack.connect(verify='/etc/ssl/certs/ca-certificates.crt',api_timeout=30)
+try:
+ user=c.identity.get_user(USER)
+ if (not user.name.startswith('spvm-host-') or user.default_project_id!=PROJECT
+   or user.description!='SPVM host executor; Barbican only; no SSH/Unix account'):
+  raise ValueError('only the dedicated enrolled executor may be revoked')
+ credentials=list(c.identity.application_credentials(USER))
+ for credential in credentials:c.identity.delete_application_credential(USER,credential.id,ignore_missing=False)
+ c.identity.update_user(USER,is_enabled=False)
+ print(json.dumps({'status':'HOST_EXECUTOR_REVOKED','user_id':USER,'credentials_revoked':len(credentials)}))
+finally:c.close()
+'''
+    return runner.remote(delegation['controller'],source,controller=True,auth=True)
 
 
 def main(path,argv):
@@ -232,7 +255,7 @@ def main(path,argv):
 def execute(args,output,module,delegation,cfg,receipt,binding,runner):
     planfile=output/'remove-compute-plan.json';journal=output/'transaction.json'
     inputs={str(Path(args.policy)):file_hash(args.policy),str(Path(delegation['config'])):file_hash(delegation['config']),
-            str(Path(delegation['known_hosts'])):file_hash(delegation['known_hosts'])}
+            str(Path(args.known_hosts)):file_hash(args.known_hosts)}
     source={p.name:file_hash(p) for p in Path(__file__).parent.glob('*.py')}
     if args.action=='plan-remove-compute':
         plan=runner.plan(args.host)
@@ -272,13 +295,15 @@ def execute(args,output,module,delegation,cfg,receipt,binding,runner):
         step('quarantine',lambda:runner.cloud(plan,'quarantine'))
         runner.guard(plan)
         step('stop',lambda:runner.target(args.host,'stop',plan['target']))
+        step('executor-revocation',lambda:revoke_executor(runner,delegation,args.host))
         runner.guard(plan,stopped=True)
         step('native-removal',lambda:runner.cloud(plan,'remove'))
         runner.guard(plan,stopped=True,removed=True)
         step('peer-network',lambda:network(runner,cfg,args.host,approved=plan['network'],output=output))
         # Retire delegation first: the worker must not re-publish removed catalogs.
         def configurations():
-            policy={**delegation,'automatic':{n:v for n,v in delegation['automatic'].items() if n!=args.host}}
+            policy={**delegation,'automatic':{n:v for n,v in delegation['automatic'].items() if n!=args.host},
+                'executors':{n:v for n,v in delegation['executors'].items() if n!=args.host}}
             write(Path(args.policy),policy);write(Path(delegation['config']),new)
             write(output/'remaining-deployment.yaml',new)
             write(Path(args.workspace)/'journal.json',{'status':'SUPERSEDED_COMPUTE_REMOVED',

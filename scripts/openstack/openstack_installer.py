@@ -203,6 +203,17 @@ def main(argv=None):
               'Partial staging is preserved; no backend was started.', file=sys.stderr)
         return 2
     try:
+        # Runtime host administration uses only API messages and local actors.
+        # Do not inspect the invoking/root user's SSH keys or agent at all.
+        if remaining[0] in ('sync-host-budgets','process-host-budgets',
+                            'stage-host-budget-worker','install-host-budget-worker'):
+            if args.identity_file or args.known_hosts:
+                raise InstallerError('Runtime host administration does not accept SSH credentials.')
+            if remaining[0] in ('sync-host-budgets','process-host-budgets'):
+                from openstack_host_budgets import main as host_budgets
+                return host_budgets(path,remaining)
+            from openstack_budget_service import main as budget_service
+            return budget_service(path,remaining)
         # Resolve sudo's invoking user before any phase/child sanitizes its env.
         # No private key data is serialized; only transport paths and policy.
         sys.path.insert(0,str(path.parent))
@@ -237,12 +248,6 @@ def main(argv=None):
         if remaining[0] in ('plan-storage','prepare-storage'):
             from openstack_storage_prepare import main as storage_prepare
             return storage_prepare(path,remaining)
-        if remaining[0] in ('stage-host-budget-worker','install-host-budget-worker'):
-            from openstack_budget_service import main as budget_service
-            return budget_service(path,remaining)
-        if remaining[0] in ('sync-host-budgets','process-host-budgets'):
-            from openstack_host_budgets import main as host_budgets
-            return host_budgets(path,remaining)
         if remaining[0]=='stage-kolla-identities':
             from openstack_compute_identity import main as compute_identity
             return compute_identity(path,remaining)

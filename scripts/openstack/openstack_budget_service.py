@@ -19,16 +19,19 @@ SYSTEMD_DIRECTORY=Path('/etc/systemd/system')
 
 
 def stage(backend,args):
-    from openstack_workflow import context
+    from openstack_kolla_existing import backend as load
     from openstack_host_budgets import policy
-    with context(backend,{'known_hosts':args.known_hosts}):
-        cfg=policy(args.policy)
-    if cfg['known_hosts']!=args.known_hosts:raise ValueError('known-hosts binding differs')
-    for key in ('config','openrc','known_hosts'):
+    load(backend)
+    cfg=policy(args.policy)
+    for key in ('config','openrc','dispatcher_credentials'):
         trusted(cfg[key])
     interpreter=Path(args.python)
     if not interpreter.is_absolute() or not interpreter.is_file():raise ValueError('existing worker Python required')
     trusted(interpreter.resolve())
+    for runtime_path in (Path(__file__).resolve(),Path(backend).resolve(),interpreter.resolve(),
+                         *(Path(cfg[k]).resolve() for k in ('config','openrc','dispatcher_credentials'))):
+        if runtime_path.is_relative_to('/home') or runtime_path.is_relative_to('/root/.ssh'):
+            raise ValueError('runtime administration files must be outside hidden personal-home/SSH directories')
     web_python=Path(args.web_python)
     if not web_python.is_absolute() or not web_python.is_file():raise ValueError('existing web Python required')
     trusted(web_python.resolve())
@@ -73,6 +76,8 @@ User=root
 Group=root
 UMask=0077
 TimeoutStartSec=1800
+UnsetEnvironment=SSH_AUTH_SOCK SSH_AGENT_PID SPVM_INSTALLER_SSH_POLICY
+InaccessiblePaths=-/root/.ssh -/home
 ExecStart=/bin/bash '''+str(runner)+'''
 '''
     timer='''[Unit]
@@ -91,7 +96,7 @@ WantedBy=timers.target
     for name,body in zip(UNITS,(service,timer)):(root/name).write_text(body)
     (root/'web-config.json').write_text(json.dumps(after,indent=2)+'\n')
     inputs={str(p):file_hash(p) for p in
-        [trusted(args.policy),trusted(cfg['config']),trusted(cfg['known_hosts']),web,
+        [trusted(args.policy),trusted(cfg['config']),trusted(cfg['dispatcher_credentials']),web,
          *[trusted(p) for p in Path(__file__).parent.glob('*.py')],
          *[trusted(p) for p in Path(backend).parent.glob('*.py')],
          *[trusted(p) for p in web_modules.glob('*.py')],
@@ -151,7 +156,7 @@ def main(backend,argv):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['stage-host-budget-worker','install-host-budget-worker'])
     parser.add_argument('--output',required=True);parser.add_argument('--policy')
-    parser.add_argument('--known-hosts');parser.add_argument('--python');parser.add_argument('--web-python')
+    parser.add_argument('--python');parser.add_argument('--web-python')
     parser.add_argument('--web-config');parser.add_argument('--worker-user-id')
     parser.add_argument('--activation-sha256')
     args=parser.parse_args(argv)
@@ -159,7 +164,7 @@ def main(backend,argv):
     from openstack_kolla_existing import backend as load
     load(backend)
     if args.action=='stage-host-budget-worker':
-        if not all(getattr(args,k) for k in ('policy','known_hosts','python','web_python','web_config','worker_user_id')):
+        if not all(getattr(args,k) for k in ('policy','python','web_python','web_config','worker_user_id')):
             raise ValueError('explicit worker inputs required')
         result=stage(backend,args)
     else:result=install(args)

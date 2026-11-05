@@ -84,7 +84,7 @@ def stage(args, backend_path, backend, nova_inputs):
     try:
         for name in before['files']:
             if name not in ('hosts.ini','host-profile.yml','compute-binding.json','kolla/globals.yml'):
-                workspace.private_file(output/name,read(origin/name))
+                workspace.managed_collections.copy_workspace_file(origin,output,name)
         for name in ('hosts.ini','host-profile.yml'):
             workspace.private_file(output/name,files[name])
         for name,content in fragments.items():
@@ -109,7 +109,8 @@ def stage(args, backend_path, backend, nova_inputs):
         body['binding_sha256']=digest(body)
         write(output/'compute-binding.json',body)
         receipt={**before,'config_sha256':digest(cfg),'render_lock_sha256':digest(lock),
-            'compute_binding':body['binding_sha256'],'files':workspace.file_set(output)}
+            'compute_binding':body['binding_sha256'],'collections':str(output/'collections'),
+            'files':workspace.file_set(output)}
         write(output/'workspace.json',receipt)
         journal['status']=receipt['status'];write(output/'journal.json',journal)
         if workspace.check(origin)!=before:raise ValueError('original workspace changed')

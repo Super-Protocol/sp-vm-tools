@@ -9,33 +9,13 @@ PUBLIC=Path('/var/lib/spvm/gpu-catalog.json')
 
 class GpuWorker:
     def gpu_local(self,name,action,**data):
-        modules={n:(self.path.parent/(n+'.py')).read_text() for n in
-                 ('host_budget_host','runtime_maintenance','gpu_discovery','host_gpu_host','host_gpu_native')}
-        profiles=(self.path.parent.parent/'nova-spvm/nova_spvm/gpu_profiles.py').read_text()
-        source='MODULES='+repr(modules)+'\nPROFILES='+repr(profiles)+'\nACTION='+repr(action)+'\nDATA='+repr(data)+'\n'+'''
-import sys,types,json
-package=types.ModuleType('nova_spvm');package.__path__=[];sys.modules['nova_spvm']=package
-model=types.ModuleType('nova_spvm.gpu_profiles');sys.modules[model.__name__]=model
-exec(PROFILES,model.__dict__);package.gpu_profiles=model
-for name,body in MODULES.items():
- m=types.ModuleType(name);sys.modules[name]=m;exec(body,m.__dict__)
-host=sys.modules['host_gpu_host'].Gpus()
-if ACTION=='observe':result=host.observe_gpus()
-elif ACTION=='change':result=host.change(DATA['before'],DATA['change'],idle=DATA['idle'])
-else:
- actor=sys.modules['host_gpu_native'].Native()
- if ACTION=='plan-compute':
-  changes=actor.compute_plan(DATA['before'],DATA['wanted'],DATA['aliases'])
-  digest=sys.modules['host_budget_host'].digest
-  result={'before':{p:digest(actor.read(p)) for p in changes},'after':{p:digest(b) for p,b in changes.items()}}
- elif ACTION=='stage-compute':result=actor.stage_compute(DATA['request_id'],DATA['before'],DATA['wanted'],DATA['aliases'])
- elif ACTION=='start-compute':result=actor.start_compute(DATA['request_id'],DATA['staged'])
- elif ACTION=='plan-controller':result=actor.plan_controller(DATA['target'],DATA['selected'],DATA['aliases'])
- elif ACTION=='apply-controller':result=actor.apply_controller(DATA['request_id'],DATA['target'],DATA['selected'],DATA['aliases'],DATA['plan'])
- else:raise ValueError('unsupported GPU transaction operation')
-print(json.dumps(result))
-'''
-        return self.runner.remote(name,source,isolated=True)
+        if action in ('plan-controller','apply-controller'):
+            if name!=self.config['controller']:raise ValueError('GPU controller operation must be root-local')
+            from host_gpu_native import Native
+            actor=Native()
+            if action=='plan-controller':return actor.plan_controller(data['target'],data['selected'],data['aliases'])
+            return actor.apply_controller(data['request_id'],data['target'],data['selected'],data['aliases'],data['plan'])
+        return self.channel.call(name,'gpu-'+action,**data)
 
     def gpu_names(self):
         path=self.root/'gpu-profile-names.json'
@@ -72,8 +52,7 @@ print(json.dumps(result))
             self.publish(model.PREFIX+state['compute_uuid']+'-catalog',catalog)
             inventory_name=next(n for n in self.config['automatic']
                 if self.cfg['hosts'][n].get('inventory_name',n)==catalog['host'])
-            launch=self.runner.remote(inventory_name,
-                "import sys,json;sys.path[:0]=['/usr/local/libexec/spvm','/usr/local/libexec/nova-spvm'];from host_launch import report;print(json.dumps(report()))",isolated=True)
+            launch=self.channel.call(inventory_name,'launch-report')
             entries[catalog['host']]={'inventory':observed['inventory'],'assignments':catalog['inventory']['assignments'],'launch':launch,
                 'blockers':sorted(set(observed['blockers']+[v for v in catalog['blockers'] if 'TRANSACTION_REVIEW' in v]))}
             for key,p in catalog['inventory']['profiles'].items():
@@ -90,7 +69,7 @@ print(json.dumps(result))
         from openstack_spvm import host_gpus as model,cluster_flow,secret_reader
         from nova_spvm import gpu_profiles as gpu
         metadata=secret_reader.read_json(self.c.key_manager,'/secrets/'+entry);creator=metadata.get('creator_id')
-        if creator not in self.config['admin_user_ids']:return
+        if not self.authorized_creator(creator):return
         name=metadata['name'];request_id=name.removeprefix(model.PREFIX+'request-');secret_reader.canonical_uuid(request_id)
         saved=cluster_flow.record(self.c.key_manager,name,[creator]);body=cluster_flow.parse_json(saved[1])
         if (type(body) is not dict or set(body)!={'schema_version','project_id','user_id','request_id','host','generation','change'}
@@ -176,7 +155,7 @@ print(json.dumps(result))
         resolved['hosts'][host]['gpu_inventory']=wanted
         candidate=folder/'deployment.after.yaml';candidate.write_text(yaml.safe_dump(resolved,sort_keys=False))
         (folder/'deployment.before.yaml').write_bytes(old)
-        self.module.deployment_config(candidate)
+        self.module.deployment_config(candidate,transport=False)
         all_aliases={}
         for h in resolved['hosts'].values():
             if 'compute' not in h['roles']:continue
@@ -207,7 +186,7 @@ print(json.dumps(result))
         self.gpu_local(self.config['controller'],'apply-controller',request_id=request_id,target=prepared['target'],
             selected=prepared['selected'],aliases=prepared['aliases'],plan=prepared['controller_plan'])
         if filename.read_bytes()!=old:raise ValueError('canonical deployment changed during GPU transaction')
-        candidate=folder/'deployment.after.yaml';resolved=self.module.deployment_config(candidate)
+        candidate=folder/'deployment.after.yaml';resolved=self.module.deployment_config(candidate,transport=False)
         if gpu.digest(resolved['hosts'][host]['gpu_inventory'])!=gpu.digest(prepared['wanted']):raise ValueError('staged GPU intent changed')
         atomic(filename,candidate.read_bytes(),filename.stat().st_mode&0o777)
         self.cfg=resolved
@@ -220,16 +199,8 @@ print(json.dumps(result))
             raise ValueError('host acquired instances/reservations or lost scheduling quarantine')
 
     def gpu_pci(self,host):
-        from accounting_cloud import PCI_CODE
         hostname=self.cfg['hosts'][host].get('inventory_name',host)
-        source='CODE='+repr(PCI_CODE)+'\nHOST='+repr(hostname)+'\n'+'''
-import subprocess,json
-p=subprocess.run(['docker','exec','-i','nova_conductor','/var/lib/kolla/venv/bin/python','-c',CODE],
- input=json.dumps([HOST]),capture_output=True,text=True,timeout=90)
-if p.returncode or len(p.stdout)>4194304:raise ValueError('native PCI query failed')
-print(p.stdout)
-'''
-        return self.runner.remote(self.config['controller'],source,isolated=True)[hostname]
+        return self.controller_pci(hostname)
 
     def verify_gpus(self,host,wanted):
         from nova_spvm import gpu_profiles as gpu

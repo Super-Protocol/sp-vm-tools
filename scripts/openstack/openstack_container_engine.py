@@ -354,7 +354,7 @@ def execute(args, backend):
 def main(backend_path, argv):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['plan-container-engine','prepare-container-engine'])
-    for name in ('config','host','kolla-source','collections','collections-sha256','ansible-playbook','output'):
+    for name in ('config','host','workspace','output'):
         parser.add_argument('--'+name,required=True)
     parser.add_argument('--allow-experimental-ubuntu26',action='store_true')
     parser.add_argument('--known-hosts',help='Existing independently trusted SSH host-key file; never populated automatically')
@@ -365,6 +365,14 @@ def main(backend_path, argv):
     backend=importlib.util.module_from_spec(spec)
     spec.loader.exec_module(backend)
     try:
+        import openstack_kolla_workspace as workspace
+        receipt=workspace.check(args.workspace)
+        if receipt['config_sha256']!=digest(backend.deployment_config(args.config)):
+            raise ValueError('container-engine config must match the initialized workspace')
+        args.kolla_source=receipt['kolla_source']
+        args.collections=receipt['collections']
+        args.collections_sha256=receipt['collections_sha256']
+        args.ansible_playbook=str(Path(receipt['kolla_python']).parent/'ansible-playbook')
         result=execute(args,backend)
         print(json.dumps({k:v for k,v in result.items() if k in ('status','mode','plan_sha256')}))
         return 0 if result['status'] in ('CONTAINER_ENGINE_PLAN_READY','CONTAINER_ENGINE_READY') else 2

@@ -94,7 +94,7 @@ def stage(args,backend_path,backend,nova_inputs):
         overrides={'kolla/'+n:body for n,body in fragments.items()}
         for name in before['files']:
             if name!='kolla/globals.yml' and name not in overrides:
-                workspace.private_file(output/name,read(origin/name))
+                workspace.managed_collections.copy_workspace_file(origin,output,name)
         globals_=yaml.safe_load(read(origin/'kolla/globals.yml'))
         globals_.update(nova_compute_image_full=image_name,
             openstack_region_name=args.region,
@@ -133,7 +133,8 @@ def stage(args,backend_path,backend,nova_inputs):
         for name in ('kolla/passwords.yml','private-api-ca.key','kolla/certificates/api.key'):
             if (origin/name).is_file() and file_hash(origin/name)!=file_hash(output/name):
                 raise ValueError('private credential material changed during binding')
-        receipt={**before,'files':workspace.file_set(output),'compute_binding':binding['binding_sha256'],
+        receipt={**before,'collections':str(output/'collections'),
+                 'files':workspace.file_set(output),'compute_binding':binding['binding_sha256'],
                  'remaining':binding['remaining']}
         write(output/'workspace.json',receipt)
         journal['status']=receipt['status'];write(output/'journal.json',journal)

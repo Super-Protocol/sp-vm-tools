@@ -10,20 +10,7 @@ from openstack_container_engine import write
 
 class PoolWorker:
     def pool_local(self,name,action,**data):
-        deployment=self.path.parent
-        modules={n:(deployment/(n+'.py')).read_text() for n in ('host_budget_host','storage_discovery','host_pool_host')}
-        source='MODULES='+repr(modules)+'\nACTION='+repr(action)+'\nDATA='+repr(data)+'\n'+'''
-import sys,types,json
-for name,body in MODULES.items():
- module=types.ModuleType(name);sys.modules[name]=module;exec(body,module.__dict__)
-host=sys.modules['host_pool_host'].Pools()
-if ACTION=='observe':result=host.observe_pools(DATA['managed'])
-elif ACTION=='prepare':result=host.apply(DATA['request_id'],DATA['wanted'],DATA['before'])
-elif ACTION=='restart':result=host.restart(DATA['request_id'])
-else:raise ValueError('unknown pool operation')
-print(json.dumps(result))
-'''
-        return self.runner.remote(name,source)
+        return self.channel.call(name,'pool-'+action,**data)
 
     def pool_catalog(self,name,*,request_id=None):
         from openstack_spvm import host_pools as model
@@ -80,7 +67,7 @@ print(json.dumps(result))
         (self.active/'deployment.before.yaml').write_bytes(old)
         (self.active/'policy.before.json').write_bytes(old_policy)
         candidate=self.active/'deployment.after.yaml';candidate.write_text(yaml.safe_dump(cfg,sort_keys=False))
-        validated=self.module.deployment_config(candidate)
+        validated=self.module.deployment_config(candidate,transport=False)
         if filename.read_bytes()!=old or self.policy_path.read_bytes()!=old_policy:raise ValueError('canonical intent drift')
         atomic(filename,candidate.read_bytes(),filename.stat().st_mode&0o777)
         atomic(self.policy_path,json.dumps(policy,indent=2).encode(),self.policy_path.stat().st_mode&0o777)
@@ -89,7 +76,7 @@ print(json.dumps(result))
     def process_pool(self,entry):
         from openstack_spvm import host_pools as model,cluster_flow,secret_reader
         metadata=secret_reader.read_json(self.c.key_manager,'/secrets/'+entry);creator=metadata.get('creator_id')
-        if creator not in self.config['admin_user_ids']:return
+        if not self.authorized_creator(creator):return
         name=metadata['name'];request_id=name.removeprefix(model.PREFIX+'request-');secret_reader.canonical_uuid(request_id)
         saved=cluster_flow.record(self.c.key_manager,name,[creator]);body=cluster_flow.parse_json(saved[1])
         if (type(body) is not dict or set(body)!={'schema_version','project_id','user_id','request_id','host','generation','pools'}

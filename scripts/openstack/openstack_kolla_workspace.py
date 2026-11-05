@@ -12,6 +12,8 @@ import traceback
 import yaml
 from openstack_container_engine import digest, file_hash, write, collection_hash
 from openstack_compute_image import read
+import openstack_collections as managed_collections
+from openstack_errors import InstallerError
 
 
 def private_file(path, content):
@@ -191,7 +193,6 @@ def init(args,backend):
     cfg=backend.deployment_config(args.config)
     source=pinned(args.kolla_source,cfg['kolla']['revision'])
     lock,files=rendered(cfg,args.rendered)
-    collection_hash(args.collections,args.collections_sha256)
     python=Path(args.kolla_python)
     if not python.is_absolute() or not python.is_file():raise ValueError('absolute existing Kolla Python required')
     output=Path(args.output)
@@ -204,6 +205,8 @@ def init(args,backend):
     environment={k:v for k,v in os.environ.items() if not k.startswith(('ANSIBLE_','KOLLA_','PYTHON'))}
     environment['PYTHONDONTWRITEBYTECODE']='1'
     try:
+        collections,collections_sha256,collections_preparation=managed_collections.prepare(
+            args.collections,output,Path(backend.__file__).parent/'patches/kolla-external-docker.patch')
         for name,content in files.items():
             # Only config files are materialized in Kolla's private configdir.
             if name in ('hosts.ini','host-profile.yml'):
@@ -234,7 +237,8 @@ def init(args,backend):
             'deployment_id':cfg['deployment_id'],'config_sha256':digest(cfg),
             'render_lock_sha256':digest(lock),'kolla_revision':cfg['kolla']['revision'],
             'kolla_source':str(source),'kolla_python':str(python),'kolla_python_sha256':file_hash(python),
-            'collections':str(Path(args.collections).resolve()),'collections_sha256':args.collections_sha256,
+            'collections':collections,'collections_sha256':collections_sha256,
+            'collections_preparation':collections_preparation,
             'password_template_sha256':__import__('hashlib').sha256(template).hexdigest(),
             'vip':cfg['network']['api_vip'],'files':file_set(output),'hosts_changed':False,
             'remaining':['API_CA_TRUST_DISTRIBUTION','FRESH_HOST_DEPENDENCIES',
@@ -265,6 +269,7 @@ def check(output):
         raise ValueError('workspace input drift or incomplete initialization')
     runtime_mounts(yaml.safe_load((output/'kolla/globals.yml').read_bytes()))
     runtime_mounts(yaml.safe_load((output/'host-profile.yml').read_bytes()))
+    managed_collections.verify(output,receipt)
     verify_tls(output,receipt['vip'])
     return receipt
 
@@ -299,14 +304,14 @@ def main(backend_path,argv):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['init-kolla','check-kolla-workspace','list-kolla-tasks'])
     parser.add_argument('--output',required=True,help='New private workspace for init, existing workspace for check/list')
-    for name in ('config','rendered','kolla-source','kolla-python','collections','collections-sha256'):
+    for name in ('config','rendered','kolla-source','kolla-python','collections'):
         parser.add_argument('--'+name)
     parser.add_argument('--ack-new-cloud',action='store_true')
     args=parser.parse_args(argv)
     try:
         if args.action=='init-kolla':
-            if not all(getattr(args,n) for n in ('config','rendered','kolla_source','kolla_python','collections','collections_sha256')):
-                parser.error('init requires config/rendered, pinned Kolla source/Python and reviewed collections')
+            if not all(getattr(args,n) for n in ('config','rendered','kolla_source','kolla_python','collections')):
+                parser.error('init requires config/rendered, pinned Kolla source/Python and original environment collections; preparation and hashes are automatic')
             sys.path.insert(0,str(Path(backend_path).parent))
             spec=importlib.util.spec_from_file_location('spvm_workspace_backend',backend_path)
             backend=importlib.util.module_from_spec(spec);spec.loader.exec_module(backend)
@@ -315,6 +320,9 @@ def main(backend_path,argv):
         else:result=list_tasks(args.output)
         print(json.dumps({k:v for k,v in result.items() if k in ('status','hosts_changed','remote_tasks_executed')}))
         return 0
+    except InstallerError as exc:
+        print('ERROR: '+str(exc),file=sys.stderr)
+        return 2
     except (OSError,ValueError,KeyError,yaml.YAMLError,subprocess.SubprocessError) as exc:
         frame=traceback.extract_tb(exc.__traceback__)[-1]
         print('ERROR: isolated Kolla inputs refused; private artifacts preserved. '+type(exc).__name__
