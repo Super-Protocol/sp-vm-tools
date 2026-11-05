@@ -16,6 +16,10 @@ No compatibility copies are maintained in the parent directory.
 `openstack_install.py` owns the durable transaction/approval; fixed phases live
 in `openstack_install_phases.py`, with artifact and controller-completion helpers.
 There are no executable YAML recipes or persistent SSH execution endpoints.
+The current test profile requires explicit `--use-test-images`; `--yes` does
+not imply acknowledgement. `openstack_install_continue.py` provides only the
+reviewed test-image prechecks refusal continuation into a new transaction,
+never a generic failed-deploy retry or replay of host preparation.
 See [one-command fresh installation](../../docs/OPENSTACK_SINGLE_INSTALL.md) for
 the supported profile, management Docker prerequisite, error/retry rules and
 the pending live acceptance boundary.

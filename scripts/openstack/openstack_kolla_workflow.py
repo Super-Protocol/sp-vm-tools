@@ -14,6 +14,7 @@ import time
 
 from openstack_compute_image import read
 from openstack_container_engine import digest, file_hash, write
+from openstack_errors import InstallerError
 import openstack_network_probe as network_probe
 import openstack_kolla_prechecks as prechecks
 import openstack_kolla_workspace as workspace
@@ -143,7 +144,14 @@ def invoke(args, receipt, source, output, phase):
     with (output/('private-'+phase+'.log')).open('xb') as log:
         os.chmod(log.name, 0o600)
         if subprocess.run(argv, cwd=output, env=env, stdout=log, stderr=log, timeout=7200, umask=0o077).returncode:
-            raise ValueError('Kolla phase failed; inspect private log')
+            path = output/('private-'+phase+'.log')
+            message = 'Kolla '+phase+' failed. Inspect private log '+str(path)+'.'
+            if phase == 'prechecks' and not prechecks.testing_images(args):
+                with path.open('rb') as source_log:
+                    body=source_log.read(2*1024*1024)
+                if b'please use --use-test-images CLI argument' in body:
+                    message += ' Upstream test images require explicit --use-test-images approval.'
+            raise InstallerError(message)
 
 
 def execute(args, backend_path, backend):

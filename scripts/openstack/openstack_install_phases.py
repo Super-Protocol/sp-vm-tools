@@ -142,7 +142,8 @@ class Installation:
     def phase_args(self, **values):
         return R(config=self.config, known_hosts=self.known_hosts,
                  allow_experimental_ubuntu26=self.args.allow_experimental_ubuntu26,
-                 use_testing_images=False, ack_new_cloud=True, resume=False, plan_sha256=None,
+                 use_testing_images=getattr(self.args, 'use_testing_images', False),
+                 ack_new_cloud=True, resume=False, plan_sha256=None,
                  **values)
 
     def refresh(self):
@@ -158,6 +159,10 @@ class Installation:
         return json.loads(result.stdout)
 
     def scan(self):
+        if not self.args.use_testing_images:
+            raise InstallerError('This fresh-install profile uses quay.io/openstack.kolla test images. '
+                'Explicitly supply --use-test-images for an approved test installation. '
+                '--yes and --allow-experimental-ubuntu26 do not imply this acknowledgement. No host preparation was started.')
         from basic_preflight import check
         import openstack_storage_prepare as storage
         self.verify_environment()
@@ -241,6 +246,7 @@ print(json.dumps({'status':'FRESH_HOST_CHECKED','haproxy':ha}))
         if (self.collections/'ansible_collections/openstack/kolla/roles/docker/tasks/main.yml').read_bytes()!=collections.ORIGINAL:
             blockers.append('The prepared environment Docker role is not the supported original source')
         return {'schema_version': 1, 'deployment_id': self.cfg['deployment_id'],
+                'use_testing_images': self.args.use_testing_images,
                 'hosts': {n: {'roles': h['roles'], 'address': h['address'],
                               'machine_sha256': self.audits[n]['host_identity_sha256']}
                           for n, h in self.cfg['hosts'].items()},

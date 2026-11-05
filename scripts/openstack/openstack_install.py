@@ -115,10 +115,11 @@ class Transaction:
         if (self.record['status'] != 'AWAITING_APPROVAL'
                 or self.record['plan_sha256'] != digest(plan)
                 or json.loads((self.output / 'plan.json').read_bytes()) != plan
-                or tuple(phases) != PHASES):
+                or tuple(phases) != PHASES
+                or self.record['completed'] != list(PHASES[:len(self.record['completed'])])):
             raise InstallerError('Complete, unchanged built-in installation plan required.')
         try:
-            for name in PHASES:
+            for name in PHASES[len(self.record['completed']):]:
                 self.unchanged()
                 self.emit('Installing: ' + name, flush=True)
                 self.record.update(status='RUNNING', active_phase=name)
@@ -149,7 +150,13 @@ def approve(deployment, plan, *, yes=False, stream=None):
     stream = stream or sys.stdin
     if not yes and not stream.isatty():
         raise InstallerError('Installation requires confirmation. Run interactively, or explicitly supply --yes after reviewing --check.')
-    print('All configured hosts will be prepared and a NEW OpenStack cloud installed.')
+    if plan.get('continued_from'):
+        print('Continue after reviewed Kolla prechecks failure. Only Kolla and platform completion will run.')
+        print('Previous preparation is retained; the failed transaction is not reset or replayed.')
+    else:
+        print('All configured hosts will be prepared and a NEW OpenStack cloud installed.')
+    if plan.get('use_testing_images'):
+        print('WARNING: upstream quay.io/openstack.kolla images are acknowledged as TEST images, not a production-certified kit.')
     print('Disks are not formatted; existing state is never removed automatically. No Swarm or guest is created.')
     for name, host in plan['hosts'].items():
         print('  ' + name + ': ' + ', '.join(host['roles']))
@@ -176,6 +183,9 @@ def parser():
     p.add_argument('--check', action='store_true', help='Read-only host scan and local plan only; no host mutation/download')
     p.add_argument('--yes', action='store_true', help='Explicit approval of installation after successful all-host checks')
     p.add_argument('--allow-experimental-ubuntu26', action='store_true')
+    p.add_argument('--use-test-images', dest='use_testing_images', action='store_true',
+                   help='Explicitly acknowledge upstream quay.io/openstack.kolla test images; not implied by --yes')
+    p.add_argument('--continue-from', help='Reviewed previous transaction stopped at Kolla prechecks only; requires a NEW --output')
     return p
 
 
@@ -192,7 +202,11 @@ def main(argv=None):
         with deployment_lock():
             transaction = Transaction(args.output, installation.inputs)
             installation.transaction = transaction
-            plan = transaction.scan(installation.scan)
+            if args.continue_from:
+                from openstack_install_continue import prepare
+                plan = transaction.scan(lambda: prepare(installation, transaction))
+            else:
+                plan = transaction.scan(installation.scan)
             print('All-host installation checks passed. Plan: ' + str(transaction.output / 'plan.json'), flush=True)
             if args.check:
                 transaction.record.update(status='CHECKED_NOT_INSTALLED')
@@ -200,6 +214,9 @@ def main(argv=None):
                 return 0
             try:
                 approve(installation.cfg['deployment_id'], plan, yes=args.yes)
+                if args.continue_from:
+                    from openstack_install_continue import claim
+                    claim(installation, transaction, plan)
                 result = transaction.apply(plan, installation.phases())
             except BaseException as error:
                 if transaction.record['status'] != 'NEEDS_REVIEW':

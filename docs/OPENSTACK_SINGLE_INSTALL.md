@@ -6,7 +6,8 @@ The public entry point is:
 sudo bash scripts/install-openstack.sh install \
   --config /srv/spvm/deployment.yaml \
   --environment /srv/spvm/environment-01 \
-  --output /var/lib/spvm-install-01
+  --output /var/lib/spvm-install-01 \
+  --use-test-images
 ```
 
 This is an **explicit fresh installation**, not an upgrade, reset, adoption or
@@ -105,6 +106,42 @@ installation and authenticated live UI acceptance, which must still complete.
 
 ## Scan, approval and execution
 
+### Explicit upstream test-image acknowledgement
+
+This built-in profile uses `quay.io/openstack.kolla` images, which upstream
+Kolla marks as testing-only. Supply `--use-test-images` only for an authorized
+test installation. It is distinct from `--yes` and experimental Ubuntu 26
+approval, and says nothing about guest debug/CC admission. Without it, the
+installer fails before host preparation. The value is bound into the plan and
+passed to Kolla's `prechecks`; it is not added to unsupported deploy actions.
+It does not turn this kit into a production-certified distribution.
+
+### Reviewed continuation after the test-image prechecks refusal
+
+`--continue-from /absolute/previous-run --output /absolute/new-run` is a narrow,
+explicit continuation, **not** general resume or automatic repair. It accepts
+only a prepared fresh installation whose parent stopped at Kolla and whose
+child stopped at `prechecks` with the specific missing-test-images refusal,
+zero completed Kolla phases and no deploy/post-deploy execution evidence.
+Supply the same config, environment and SSH settings, plus explicit
+`--use-test-images`. The previous bundle/config/keys/trust and completed phase
+receipts must match. Updated local coordinator code is explicitly re-approved;
+the driver and prepared Kolla inputs cannot be replaced or migrated.
+
+Fresh read-only observations must show no guests and unchanged host identities,
+protected files, containers, network and services. Only PID/start timestamps
+of an otherwise identical active libvirt service with zero restart count may
+refresh across the idle interval. Other drift refuses continuation. The new
+Kolla child protects its complete fresh process baseline normally.
+
+Use `--check` to validate without running Kolla or reserving a continuation.
+Execution requires the normal confirmation or `--yes`. Only `kolla` and
+`platform` run: storage, GPU, images, network and helper preparation are never
+replayed. The original journals are preserved; an exclusive `continued-by.json`
+marker reserves one continuation before deployment. Another failure needs
+manual review, not a second automatic retry. Do not delete markers or rewrite
+failed journals to manufacture successful boundaries.
+
 `--check` performs the all-host read-only scan and writes a private **local**
 plan. It creates no host directory, installs no package, probes no GPU MMIO and
 downloads no dependency. Local launcher validation uses a private copy. The
@@ -114,7 +151,7 @@ command returns nonzero if a host or local prerequisite is blocked.
 sudo bash scripts/install-openstack.sh install \
   --config /srv/spvm/deployment.yaml \
   --environment /srv/spvm/environment-01 \
-  --output /var/lib/spvm-check-01 --check
+  --output /var/lib/spvm-check-01 --use-test-images --check
 ```
 
 For installation use a **different new output directory**, without `--check`.
@@ -203,7 +240,7 @@ authenticated GUI acceptance of the integrated command. Record the actual
 outcome of a subsequent live run separately; do not relabel mock callbacks or
 an older multi-command installation as this command's live acceptance.
 
-### Checkpoint: 2026-11-05
+### Earlier checkpoint: 2026-11-05, before the Skyline/continuation fixes
 
 The current implementation passed 24 targeted single-install tests and 46
 existing host-control protocol/coordinator tests. The public shell syntax,
