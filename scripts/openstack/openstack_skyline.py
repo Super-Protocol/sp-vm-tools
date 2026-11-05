@@ -29,7 +29,7 @@ STATIC_ASSETS = {
 EXPECTED_ASSETS = STATIC_ASSETS | {
     name + '.gz' for name in STATIC_ASSETS if name.endswith(('.html', '.js', '.css'))
 } | {'index.html'} | {
-    kind + '.bundle.1663167892.js' + suffix
+    kind + '.bundle.1791833599.js' + suffix
     for kind in ('auth', 'main', 'common', 'compute') for suffix in ('', '.gz')
 }
 
@@ -54,7 +54,7 @@ def context(directory, expected):
     if {p.name for p in (root/'context').iterdir()} != set(value['asset_sha256']) | {'Dockerfile'}:
         raise ValueError('unexpected build context member')
     for kind in ('auth', 'main', 'common', 'compute'):
-        name = kind+'.bundle.1663167892.js'
+        name = kind+'.bundle.1791833599.js'
         if name not in value['asset_sha256'] or name+'.gz' not in value['asset_sha256']:
             raise ValueError('all patched JS and gzip siblings required; base may contain stale gzip')
         raw = read(root/'context'/name, 32*1024*1024)

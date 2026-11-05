@@ -1,0 +1,228 @@
+"""One fresh-install transaction, driven from the administrator's management host.
+
+No upgrade, guest creation, automatic recovery, SSH credential distribution or
+mutable command recipes in configuration. Individual phases remain diagnostic
+tools; the public installer owns their order and their internal approvals.
+"""
+import argparse
+from contextlib import contextmanager
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+import time
+import traceback
+from types import SimpleNamespace as R
+
+from openstack_container_engine import digest, file_hash, write
+from openstack_errors import InstallerError
+
+SCHEMA = 1
+PHASES = ('storage', 'gpu', 'artifacts', 'workspace', 'compute-binding', 'docker',
+          'network', 'helpers', 'images', 'dependencies', 'kolla', 'platform')
+RESULTS = dict(zip(PHASES, (
+    'STORAGE_PREPARED','GPU_INVENTORY_PREPARED_NOT_ENROLLED','MATCHED_ARTIFACTS_BUILT',
+    'KOLLA_INPUTS_INITIALIZED_NOT_DEPLOYED','COMPUTE_INTENT_BOUND_NOT_DEPLOYABLE','ALL_HOST_DOCKER_READY',
+    'ALL_HOST_NETWORK_READY','ALL_HOST_HELPERS_READY_DENY_ALL','ALL_HOST_IMAGES_DELIVERED_NOT_STARTED',
+    'ALL_HOST_DEPENDENCIES_READY','KOLLA_DEPLOYED_NOT_SPVM_ENROLLED','PLATFORM_READY_NO_SWARM_CREATED')))
+
+
+def protected_parent(path):
+    path = Path(path)
+    if not path.is_absolute() or path.resolve() != path:
+        raise InstallerError('Use an absolute, canonical installation directory without symlinks.')
+    for parent in (path, *path.parents):
+        if parent.exists():
+            value = parent.lstat()
+            if not stat.S_ISDIR(value.st_mode) or value.st_uid != 0 or value.st_mode & 0o022:
+                raise InstallerError('Installation state must have root-owned, non-writable ancestors: ' + str(parent))
+    return path
+
+
+@contextmanager
+def deployment_lock(directory=Path('/run/lock')):
+    """Serialize fresh installs on this coordinator, including overlapping inventories."""
+    value = directory.lstat()
+    if directory.is_symlink() or value.st_uid != 0 or value.st_mode & 0o022 and not value.st_mode & stat.S_ISVTX:
+        raise InstallerError('Unsafe installation lock directory.')
+    name = directory / 'spvm-openstack-fresh-install.lock'
+    fd = os.open(name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        value = os.fstat(fd)
+        if not stat.S_ISREG(value.st_mode) or value.st_uid != 0 or value.st_nlink != 1 or value.st_mode & 0o777 != 0o600:
+            raise InstallerError('Unsafe installation lock file.')
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise InstallerError('Another fresh installation is running on this management machine.') from None
+        yield
+    finally:
+        os.close(fd)
+
+
+def fingerprint(paths):
+    return {str(p): file_hash(p) for p in paths}
+
+
+class Transaction:
+    """Durable parent WAL. Neither interrupted nor failed children are replayed."""
+    def __init__(self, output, inputs, *, emit=print):
+        self.output = Path(output)
+        self.emit = emit
+        self.inputs = dict(inputs)
+        if self.output.exists() or self.output.is_symlink():
+            raise InstallerError('Installation directory already exists: ' + str(self.output)
+                                 + '. Inspect its journal; no overwrite, resume or automatic repair is performed.')
+        self.output.mkdir(mode=0o700)
+        self.record = {'schema_version': SCHEMA, 'status': 'SCANNING', 'inputs': self.inputs,
+                       'completed': [], 'active_phase': 'scan', 'guests_created': False,
+                       'created_at': int(time.time())}
+        self.save()
+
+    def save(self):
+        write(self.output / 'installation.json', self.record)
+
+    def unchanged(self):
+        if fingerprint(self.inputs) != self.inputs:
+            raise InstallerError('An approved configuration, source or environment receipt changed. Stop and inspect the journal.')
+
+    def fail(self, error):
+        self.record.update(status='NEEDS_REVIEW', error_type=type(error).__name__,
+            error_frames=[{'file':Path(f.filename).name,'function':f.name,'line':f.lineno}
+                          for f in traceback.extract_tb(error.__traceback__)[-6:]])
+        self.save()
+
+    def scan(self, callback):
+        try:
+            self.unchanged()
+            plan = callback()
+            if not isinstance(plan, dict) or plan.get('blockers'):
+                blockers = plan.get('blockers', []) if isinstance(plan, dict) else []
+                raise InstallerError('Installation checks failed: ' + ', '.join(blockers))
+            self.unchanged()
+            write(self.output / 'plan.json', plan)
+            self.record.update(status='AWAITING_APPROVAL', active_phase=None, plan_sha256=digest(plan))
+            self.save()
+            return plan
+        except BaseException as error:
+            self.fail(error)
+            raise
+
+    def apply(self, plan, phases):
+        if (self.record['status'] != 'AWAITING_APPROVAL'
+                or self.record['plan_sha256'] != digest(plan)
+                or json.loads((self.output / 'plan.json').read_bytes()) != plan
+                or tuple(phases) != PHASES):
+            raise InstallerError('Complete, unchanged built-in installation plan required.')
+        try:
+            for name in PHASES:
+                self.unchanged()
+                self.emit('Installing: ' + name, flush=True)
+                self.record.update(status='RUNNING', active_phase=name)
+                self.save()  # Write intent BEFORE allowing any child mutation.
+                result = phases[name]()
+                if not isinstance(result, dict) or result.get('blockers'):
+                    raise InstallerError('Phase ' + name + ' did not confirm completion.')
+                write(self.output / (name + '-result.json'), result)
+                if name == 'platform' and (result.get('status') != 'PLATFORM_READY_NO_SWARM_CREATED'
+                                           or result.get('guests_launched') is not False):
+                    raise InstallerError('Full authenticated API/GUI acceptance is not complete; the installation is NOT ready.')
+                if result.get('status')!=RESULTS[name]:
+                    raise InstallerError('Phase '+name+' returned an unexpected/incomplete status; the installation is NOT ready.')
+                self.record['completed'].append(name)
+                self.record.update(status='PHASE_BOUNDARY', active_phase=None)
+                self.save()
+            self.unchanged()
+            self.record.update(status='OPENSTACK_READY_NO_SWARM_CREATED')
+            self.save()
+            return self.record
+        except BaseException as error:
+            self.fail(error)
+            raise
+
+
+def approve(deployment, plan, *, yes=False, stream=None):
+    """Never infer permission from a noninteractive session or a stale receipt."""
+    stream = stream or sys.stdin
+    if not yes and not stream.isatty():
+        raise InstallerError('Installation requires confirmation. Run interactively, or explicitly supply --yes after reviewing --check.')
+    print('All configured hosts will be prepared and a NEW OpenStack cloud installed.')
+    print('Disks are not formatted; existing state is never removed automatically. No Swarm or guest is created.')
+    for name, host in plan['hosts'].items():
+        print('  ' + name + ': ' + ', '.join(host['roles']))
+        for pool in plan.get('storage',{}).get(name,[]):
+            print('    Pool '+pool['id']+': '+pool['path']+'; budget '+str(pool['budget_gib'])
+                  +' GiB, host reserve '+str(pool['reserve_gib'])+' GiB')
+            if pool['mount']=='/':
+                print('    WARNING: this pool shares the root filesystem with the OS; the reserve is not a disk partition.')
+    if plan.get('management_mode')=='shared-interface':
+        print('WARNING: shared-interface management is not an encrypted inter-host network. Review exposure before approval.')
+    if yes:return
+    print('Type the deployment name to approve (' + deployment + '): ', end='', flush=True)
+    if stream.readline().strip() != deployment:
+        raise InstallerError('Installation not approved; no installation phase was started.')
+
+
+def parser():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--config', required=True, help='Infrastructure-only deployment YAML; no provider config or guest build')
+    p.add_argument('--environment', required=True, help='READY prepare-environment directory')
+    p.add_argument('--output', required=True, help='New root-protected transaction directory')
+    p.add_argument('--identity-file', help='Local operator SSH private key; never copied to a server')
+    p.add_argument('--known-hosts', help='Local SSH trust file; otherwise use invoking-user defaults')
+    p.add_argument('--check', action='store_true', help='Read-only host scan and local plan only; no host mutation/download')
+    p.add_argument('--yes', action='store_true', help='Explicit approval of installation after successful all-host checks')
+    p.add_argument('--allow-experimental-ubuntu26', action='store_true')
+    return p
+
+
+def main(argv=None):
+    args = parser().parse_args(argv)
+    transaction=None
+    try:
+        if os.geteuid() != 0:
+            raise InstallerError('Run the installation coordinator with sudo; bootstrap remains a separate operation.')
+        protected_parent(Path(args.output).parent)
+        # Import only after parsing --help; this module has no third-party dependency.
+        from openstack_install_phases import Installation
+        installation = Installation(args)
+        with deployment_lock():
+            transaction = Transaction(args.output, installation.inputs)
+            installation.transaction = transaction
+            plan = transaction.scan(installation.scan)
+            print('All-host installation checks passed. Plan: ' + str(transaction.output / 'plan.json'), flush=True)
+            if args.check:
+                transaction.record.update(status='CHECKED_NOT_INSTALLED')
+                transaction.save()
+                return 0
+            try:
+                approve(installation.cfg['deployment_id'], plan, yes=args.yes)
+                result = transaction.apply(plan, installation.phases())
+            except BaseException as error:
+                if transaction.record['status'] != 'NEEDS_REVIEW':
+                    transaction.fail(error)
+                raise
+            print(result['status'])
+            print('OpenStack UI: https://' + installation.cfg['network']['api_vip'] + ':9999')
+            print('No images, flavors, provider templates or Swarm clusters were created.')
+            return 0
+    except InstallerError as error:
+        print('ERROR: ' + str(error), file=sys.stderr)
+    except KeyboardInterrupt:
+        print('Installation interrupted. Inspect the transaction before any new attempt; no automatic replay.',file=sys.stderr)
+        return 130
+    except Exception as error:
+        # Do not stringify exceptions from network/pip/API clients: they may contain credentials.
+        detail=('Inspect '+str(Path(args.output)/'installation.json')+' and the active phase log.'
+                if transaction is not None else
+                'Local input validation failed before a transaction was created; check the selected config, bundle and READY environment.')
+        print('ERROR: installation stopped (' + type(error).__name__ + '). '+detail+
+              ' No automatic retry or cleanup was performed.', file=sys.stderr)
+    return 2
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

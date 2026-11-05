@@ -11,7 +11,7 @@ import subprocess
 from openstack_container_engine import write
 
 
-def prepare(value, path, backend, connection, cfg, project, user, output):
+def prepare(value, path, backend, connection, cfg, project, user, output, *, operations=None):
     from host_control_credentials import provision
     from host_control_install import source_files
     from openstack_spvm.host_control import binding
@@ -34,7 +34,11 @@ def prepare(value, path, backend, connection, cfg, project, user, output):
     # Check every host for conflicting/partial installations before creating
     # any Keystone identities or writing an executor onto any host.
     for name in sorted(receipt['hosts']):
-        remote(name,installer+'\nfresh()\nprint(json.dumps({"status":"FRESH"}))\n')
+        if operations is None:
+            remote(name,installer+'\nfresh()\nprint(json.dumps({"status":"FRESH"}))\n')
+        else:
+            result=operations('executor-probe',{'host':name})
+            if result.get('status')!='FRESH':raise ValueError('fresh executor probe not confirmed')
     auth_url=receipt['bootstrap_runtime']['auth_url']
     region=receipt['bootstrap_runtime']['region_name']
     dispatcher_path=Path('/etc/spvm/host-control-dispatcher-credentials.json')
@@ -64,10 +68,13 @@ def prepare(value, path, backend, connection, cfg, project, user, output):
         policy={'schema_version':1,'project_id':project,'target':target,'dispatcher_user_ids':[dispatch['user_id']],
             'credentials':'/etc/spvm/host-control-credentials.json'}
         # Secrets travel over the operator's verified installation SSH channel,
-        # never argv, stdout, reports, deployment YAML or a reusable staging file.
+        # never argv, terminal output, reports, deployment YAML or a reusable
+        # staging file. Remote completion uses only its encrypted framed stdio
+        # transport; those frames are not printed or persisted by the operator.
         body=installer+'\nSPVM_INSTALL_POLICY='+repr(policy)+'\nSPVM_INSTALL_CREDENTIALS='+repr(private)+'\nSPVM_INSTALL_SOURCES='+repr(sources)+\
             '\nprint(json.dumps(install(SPVM_INSTALL_POLICY,SPVM_INSTALL_CREDENTIALS,SPVM_INSTALL_SOURCES)))\n'
-        result=remote(name,body)
+        result=(remote(name,body) if operations is None else
+                operations('executor-install',{'host':name,'policy':policy,'credentials':private}))
         if result['status']!='HOST_EXECUTOR_INSTALLED' or result['user_id']!=target['user_id']:
             raise ValueError('host executor installation acknowledgement differs')
         targets[name]=target

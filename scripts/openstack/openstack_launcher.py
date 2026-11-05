@@ -97,15 +97,19 @@ def stage(backend,source,revision,output):
     source=Path(source)
     if not source.is_absolute() or source.resolve()!=source or not source.is_dir():
         raise ValueError('absolute non-symlink local tools checkout required')
-    resolved=command(['git','-C',str(source),'rev-parse','--verify',revision+'^{commit}']).decode().strip()
+    # Trust only this explicitly selected canonical checkout for read-only
+    # object commands, never a global safe.directory or a wildcard. Raw blobs
+    # still have to match the selected recipe hashes, including under sudo.
+    git=['git','-c','safe.directory='+str(source),'-C',str(source)]
+    resolved=command(git+['rev-parse','--verify',revision+'^{commit}']).decode().strip()
     if resolved!=revision:raise ValueError('pinned tools commit missing')
     files={}
     for name in SCRIPTS:
         object_name=revision+':scripts/'+name
-        size=command(['git','-C',str(source),'cat-file','-s',object_name]).decode().strip()
+        size=command(git+['cat-file','-s',object_name]).decode().strip()
         if not size.isdigit() or not 0<int(size)<=1048576:
             raise ValueError('pinned launcher blob exceeds size limit')
-        files[name]=command(['git','-C',str(source),'cat-file','blob',object_name])
+        files[name]=command(git+['cat-file','blob',object_name])
     if {n:sha(b) for n,b in files.items()}!=value['source_sha256']:
         raise ValueError('pinned launcher source mismatch')
     output=Path(output)

@@ -5,6 +5,47 @@ claim that installation is unattended or that a fresh operating system was teste
 See [the deployment guide](OPENSTACK_DEPLOYMENT.md) for command schemas and safety
 boundaries. Repository documentation must remain in English.
 
+## Planned follow-up: immutable, CI-validated installation kit (2026-11-05)
+
+Status: **planned, not implemented**. Local Skyline adaptation and successful
+artifact assembly do not complete this work. The earlier checkpoints below
+remain historical, not evidence for the new kit.
+
+Motivation: previously pinned upstream manifests became unavailable; replacing
+them with reachable images exposed a different Skyline asset layout. The unified
+installer also had an isolated sibling-import defect. Mock-only checks and
+registry metadata inspection did not exercise the complete real-image path.
+
+- Build matched Nova and Skyline derivative images in CI, not for the first time
+  on the customer's management host. Keep Skyline customization in swarm-cloud;
+  keep installation orchestration in sp-vm-tools.
+- Publish one compatibility manifest binding installer and Kolla revisions,
+  driver wheel, launcher, GUI sources, base/derivative image digests and archive
+  checksums. Refuse mismatched components; do not add old-workspace migrations.
+- Store required images in an operator-controlled release registry with an
+  explicit retention policy. Provide a checksum-verified offline installation
+  kit for the declared supported scope; enumerate any remaining online
+  dependencies. A digest proves identity, not registry availability.
+- Use unique immutable published release identifiers. A mutable development
+  channel may point to a release, but must not be the installation identity or
+  silently replace bytes under an already published version.
+- Require CI to exercise the real pinned images, isolated builder imports,
+  exact source hashes and unique patch sites, complete offline derivative
+  builds, served identity/gzip assets and browser login rendering. Keep mock
+  tests, but never present them as real-image or authenticated cloud acceptance.
+- Before any remote mutation, verify the complete kit's compatibility,
+  checksums, required artifact availability and local runtime prerequisites.
+  Report actionable errors; never fall back to floating tags, unknown patches
+  or checksum bypasses.
+
+Acceptance: a fresh management environment installs using the published kit
+without compiling or patching Skyline/Nova locally. A mismatched kit, tampered
+artifact, missing registry image or unavailable required dependency fails before
+host changes. Test the documented offline scope without outbound access. Keep
+clean-OS deployment and authenticated live GUI/API acceptance separate from
+local artifact/browser checks. Publish the tested component inventory and
+precise acceptance scope with the release, without credentials.
+
 ## Intended operator experience
 
 1. Prepare confidential-computing hardware separately using the existing

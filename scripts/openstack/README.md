@@ -11,6 +11,15 @@ here; hardware bootstrap and VM launcher scripts remain separate in `scripts/`.
 Keep these modules together: they use sibling imports and source-hash bindings.
 No compatibility copies are maintained in the parent directory.
 
+`install-openstack.sh install` is the integrated fresh-install entry point.
+`openstack_install_entry.py` selects the explicit READY Python environment;
+`openstack_install.py` owns the durable transaction/approval; fixed phases live
+in `openstack_install_phases.py`, with artifact and controller-completion helpers.
+There are no executable YAML recipes or persistent SSH execution endpoints.
+See [one-command fresh installation](../../docs/OPENSTACK_SINGLE_INSTALL.md) for
+the supported profile, management Docker prerequisite, error/retry rules and
+the pending live acceptance boundary.
+
 GPU preparation and explicit empty-host GPU configuration are described in
 [GPU profiles](../../docs/OPENSTACK_GPU_PROFILES.md). Control-plane restarts are
 part of the explicit technical-settings transaction, not display-name updates.

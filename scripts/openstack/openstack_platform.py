@@ -396,7 +396,7 @@ def activate_host_worker(path,spec,user,catalog,output):
     return result
 
 
-def post_install(value,path,backend,output,core):
+def post_install(value,path,backend,output,core,*,operations=None):
     """No resume: every mutating child owns a WAL; ambiguous failures require review."""
     from openstack.connection import Connection
     from keystoneauth1.identity.v3 import Password
@@ -463,6 +463,13 @@ def post_install(value,path,backend,output,core):
             return network.execute(args,path,connection)
         net=phase('shared-network',shared_network)
         def stage_enrollment():
+            if operations is not None:
+                documents=operations('stage-enrollment',{'project':project,'user':user,'network':net['network_id'],
+                    'release_registration':bool(spec.get('release_registration'))})
+                target=output/'enrollment';target.mkdir(mode=0o700)
+                write(target/'enrollment-plan.json',documents['plan'])
+                write(target/'runtime-services.json',documents['runtime'])
+                return {'status':'SPVM_ENROLLMENT_STAGED_NOT_APPLIED'}
             request=output/'enrollment-request.json'
             write(request,{'schema_version':1,'projects':{project:{'publisher_user_ids':[user],'reader_user_ids':[user],
                 'network_ids':[net['network_id']],'releases':[],
@@ -478,11 +485,24 @@ def post_install(value,path,backend,output,core):
             return resources.execute(args,path,connection)
         probe=phase('project-resources-and-barbican',project_resources)
         if not probe['passed'] or not probe['cleanup_complete']:raise ValueError('Barbican probe failed')
-        phase('runtime-requests',lambda:runtime.stage(R(workspace=value['workspace'],enrollment_plan=enrollment_path,output=str(output/'runtime-requests')),path))
+        def runtime_requests():
+            if operations is None:
+                return runtime.stage(R(workspace=value['workspace'],enrollment_plan=enrollment_path,output=str(output/'runtime-requests')),path)
+            documents=operations('stage-runtime',{})
+            target=output/'runtime-requests';target.mkdir(mode=0o700)
+            if set(documents)!=set(binding['hosts']):raise ValueError('complete runtime request fleet required')
+            for name,document in documents.items():write(target/(name+'.json'),document)
+            return {'status':'RUNTIME_REQUESTS_STAGED'}
+        phase('runtime-requests',runtime_requests)
         for name in sorted(binding['hosts']):
             def activate_compute(name=name):
                 target=output/('compute-'+name);target.mkdir(mode=0o700)
                 wanted=json.loads(read(output/'runtime-requests'/(name+'.json')))
+                if operations is not None:
+                    result=operations('activate-compute',{'host':name,'request':wanted})
+                    if result.get('status')!='COMPUTE_READY' or result.get('guests_restarted') is not False:
+                        raise ValueError('remote coordinated compute activation incomplete')
+                    return result
                 runner=Backend(cfg,spec['controller'],str(Path(spec['sdk_venv'])/'bin/python'),str(authdir/'admin-openrc.sh'),target/'observations',enrollment=wanted)
                 plan=runner.plan(name);write(target/'plan.json',plan)
                 result=activate(plan,plan['plan_sha256'],target/'transaction',runner)
@@ -491,7 +511,7 @@ def post_install(value,path,backend,output,core):
             phase('compute-'+name,activate_compute)
         def quota():
             import resource_audit
-            physical=resource_audit.validate(cfg,backend.host_audits(cfg))
+            physical=resource_audit.validate(cfg,backend.host_audits(cfg) if operations is None else operations('host-audits',{}))
             limits={'cores':sum(h['vm_capacity_ceiling']['vcpus'] for h in physical['hosts'].values()),
                     'ram':sum(h['vm_capacity_ceiling']['memory_mb'] for h in physical['hosts'].values())}
             limits['instances']=limits['cores'];before=connection.compute.get_quota_set(project)
@@ -547,7 +567,7 @@ def post_install(value,path,backend,output,core):
         phase('web-stage',web_stage)
         from openstack_host_control import prepare as prepare_host_control
         executors=phase('host-executors',lambda:prepare_host_control(
-            value,path,backend,connection,cfg,project,user,output/'host-executors'))
+            value,path,backend,connection,cfg,project,user,output/'host-executors',operations=operations))
         catalog=phase('host-catalogs',lambda:prepare_host_catalog(
             value,path,backend,connection,spec,cfg,project,user,executors))
         def web_install():

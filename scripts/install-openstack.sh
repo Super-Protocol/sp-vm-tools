@@ -2,4 +2,8 @@
 # Keep host BIOS/TDX/SEV/libvirt preparation in the separate bootstrap scripts.
 set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "${1:-}" == install ]]; then
+    shift
+    exec "${SPVM_INSTALLER_PYTHON:-python3}" "${SCRIPT_DIR}/openstack/openstack_install_entry.py" "$@"
+fi
 exec "${SPVM_INSTALLER_PYTHON:-python3}" "${SCRIPT_DIR}/openstack/openstack_installer.py" "$@"

@@ -2,6 +2,13 @@
 
 ## Current installation boundary
 
+For a fresh cloud, use the integrated [`install` entry point](OPENSTACK_SINGLE_INSTALL.md):
+one infrastructure YAML, an existing READY environment and a new transaction
+directory. It owns the all-host scan, confirmation and internal phase ordering.
+The separate commands below remain diagnostic/advanced phase interfaces, not a
+required sequence of manual approvals for the integrated scenario. Its current
+profile and synthetic-versus-live acceptance limits are explicit in that guide.
+
 ### Local SSH settings: optional CLI overrides
 
 SSH key/trust paths belong to the **management machine**, not the target hosts.
