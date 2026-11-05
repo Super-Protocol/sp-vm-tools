@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+from openstack_errors import InstallerError
 from urllib.request import Request, urlopen
 
 MAX_ARCHIVE = 256 * 1024 * 1024
@@ -195,6 +196,11 @@ def main(argv=None):
         parser.error('backend command required after --; use -- --help to list commands')
     try:
         path = select(args)
+    except (OSError, ValueError, tarfile.TarError):
+        print('ERROR: driver source selection failed; check source, checksum, manifest and staging path. '
+              'Partial staging is preserved; no backend was started.', file=sys.stderr)
+        return 2
+    try:
         if remaining[0]=='prepare-gpus':
             from openstack_gpu_prepare import main as gpu_prepare
             return gpu_prepare(path,remaining)
@@ -300,9 +306,13 @@ def main(argv=None):
             return prepare_engine(path,remaining)
         # No sudo, pip installs, bootstrap invocation or hardware changes here.
         return subprocess.run([sys.executable, str(path), *remaining], check=False).returncode
-    except (OSError, ValueError, tarfile.TarError):
-        print('ERROR: driver source selection failed; check source, checksum, manifest and staging path. '
-              'Partial staging is preserved; no backend was started.', file=sys.stderr)
+    except InstallerError as error:
+        print('ERROR: '+str(error),file=sys.stderr)
+        return 2
+    except (OSError, ValueError, tarfile.TarError) as error:
+        print('ERROR: command '+remaining[0]+' failed ('+type(error).__name__+'). '
+              'Driver selection succeeded. Preserve any partial plan/transaction and inspect this phase; '
+              'do not automatically retry a preparation.',file=sys.stderr)
         return 2
 
 

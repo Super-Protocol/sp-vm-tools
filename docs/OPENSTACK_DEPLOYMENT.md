@@ -798,9 +798,50 @@ The coordinator uses verified SSH, inspects all compute hosts before mutation,
 and refuses enrolled hosts or any existing domain/guest. Planning is read-only
 on hosts. Preparation creates only empty `spvm-state` directories (root-owned,
 Nova group traversal); it does not format, repartition, mount, delete or move
-anything. Existing nonempty targets are refused. The original YAML is unchanged.
+anything. Existing nonempty targets are refused by default with a host/path
+diagnostic and an explicit replacement suggestion. The original YAML is unchanged.
 The plan is bound to source/config/known-host hashes and current observations;
 an attempted transaction is never automatically replayed after interruption.
+
+#### Existing state directories during fresh installation
+
+The installer distinguishes driver-selection failures from failures of an actual
+command. Storage validation errors identify the affected host/path and suggest
+an action; arbitrary remote stderr, tracebacks and credentials are not printed.
+The selected bundle must advertise `storage-replacement-diagnostics-v1`. Do not
+edit an extracted verified bundle to bypass that gate: select a matching build.
+
+A directory containing only `.spvm-claims.json` or `.spvm-state.lock` is still
+nonempty. Neither their presence nor their apparent size is permission to erase
+them. To request replacement, repeat **planning** with `--replace-existing-state`
+and a new output directory:
+
+```bash
+sudo scripts/install-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
+  plan-storage --config /srv/operator/deployment.yaml \
+  --known-hosts /srv/operator/known_hosts --replace-existing-state \
+  --output /srv/storage-replacement-plan-01
+```
+
+This remains read-only on the hosts. Review `storage-plan.json`: each replacement
+records the original path, a bounded tree-metadata fingerprint and an exact
+sibling backup path such as `/data/spvm-state.spvm-backup-<transaction-id>`.
+Then invoke `prepare-storage` with that plan directory and its approved
+`--plan-sha256` (without `--replace-existing-state`). The approved preparation
+renames each old directory to the recorded backup and creates a fresh empty
+directory at its original path. It does **not** merge/adopt old claims, delete
+backups, format storage or reclaim the disk space occupied by backups.
+
+Replacement never overrides the empty/unenrolled-host requirement. All hosts are
+validated before the first mutation; host safety is checked again under the
+host preparation lock. Changed trees, backup collisions, symlinks, mounted
+subtrees and special files are refused. Inspection is bounded to 10,000 entries
+and compares metadata, not guest-disk content hashes. Stop other administrative
+writers while preparing storage. This is not an atomic multi-host transaction:
+on partial failure, preserve the plan, backups and `storage-transaction.json`;
+review them manually. Never replay a previously attempted preparation or
+automatically remove/restore backups. A backup already renamed before a later
+failure remains recoverable at the exact path recorded in the plan.
 
 Discovery accepts mounted local block-backed ext4/XFS. It excludes system,
 network, temporary, loop, read-only, symlink and subtree/bind presentations, and
