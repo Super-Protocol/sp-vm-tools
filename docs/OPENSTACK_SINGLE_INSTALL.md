@@ -233,6 +233,19 @@ Kolla passwords/TLS keys, API credentials, provider configuration or SSH keys.
 
 ## Acceptance boundary
 
+### Test-image continuation validation (2026-11-05)
+
+Installer fix `fa4c79b` passed 45 targeted installer/continuation/Skyline checks.
+Real read-only validation of the prepared `.247`/`.245` run passed, followed by
+actual Kolla `prechecks` with explicit test-image acknowledgement, including
+Nova, Neutron and Skyline checks. Protected host observations before/after were
+identical with the libvirt connections held. Evidence is private under
+`/var/lib/spvm-openstack-install-01/run-04-real-prechecks-01`; the explicit
+continuation was not reserved and no `deploy` or platform completion was run.
+This proves the prechecks fix, not a completed cloud installation. Continue the
+reviewed failed run using a new output directory and `--continue-from`, never
+by changing the failed journal's status or replaying initial preparation.
+
 This new entry point has synthetic failure/order/approval/protocol checks and
 local shell/Python/help checks. Those **do not establish** clean-OS, cold-cache,
 real Kolla deployment, Ubuntu26 dependency resolution, reboot, API-canary or
