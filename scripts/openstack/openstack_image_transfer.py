@@ -196,13 +196,16 @@ def deliver(args):
             or type(args.ssh_port) is not int or not 1<=args.ssh_port<=65535
             or type(args.reserve_gib) is not int or args.reserve_gib<1):
         raise ValueError('explicit SSH target, fingerprint and valid port/reserve required')
-    for path in (args.identity_file,args.known_hosts):
-        if not read(path):raise ValueError('explicit nonempty SSH identity and trusted known-hosts file required')
+    from openstack_ssh import transport
+    ssh=transport()
+    selected=ssh.policy()
+    if args.identity_file:selected=ssh.resolve(args.identity_file,args.known_hosts)
+    args.known_hosts=args.known_hosts or selected['known_hosts']
+    for path in [*selected['identity_files'],args.known_hosts]:
+        if not read(path):raise ValueError('selected SSH identity/trust file must be readable and nonempty')
     target=args.host
-    options=['-F','/dev/null','-i',args.identity_file,'-o','IdentityAgent=none','-o','IdentitiesOnly=yes',
-             '-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile='+args.known_hosts,
-             '-o','ConnectTimeout=10','-o','ServerAliveInterval=15','-o','ServerAliveCountMax=3',
-             '-o','ForwardAgent=no','-o','ClearAllForwardings=yes']
+    options=ssh.options(selected,known_hosts=args.known_hosts)+[
+             '-o','ServerAliveInterval=15','-o','ServerAliveCountMax=3']
     output=Path(args.output)
     if output.is_relative_to(Path(args.package)) or Path(args.package).is_relative_to(output):
         raise ValueError('delivery journal must be outside package')
@@ -278,8 +281,8 @@ def main(backend,argv):
                 raise ValueError('export requires only build receipt approval and immutable image ID')
             result=export(args)
         elif args.action=='deliver-compute-image':
-            if not all((args.package,args.package_sha256,args.machine_sha256,args.host,args.identity_file,args.known_hosts)) or any((args.build_receipt,args.build_sha256,args.image_id)):
-                raise ValueError('delivery requires approved package, exact machine and explicit SSH trust/identity')
+            if not all((args.package,args.package_sha256,args.machine_sha256,args.host)) or any((args.build_receipt,args.build_sha256,args.image_id)):
+                raise ValueError('delivery requires approved package, exact machine and SSH target; identity/trust CLI overrides are optional')
             result=deliver(args)
         else:
             if not all((args.package,args.package_sha256,args.machine_sha256)) or any((args.build_receipt,args.build_sha256,args.image_id)):

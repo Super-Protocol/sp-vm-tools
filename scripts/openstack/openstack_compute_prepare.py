@@ -236,8 +236,8 @@ def deploy(value,receipt,spec,alias,output):
     # Extra vars must point at the isolated copy, or the disabled-service guard
     # would be ignored despite writing the correct per-host override file.
     profile['node_custom_config']=str(root/'config')
-    profile['ansible_ssh_common_args']=('-F /dev/null -o IdentityAgent=none -o IdentitiesOnly=yes '
-        '-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='+value['known_hosts'])
+    from openstack_ssh import common_args
+    profile['ansible_ssh_common_args']=common_args(value['known_hosts'])
     write(output/'profile.json',profile)
     workspace.private_file(output/'ansible.cfg','[defaults]\nhost_key_checking = True\nretry_files_enabled = False\n')
     env={k:v for k,v in os.environ.items() if not k.startswith(('ANSIBLE_','KOLLA_','PYTHON','OS_'))}

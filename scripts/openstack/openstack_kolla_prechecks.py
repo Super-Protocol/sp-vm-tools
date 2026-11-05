@@ -81,7 +81,7 @@ def inputs(args,backend_path,backend):
     requests={}
     for name,host in cfg['hosts'].items():
         identity=host.get('identity_file')
-        if not identity or not read(identity):raise ValueError('explicit readable SSH identity required per host')
+        if identity and not read(identity):raise ValueError('selected SSH identity file must be readable')
         required={host['management_interface'],host['tunnel_interface']}
         if 'network' in host['roles']:
             required.add('spvm-ext0' if cfg['network']['mode']=='host-nat' else cfg['network']['external_interface'])
@@ -115,7 +115,7 @@ def inputs(args,backend_path,backend):
     fingerprint={'workspace_sha256':digest(receipt),'binding_sha256':binding['binding_sha256'],
         'use_testing_images':testing_images(args),
         'config_sha256':digest(cfg),'known_hosts_sha256':file_hash(trust),
-        'identity_files_sha256':{n:file_hash(h['identity_file']) for n,h in cfg['hosts'].items()},
+        'identity_files_sha256':{p:file_hash(p) for h in cfg['hosts'].values() for p in h['ssh_transport']['identity_files']},
         'installer_sha256':{n:file_hash(Path(__file__).with_name(n)) for n in
             ('openstack_kolla_prechecks.py','openstack_initial_probe.py','openstack_kolla_workspace.py','openstack_network_probe.py','openstack_network_runtime.py')},
         'requests':requests}
@@ -173,9 +173,9 @@ def execute(args,backend_path,backend):
         write(journal,record)
         try:
             config=output/'ansible.cfg'
+            from openstack_ssh import common_args
             workspace.private_file(config,'[defaults]\nhost_key_checking = True\nretry_files_enabled = False\n'
-                '[ssh_connection]\nusetty = False\nssh_args = -F /dev/null -o IdentityAgent=none -o IdentitiesOnly=yes '
-                '-o StrictHostKeyChecking=yes -o UserKnownHostsFile='+shlex.quote(str(args.known_hosts))+'\n')
+                '[ssh_connection]\nusetty = False\nssh_args = '+common_args(args.known_hosts)+'\n')
             env={k:v for k,v in os.environ.items() if not k.startswith(('ANSIBLE_','KOLLA_','PYTHON','OS_'))}
             env.update(PYTHONDONTWRITEBYTECODE='1',ANSIBLE_CONFIG=str(config),
                 ANSIBLE_COLLECTIONS_PATH=receipt['collections'],KOLLA_ANSIBLE_DATA_FILES_PATH=str(source),

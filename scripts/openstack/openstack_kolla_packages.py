@@ -156,13 +156,12 @@ def execute(args,backend_path,backend):
         write(journal,record)
         try:
             if any(not ready(f,selected,intent) for f in before.values()):
+                from openstack_ssh import common_args
                 workspace.private_file(output/'ansible.cfg','[defaults]\nhost_key_checking = True\n'
-                    'retry_files_enabled = False\n[ssh_connection]\nusetty = False\nssh_args = -F /dev/null '
-                    '-o IdentityAgent=none -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes '
-                    '-o UserKnownHostsFile='+shlex.quote(str(args.known_hosts))+'\n')
+                    'retry_files_enabled = False\n[ssh_connection]\nusetty = False\nssh_args = '+common_args(args.known_hosts)+'\n')
                 inventory={'all':{'hosts':{n:{'ansible_host':h['address'],'ansible_user':h['user'],
                     'ansible_connection':'ssh','ansible_python_interpreter':'/usr/bin/python3',
-                    'ansible_ssh_private_key_file':h['identity_file']} for n,h in cfg['hosts'].items()}}}
+                    **({'ansible_ssh_private_key_file':h['identity_file']} if h.get('identity_file') else {})} for n,h in cfg['hosts'].items()}}}
                 if selected=='api-trust':
                     for n,values in inventory['all']['hosts'].items():
                         values['spvm_api_ca_trusted']=intent['api_ca']['der_sha256'] in before[n]['api_trust']['bundle_certificates']

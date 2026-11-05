@@ -25,6 +25,10 @@ import openstack_platform as platform
 
 def request(filename):
     value=json.loads(read(filename))
+    from openstack_ssh import transport
+    ssh=transport().policy()
+    if ssh['explicit_known_hosts']:value['known_hosts']=ssh['known_hosts']
+    else:value.setdefault('known_hosts',ssh['known_hosts'])
     common={'schema_version','mode','config','workspace','known_hosts'}
     modes={
         'fresh':{'ack_new_cloud','allow_experimental_ubuntu26','use_testing_images'},
@@ -81,7 +85,7 @@ def context(path, value):
     module=existing.backend(path);original=module.ssh_arguments
     def ssh(host):
         args=original(host)
-        args[1:1]=['-F','/dev/null','-o','UserKnownHostsFile='+value['known_hosts'],'-o','ForwardAgent=no']
+        args[1:1]=['-o','UserKnownHostsFile='+value['known_hosts'],'-o','ForwardAgent=no']
         return args
     module.ssh_arguments=ssh
     try:yield module

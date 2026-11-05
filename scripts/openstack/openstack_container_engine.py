@@ -300,13 +300,12 @@ def execute(args, backend):
         write(journal_path,journal)
         if mode=='INSTALL':
             alias = host.get('inventory_name',args.host)
-            common_args='-o IdentityAgent=none -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes'
-            if args.known_hosts:
-                common_args+=' -o UserKnownHostsFile='+shlex.quote(args.known_hosts)
+            from openstack_ssh import common_args as ssh_common_args
+            common_args=ssh_common_args(args.known_hosts)
             inventory={'all':{'children':{'spvm_target':{'hosts':{alias:{
                 'ansible_host':host['address'],'ansible_user':host['user'],
                 'ansible_connection':'ssh','ansible_python_interpreter':'/usr/bin/python3',
-                'ansible_ssh_private_key_file':host.get('identity_file'),
+                **({'ansible_ssh_private_key_file':host['identity_file']} if host.get('identity_file') else {}),
                 'ansible_ssh_common_args':common_args}}}}}}
             write(output/'inventory.json',inventory)
             write(output/'prepare-docker.json',playbook(current))

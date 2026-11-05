@@ -58,7 +58,7 @@ def inputs(value,path,module):
     spec=specification(outer['preparation'])
     target=cfg['hosts'][value['host']]
     if (not re.fullmatch(r'[a-z_][a-z0-9_-]*@[a-z0-9][a-z0-9.-]*',target['user']+'@'+target['address'])
-            or not target.get('identity_file') or not read(target['identity_file'])):
+            or target.get('identity_file') and not read(target['identity_file'])):
         raise ValueError('explicit supported SSH image-delivery identity required')
     # Reuse the already reviewed enrollment identity, pools and GPU donation.
     # No separate configuration may silently replace those values.
@@ -330,7 +330,7 @@ def execute(value,path,module,output,runner,approved):
         record['completed'].append('helper');record['phase']='DRIVER_IMAGE';write(journal,record)
         host=cfg['hosts'][value['host']]
         args=argparse.Namespace(package=spec['image_package'],package_sha256=spec['image_package_sha256'],
-            host=host['user']+'@'+host['address'],identity_file=host['identity_file'],
+            host=host['user']+'@'+host['address'],identity_file=host.get('identity_file'),
             known_hosts=value['known_hosts'],ssh_port=host.get('port',22),
             machine_sha256=wanted['helper_request']['machine_sha256'],
             reserve_gib=spec['image_reserve_gib'],output=str(output/'image-delivery'))

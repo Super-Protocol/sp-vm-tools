@@ -20,6 +20,13 @@ For both lab hosts set `management_interface: bond0.2907` and
 portable allocation for another deployment. The `api_vip` field in this profile
 means the controller's **already assigned address**, not an additional VIP.
 
+SSH key/trust paths are local CLI settings, not deployment YAML fields. Optional
+`--identity-file` / `--known-hosts` overrides go before the installer's `--`
+separator. If omitted, the invoking user's standard keys/agent and known_hosts
+are used, including when the coordinator runs through sudo. Strict host-key
+checking and no forwarding remain enforced; arbitrary SSH-config execution is
+not enabled. See the main deployment guide's local SSH settings section.
+
 ## Boundary and prerequisites
 
 - Exactly one controller, network and ingress node, all the same host. Compute

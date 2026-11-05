@@ -187,6 +187,8 @@ def main(argv=None):
     source.add_argument('--driver-release', help='Public GitHub owner/repository@tag')
     parser.add_argument('--sha256', help='Operator-trusted archive SHA256; mandatory for archive/release')
     parser.add_argument('--staging-dir', help='New private directory; parent must already exist')
+    parser.add_argument('--identity-file',help='Optional local SSH private key; otherwise use invoking-user standard keys/agent')
+    parser.add_argument('--known-hosts',help='Optional local SSH trust file; otherwise use invoking-user ~/.ssh/known_hosts')
     parser.add_argument('backend_args', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     remaining = args.backend_args
@@ -201,6 +203,34 @@ def main(argv=None):
               'Partial staging is preserved; no backend was started.', file=sys.stderr)
         return 2
     try:
+        # Resolve sudo's invoking user before any phase/child sanitizes its env.
+        # No private key data is serialized; only transport paths and policy.
+        sys.path.insert(0,str(path.parent))
+        if not (path.parent/'ssh_transport.py').is_file():
+            raise InstallerError('Selected driver lacks optional-cli-ssh-settings-v1. Select a matching updated bundle; do not edit a verified archive.')
+        import ssh_transport
+        def override(name):
+            flag='--'+name
+            for index in reversed(range(len(remaining))):
+                if remaining[index].startswith(flag+'='):return remaining[index].split('=',1)[1]
+                if remaining[index]==flag and index+1<len(remaining):return remaining[index+1]
+            return None
+        for name in ('identity-file','known-hosts'):
+            if getattr(args,name.replace('-','_')) and override(name):
+                raise InstallerError('Specify --'+name+' only once: before OR after the -- separator.')
+        try:
+            transport=ssh_transport.resolve(args.identity_file or override('identity-file'),
+                                            args.known_hosts or override('known-hosts'))
+        except (OSError,ValueError):
+            raise InstallerError('Cannot resolve local SSH settings. Check --identity-file / --known-hosts paths and permissions, or SSH_AUTH_SOCK ownership. Defaults belong to the invoking user, including under sudo.') from None
+        os.environ['SPVM_INSTALLER_SSH_POLICY']=json.dumps(transport,sort_keys=True)
+        os.environ['SPVM_INSTALLER_SSH_BACKEND']=str(path.parent)
+        trust_commands={'plan-storage','prepare-storage','prepare-gpus',
+            'plan-base-packages','prepare-base-packages','plan-host-sdk','prepare-host-sdk','plan-api-trust','prepare-api-trust',
+            'initial-host-status','plan-kolla-prechecks','run-kolla-prechecks','plan-kolla-install','run-kolla-install',
+            'verify-kolla-existing','plan-container-engine','prepare-container-engine'}
+        if remaining[0] in trust_commands and override('known-hosts') is None:
+            remaining+=['--known-hosts',transport['known_hosts']]
         if remaining[0]=='prepare-gpus':
             from openstack_gpu_prepare import main as gpu_prepare
             return gpu_prepare(path,remaining)

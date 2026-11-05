@@ -52,8 +52,8 @@ def inputs(args, module):
     if len(selected) != sum('compute' in h['roles'] for h in cfg['hosts'].values()) or not selected:
         raise ValueError('unique compute inventory aliases required')
     specs = {}; hashes = {}
-    transport = ('-F /dev/null -o IdentityAgent=none -o IdentitiesOnly=yes '
-                 '-o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='+str(trust))
+    from openstack_ssh import common_args
+    transport=common_args(str(trust))
     for filename in args.compute_request:
         spec = compute.request(json.loads(read(filename)))
         alias = spec['host']

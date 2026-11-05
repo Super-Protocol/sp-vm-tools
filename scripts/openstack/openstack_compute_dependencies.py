@@ -65,9 +65,10 @@ def prepare(value,module,receipt,public_ca,output,runner):
     alias=host.get('inventory_name',value['host']);output.mkdir(mode=0o700,exist_ok=False)
     # Both one-host inventory and --limit are used; no all-cloud packages phase.
     import shlex
-    common='-F /dev/null -o IdentityAgent=none -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o ForwardAgent=no -o UserKnownHostsFile='+shlex.quote(value['known_hosts'])
+    from openstack_ssh import common_args
+    common=common_args(value['known_hosts'])
     inventory={'all':{'hosts':{alias:{'ansible_host':host['address'],'ansible_user':host['user'],
-        'ansible_ssh_private_key_file':host['identity_file'],'ansible_python_interpreter':'/usr/bin/python3',
+        **({'ansible_ssh_private_key_file':host['identity_file']} if host.get('identity_file') else {}),'ansible_python_interpreter':'/usr/bin/python3',
         'ansible_ssh_common_args':common}}}}
     write(output/'inventory.json',inventory)
     plays=packages.playbook('base-packages')+packages.playbook('host-sdk')+packages.playbook('api-trust',public_ca)

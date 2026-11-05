@@ -2,6 +2,55 @@
 
 ## Current installation boundary
 
+### Local SSH settings: optional CLI overrides
+
+SSH key/trust paths belong to the **management machine**, not the target hosts.
+Do not put `identity_file` in deployment YAML. The public installer accepts
+optional `--identity-file` and `--known-hosts` before the `--` separator:
+
+```bash
+sudo /srv/environment/installer-venv/bin/python scripts/openstack/openstack_installer.py \
+  --driver-dir /srv/verified-driver-bundle \
+  --identity-file /home/operator/.ssh/openstack_key \
+  --known-hosts /home/operator/.ssh/known_hosts \
+  -- plan-storage --config /srv/operator/deployment.yaml --output /srv/storage-plan-01
+```
+
+Omit both overrides to use the invoking user's standard `~/.ssh/id_ed25519`,
+`id_ed25519_sk`, `id_ecdsa`, `id_ecdsa_sk`, `id_rsa` identities and available local
+SSH agent. Under sudo, the invoking user's home is resolved through `SUDO_UID`
+and the password database, not root's home or `$HOME`. An explicitly selected
+identity restricts authentication to that key and disables agent use. Arbitrary
+key filenames are not scanned; pass `--identity-file` for them. Interactive
+password/passphrase prompting remains disabled. For encrypted keys, unlock them
+in an agent and omit `--identity-file`; an explicit file must be usable without
+interactive prompting or agent assistance. Hardware-backed keys can still require user presence.
+
+The default trust file is the invoking user's `~/.ssh/known_hosts`, with the
+system `/etc/ssh/ssh_known_hosts` as fallback if the user file is absent. Explicit
+`--known-hosts` overrides it. Existing per-command `--known-hosts` options also
+remain valid CLI overrides. Workflow requests can omit their `known_hosts`
+field; the CLI-selected/default local trust file is resolved before planning.
+Host-key checking is always strict: unknown/changed keys require administrator
+verification. The installer does not learn or accept keys automatically.
+
+These are deliberately constrained installer defaults, not arbitrary SSH-config
+execution: user `~/.ssh/config`, ProxyCommand/ProxyJump and forwarding are not
+implicitly enabled. Agent authentication is local only; `ForwardAgent=no` and
+`ClearAllForwardings=yes` remain enforced. For agent-only use under sudo, preserve
+`SSH_AUTH_SOCK` explicitly (for example `sudo --preserve-env=SSH_AUTH_SOCK ...`);
+the socket must be owned by the invoking user. No agent socket, private key or
+credential is copied to a target. Worker/service accounts need their own approved
+local credentials and trust configuration; an interactive agent is not durable
+service authorization.
+
+SSH, SCP image delivery and Ansible/Kolla use the same resolved policy. Use the
+same CLI overrides and agent context for planning, workspace rendering and apply;
+resolved paths/policy and identity/trust hashes participate in approvals. Changes
+require a new plan/workspace, not bypassing drift checks. Matching frontend and
+driver with `optional-cli-ssh-settings-v1` are required. Older experimental YAML
+containing `identity_file` must be edited explicitly; no migration is performed.
+
 Install infrastructure first, configure Swarm afterwards. The current deployment
 schema does not accept `guest_release`, `provider_config`, `domains` or per-host
 `bootstrap_release`. The platform schema no longer accepts `profiles`,
@@ -1804,11 +1853,12 @@ hand-edit a receipt or invent a fingerprint to pass this check.
   --plan-sha256 '<approved plan_sha256>'
 ```
 
-Use the private workspace owner with explicit per-host `identity_file` in the
-deployment config and working non-interactive sudo on targets. The Ubuntu 26
+Use the private workspace owner with optional local SSH CLI overrides (see the
+SSH settings section above) and working non-interactive sudo on targets. The Ubuntu 26
 flag acknowledges experimental support; it does not falsify Ansible facts.
-An explicit SSH trust file is used by both probes and Ansible. User SSH config
-is ignored, agent use/forwarding is disabled, and host-key checking stays strict.
+The resolved SSH trust file is used by both probes and Ansible. User SSH config
+is ignored; local agent authentication is supported but forwarding is disabled,
+and host-key checking stays strict.
 
 Review `prechecks-plan.json` before execution. A blocked plan returns a failing
 exit code and names blockers. The 900-second approval binds workspace/config,
