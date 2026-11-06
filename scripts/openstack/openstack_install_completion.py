@@ -66,7 +66,8 @@ def rpc_process(i, argv, payload, handler=None, *, timeout=1800):
                     raise InstallerError('Controller installation operation timed out; inspect both journals.')
                 line = child.stdout.readline(LIMIT + 1)
                 if not line or len(line) > LIMIT or not line.endswith(b'\n'):
-                    raise InstallerError('Controller installation channel ended without a valid acknowledgement.')
+                    raise InstallerError('Controller installation channel ended without a valid acknowledgement. '
+                        'Inspect private controller log '+str(log)+'. Do not replay the failed platform transaction.')
                 frame = json.loads(line)
                 if set(frame) == {'result'}:
                     child.stdin.close()
