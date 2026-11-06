@@ -128,7 +128,8 @@ Already completed installations remain a no-op, without a continuation prompt.
 
 Continuation is selected from the journal, not from an administrator-supplied
 phase name. The currently supported post-mutation boundaries are the reviewed
-test-image Kolla prechecks refusal and the reviewed OVN router refusal below.
+test-image Kolla prechecks refusal, the reviewed OVN router refusal, and the
+first-compute enrollment boundary below.
 Other interrupted or failed operations stop with the phase and evidence path:
 the installer does **not** assume that a failed command made no changes. This
 does not implement arbitrary-phase recovery or rollback. Completed host
@@ -242,6 +243,38 @@ are relayed through management-process memory over these verified channels,
 never printed as terminal output or stored in local phase reports. Closing the session removes
 the dialogue, not the permanent cloud services.
 
+The controller preparation/completion SSH channel uses encrypted OpenSSH
+keepalive probes (`ServerAliveInterval=15`, `ServerAliveCountMax=12`), including
+while the management process executes a long compute callback. An unresponsive
+peer is detected after approximately three minutes; keepalive does not extend
+operation deadlines, retry failed operations, or acknowledge completed work.
+After a disconnect, inspect both transaction journals before continuing: a
+remote process may still be waiting for an acknowledgement. Keepalive reduces
+idle-channel failures but is not a recovery mechanism or proof of their cause.
+
+If that channel is lost after the reviewed compute continuation has activated
+the complete fleet, reuse the same `install --output` (optionally `--check`
+first). This boundary is accepted only when every activation has a complete,
+hash-bound `COMPUTE_READY` receipt and fresh GET/probe acceptance succeeds.
+The controller must still be at the last compute acknowledgement, with no quota,
+ingress, web or executor work started. Unknown or partial states are refused.
+
+Approval (interactive or `--yes`) authorizes terminating only the exact old
+root-owned, single-threaded controller Python reader blocked on stdin, if it
+still exists. Its command hash and process start time are verified again;
+termination uses a pidfd and SIGTERM, never a process-group kill or SIGKILL.
+The new native continuation claim and stop intent are persisted first. Changes
+or an unsuccessful termination stop the continuation for review. `--check`
+never terminates a process, creates a native continuation, or mutates the cloud.
+
+New versioned controller evidence inherits completed network, project-resource
+and runtime-request receipts. Compute activation is forbidden on both sides of
+the new dialogue: there is no repeated enrollment, quarantine, stop, start or
+enable. Only remaining platform setup and authenticated acceptance run. Old
+journals remain unchanged; source, identity, credential, configuration or live
+state drift requires manual review. This is an explicit installer operation,
+not automatic recovery of failed VMs/hosts or a generic failed-deploy retry.
+
 Permanent resource administration uses the host-control API design documented
 in the selected driver's `deployment/HOST_CONTROL.md`:
 root-local actors and restricted per-host Keystone application credentials, not
@@ -274,6 +307,55 @@ down/disabled. The idle libvirt process had a refreshed PID/start timestamp,
 so the old protected-services baseline cannot simply be asserted unchanged.
 Use a new verified bundle and an explicitly reconciled continuation; do not
 reset old journals or present a read-only payload test as successful activation.
+
+### Continue the first compute enrollment failure
+
+Repeat the ordinary command with the same `--output`. The installer recognizes
+the first `activate-<host>` journal only when `quarantine` and `stop` completed,
+`enroll` is the failed/inflight action, quarantine was confirmed and no guests
+were restarted. Kolla's successful inherited transaction and every parent/child
+plan hash must agree. The selected clean bundle may change only the reviewed
+`initial_compute.py`, `compute_workflow.py` dependency fix and its documentation;
+wheel, capabilities and all other driver files must stay unchanged. No extra
+CLI flag, source patching, bundle editing or workspace migration is required.
+
+Before approval, read-only checks inspect every project's guests/reservations,
+domain/state/PCI claims, actual stopped container, immutable prepared inputs,
+bootstrap runtime, native identity, admin scope and fixed network/project
+resources. Operator/service credentials are verified, not recreated. A runtime
+already changed to the enrolled document is **not** assumed safe to replay.
+Other service/container or protected-file drift refuses continuation. Only an
+idle libvirt PID/start-time refresh with zero restart count is allowed while
+the independent empty-host/virsh checks pass. A fresh activation plan then binds
+its full current baseline and expires normally; no force bypass exists.
+
+`--check` writes only new private local review evidence; it neither claims the
+controller nor delivers sources, enrolls runtime, starts Nova, enables scheduling
+or runs remaining platform phases. Normal interactive confirmation or `--yes`
+is required for application. The management host claims the old transaction,
+then the controller exclusively claims its own boundary **before** any compute
+activation, preventing competing coordinators. Lost acknowledgement or another
+partial failure stays blocked for review; claims are never cleared automatically.
+
+The already disabled service is reconciled without another API disable write;
+the stopped container is verified without a second stop command. The fixed
+enrollment runs, then only that empty host's Nova compute starts, passes its
+acceptance checks and is enabled. The remaining compute and GUI/ingress phases
+continue. Completed auth, Neutron, enrollment staging and Barbican operations
+are not replayed: verified evidence is copied into a new private checkpoint.
+Old journals and credentials remain intact. No guests or Swarm nodes are created,
+stopped, restarted or automatically restored.
+
+The coordinator sends only the manifest-bound bundle/current installer and
+typed acknowledgements over the finite installation channel. Operator SSH keys
+and agents are never delivered to the controller; native API calls use the
+existing verified SDK. Final success still requires authenticated platform/GUI
+acceptance. Selecting this mode or passing `--check` is not installation success.
+
+This continuation was tested synthetically and against the locally saved
+failed/fresh-review plans on `petr-dev`. No target-host command or installation
+was run for this continuation implementation. The next operator-run `--check`
+must perform fresh live observations; the cached plans are not treated as them.
 
 ### Same-output validation evidence
 

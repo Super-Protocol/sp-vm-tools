@@ -79,6 +79,12 @@ def stage(args, backend_path, backend, nova_inputs):
             or output.is_relative_to(origin) or origin.is_relative_to(output)):
         raise ValueError('new non-overlapping canonical workspace required')
     output.mkdir(mode=0o700)
+    # The collections provenance includes empty directories as well as file
+    # bytes/executable modes. Preserve the full prepared tree when extending it.
+    (output/'collections').mkdir(mode=0o700)
+    for name,entry in sorted(workspace.managed_collections.scan(origin/'collections',private=True).items()):
+        if entry['kind']=='directory':
+            (output/'collections'/name).mkdir(mode=0o700,parents=True,exist_ok=True)
     journal={'status':'STAGING_NEW_COMPUTE_WORKSPACE','hosts_changed':False,'guests_changed':False}
     write(output/'journal.json',journal)
     try:

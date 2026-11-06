@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import time
 
@@ -13,6 +14,29 @@ import yaml
 from openstack_container_engine import write
 import openstack_workflow as workflow
 from openstack_host_pools import PoolWorker
+
+
+def retirement_active(root):
+    """Under worker.lock, defer resource requests/sync during unfinished retirement.
+
+    Worker initialization has already verified the root-private journal directory.
+    Never contact a retired executor or replay mutations to repair this state.
+    """
+    path=Path(root)/'removal-coordinator.json'
+    if not path.exists() and not path.is_symlink():return False
+    info=path.lstat()
+    if (path.resolve()!=path or not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid()
+            or stat.S_IMODE(info.st_mode)!=0o600 or info.st_nlink!=1 or info.st_size>65536):
+        raise ValueError('untrusted retirement coordination record')
+    value=json.loads(path.read_bytes())
+    if (not isinstance(value,dict) or value.get('status') not in ('REMOVING_COMPUTE','COMPUTE_REMOVED')
+            or not isinstance(value.get('host'),str) or not value['host']
+            or any(not isinstance(value.get(k),str) or len(value[k])!=64
+                   or any(c not in '0123456789abcdef' for c in value[k]) for k in ('operation','plan_sha256'))
+            or ('configuration_inflight' in value and type(value['configuration_inflight']) is not bool)
+            or value['status']=='COMPUTE_REMOVED' and value.get('configuration_inflight',False)):
+        raise ValueError('invalid retirement coordination record')
+    return value['status']=='REMOVING_COMPUTE'
 
 
 def policy(filename):
@@ -295,6 +319,10 @@ def main(path,argv):
             fd=os.open(worker.root/'worker.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
             try:
                 fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                if retirement_active(worker.root):
+                    print(json.dumps({'status':'HOST_RESOURCE_WORKER_DEFERRED_RETIREMENT',
+                        'message':'Explicit retirement requires completion/review; no requests processed or hosts contacted.'}))
+                    return 0
                 if args.action=='process-host-budgets':
                     entries=cluster_cleanup.listing(connection.key_manager,worker.model.PREFIX+'request-')
                     for entry in entries:worker.process(entry)

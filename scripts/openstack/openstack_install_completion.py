@@ -54,7 +54,13 @@ def rpc_process(i, argv, payload, handler=None, *, timeout=1800):
         raise InstallerError('Controller preparation payload exceeds its size limit.')
     with log.open('xb') as errors:
         os.fchmod(errors.fileno(), 0o600)
-        child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors)
+        # Keep the outer control channel alive while a local callback performs
+        # lengthy compute activation over separate SSH connections. OpenSSH
+        # sends encrypted liveness probes independently of our stdin dialogue.
+        # These options precede transport options: OpenSSH uses the first value.
+        command = [argv[0], '-o', 'ServerAliveInterval=15',
+                   '-o', 'ServerAliveCountMax=12', *argv[1:]]
+        child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors)
         try:
             child.stdin.write(body); child.stdin.flush()
             sequence = 0
@@ -122,7 +128,13 @@ for name,encoded in payload['files'].items():
 for p in root.rglob('*'):
  if p.is_dir():p.chmod(0o755)
 sys.path.insert(0,str(root/'tools'))
-if 'platform_continuation' in payload:
+if 'channel_continuation' in payload:
+ from openstack_install_channel_continue import setup_controller
+ result=setup_controller(root,payload)
+elif 'compute_continuation' in payload:
+ from openstack_install_compute_continue import setup_controller
+ result=setup_controller(root,payload)
+elif 'platform_continuation' in payload:
  from openstack_install_platform_continue import setup_controller
  result=setup_controller(root,payload)
 else:

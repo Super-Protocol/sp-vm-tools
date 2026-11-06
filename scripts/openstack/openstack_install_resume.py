@@ -128,6 +128,14 @@ def inspect_history(root):
         reviewed(origin)
         return origin, 'kolla'
     if record.get('status') == 'NEEDS_REVIEW' and record.get('active_phase') == 'platform':
+        if (origin/'reconciled-compute.json').exists():
+            from openstack_install_channel_continue import reviewed
+            reviewed(origin)
+            return origin, 'channel'
+        if any(origin.glob('activate-*')):
+            from openstack_install_compute_continue import reviewed
+            reviewed(origin)
+            return origin, 'compute'
         from openstack_install_platform_continue import reviewed
         reviewed(origin)
         return origin, 'platform'

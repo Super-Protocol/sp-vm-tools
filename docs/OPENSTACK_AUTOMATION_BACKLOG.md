@@ -5,6 +5,152 @@ claim that installation is unattended or that a fresh operating system was teste
 See [the deployment guide](OPENSTACK_DEPLOYMENT.md) for command schemas and safety
 boundaries. Repository documentation must remain in English.
 
+## Planned follow-up: add computes using controller SSH access (2026-11-07)
+
+Status: **design required, not implemented**. Allow an administrator to add one
+or several hosts to an existing cloud with controller addresses and an operator
+SSH key, without a large deployment YAML or the original management machine's
+local `--installation` history. Retain only a small description/list of the new
+hosts; determine which target/bootstrap/transport details genuinely need input.
+
+- Discover the cloud identity and authoritative installation settings from an
+  authenticated, eligible controller. Design a durable controller-side source
+  of truth for the settings/artifact pins currently scattered across local
+  workspaces and journals. OpenStack API discovery alone does not reconstruct
+  our helper, network, launcher, Kolla and credential configuration.
+- Verify controller SSH identity, administrative authority, cloud UUID, CA and
+  component/version provenance before accepting recovered settings. Never guess
+  a cloud, select latest artifacts or regenerate passwords/CA to fill gaps.
+- Define the minimal metadata/backup needed if the original deployment host is
+  lost, and actionable refusal when controller-side evidence is incomplete.
+  Account for multiple controllers and ambiguous/partial operations; coordinate
+  with the separate control-plane HA plan rather than assuming a fixed primary.
+- Keep operator SSH limited to explicit installation/maintenance. Do not copy
+  the operator key/agent to controllers or introduce a persistent service SSH
+  account, arbitrary-command endpoint or runtime SSH fallback. Preserve typed
+  host-control APIs and the empty-host/ownership/admission guards.
+- Preserve all-target preflight, explicit approval, sequential per-host results
+  and stop-on-first-failure behavior. No automatic rollback, lost-host/VM
+  recovery, legacy-format migration or replay of ambiguous transactions.
+- Acceptance must include a new management machine with only controller SSH
+  access and a minimal new-host input, lost local installation history, wrong
+  cloud/key/CA, missing evidence, competing operators and controller loss.
+
+The current host-only YAML/batch frontend is an intermediate simplification:
+it still requires the original local installation receipts and linked history.
+
+## Planned follow-up: name the management CLI for its full scope (2026-11-06)
+
+Status: **planned, not implemented**. `scripts/install-openstack.sh` now handles
+more than installation (including compute retirement), so its name is misleading.
+Rename the entry point to a general OpenStack management CLI; select the final
+name during implementation. `install` must remain a subcommand, alongside the
+other lifecycle operations, rather than defining the name of the whole tool.
+Update help, examples, documentation and automation references consistently.
+Do not add a legacy-name compatibility wrapper or migration mechanism. This
+backlog entry does not rename the script or change current operator commands.
+
+## Planned follow-up: native OpenStack control-plane HA (2026-11-06)
+
+Status: **planned, not implemented**. Keep network/Swarm ingress HA as a separate
+workstream. Use native Kolla/OpenStack redundancy rather than a replacement
+control-plane implementation: three controllers, redundant APIs/schedulers/
+conductors, MariaDB/Galera and RabbitMQ with a tested one-controller-loss quorum.
+
+- Clients use one stable cloud API endpoint; no user-selected primary controller.
+  The deployment host retains real addresses of every controller in inventory
+  and performs installation/lifecycle work over operator SSH.
+- Remove assumptions that controller-local operations always execute on one
+  fixed server. Select an available eligible controller explicitly, bind its
+  identity and serialize mutations across controllers. Never retry ambiguous
+  operations on another controller without reconciling durable evidence.
+- Adapt the SPVM resource/catalog coordinators, executors and their protected
+  credentials/state to the HA design. Multiple API instances alone do not make
+  these components highly available. Keep database/Barbican persistence and
+  recovery/backup requirements explicit.
+- Controllers need no GPU/CC when they do not host corresponding workloads.
+  Compute failure and VM replacement/recovery remain separate; no automatic
+  recovery of lost SPVM nodes is introduced.
+- Test loss and return/replacement of each controller, quorum loss, concurrency
+  and partial/lost acknowledgements. Distinguish deployment-host access, common
+  API availability and correctness of persistent control-plane state.
+
+## Planned follow-up: install first, allocate host resources separately (2026-11-06)
+
+Status: **planned, not implemented**. This is the agreed replacement for
+install-time resource allocation; the deployment checkpoints below describe the
+older implemented behavior, not acceptance of this plan.
+
+### Installation and resource lifecycle
+
+- Remove `compute_resources`, `storage_pools`, `storage_discovery` and
+  `gpu_inventory` from installation YAML. Reject these fields with an actionable
+  message; do not translate old configuration or migrate existing deployments.
+- Install OpenStack, the driver/helper, GUI and restricted host-control
+  executors. Detect CPU/RAM, mounted filesystems and GPUs for display only:
+  do not allocate budgets, register workload pools or enable GPU use.
+- Separate technical storage from workload pools. Use
+  `/var/lib/spvm/registered-releases` for the registered-image cache, not an
+  automatically selected state pool. Do not format disks or alter partitioning.
+- Register compute disabled from the outset, without a scheduling window.
+  Distinguish `UNCONFIGURED`, `CONFIGURED_DISABLED` and `ENABLED` from service
+  health and CC readiness. Driver/helper admission must reject unconfigured or
+  administratively disabled hosts even if their Nova service is manually enabled.
+- Apply the same behavior to initial deployment and later compute additions.
+  Installation succeeds with a healthy, manageable but unconfigured fleet;
+  its final message directs the administrator to configure and enable hosts.
+- Configure CPU/RAM, the first and subsequent state pools, and optional GPU use
+  after installation through GUI or CLI/API. Enable compute separately only
+  after budget, storage, runtime/helper, network and launch-mode checks pass.
+  GPU discovery alone does not authorize use; CPU-only compute remains supported.
+- Preserve the empty-host requirement across all projects, domains, allocations
+  and reservations. Disabling scheduling never stops existing VMs. No automatic
+  enablement, VM/host recovery, rollback or replay after ambiguous operations.
+- Support operator-owned automation through the same authenticated, typed
+  APIs/CLI, with generation checks, request IDs, operation results and explicit
+  enable/disable. Do not introduce SSH service keys or arbitrary remote commands.
+- Keep project quotas independent: do not derive or rewrite them from physical
+  host budgets during installation.
+
+### Remove misleading Automatic mode and the installation baseline
+
+The current `Automatic` label is derived by comparing actual settings with a
+baseline saved at installation. CPU/RAM are hardware totals minus saved host
+reserves; pool budgets are capped by the saved budget and current free space
+minus reserve. Matching these numbers does not establish a persistent automatic
+allocation policy, and catalog refresh does not autonomously apply that policy.
+
+- Remove the `Automatic / administrator defaults` selector and the API/CLI
+  `auto` budget mode, installation-baseline policy/catalog dependencies and the
+  inference that labels matching current values as `Automatic`.
+- Display detected hardware and the actually applied explicit budgets. Before
+  first configuration, display `Not configured`, not inferred automatic values
+  or a fictitious positive budget. Do not merely rename the obsolete mode.
+- Keep autodetection/recommendations as a separate optional post-install action:
+  preview recommended values and apply them only on explicit administrative
+  request. Once applied, they are ordinary explicit budgets, not an ongoing
+  automatic mode. Refreshes/reboots must not overwrite manual choices.
+- Do not retain hidden install-time defaults or reconstruct a baseline from
+  current settings. Backward compatibility and baseline migration are out of
+  scope.
+
+### Acceptance and delivery
+
+- Test fresh installation and add-compute without resource fields, with all
+  targets visible but unavailable through Auto, explicit host selection and
+  direct Nova requests until configuration and explicit enablement complete.
+- Test first CPU/RAM/pool configuration, root-only and multiple filesystems,
+  duplicate mounts, GPU-less hosts and synthetic multi-GPU. Preserve root-pool
+  warnings, no double accounting and non-CC debug-only admission.
+- Test GUI and CLI/API setup and enable/disable, partial configuration, occupied
+  hosts, stale generations, repeated request IDs, interrupted operations and
+  reboots. No saved value may silently switch to `Automatic` merely because it
+  matches a recommendation; recommendations never apply on discovery/refresh.
+- Implement orchestration and English instructions in sp-vm-tools; driver,
+  helper, GUI, CLI/API and their English documentation in swarm-cloud. Stage
+  production code/documentation only; leave tests unstaged. Commits, push,
+  builds and stand deployment require a separate task.
+
 ## Planned follow-up: immutable, CI-validated installation kit (2026-11-05)
 
 Status: **planned, not implemented**. Local Skyline adaptation and successful
@@ -52,10 +198,11 @@ precise acceptance scope with the release, without credentials.
    bootstrap scripts, firmware/BIOS configuration and required reboots.
 2. Run the OpenStack installer from an operator/controller environment. Select
    initial control-plane deployment or addition of compute hosts explicitly.
-3. Select CPU/RAM reserves, state storage devices/mounts and budgets, and allowed
-   GPUs. Discover actual hardware; never infer that all hardware is donated.
-4. Review one deployment plan, then apply it. The coordinator should drive all
+3. Review one infrastructure deployment plan, then apply it. The coordinator should drive all
    supported preparation, deployment, project enrollment and GUI stages.
+4. After installation, configure per-host CPU/RAM, state pools and optional GPU
+   use through GUI or CLI/API, then explicitly enable each compute. Operator-owned
+   automation uses the same interfaces; installation does not allocate resources.
 5. Log in to Skyline, import/select a named provider template, and create Swarm
    clouds using per-node CPU, memory, state disk and optional GPU profiles.
 

@@ -156,6 +156,9 @@ def approve(deployment, plan, *, yes=False, stream=None, continuation=None):
     if plan.get('continued_from'):
         print('Reviewed continuation. Remaining phases: '+', '.join(plan.get('remaining_phases',['kolla','platform']))+'.')
         print('Previous preparation is retained; the failed transaction is not reset or replayed.')
+        if plan.get('compute_activation_replayed') is False:
+            print('All compute activations are already complete and have passed read-only acceptance; no compute stop/start/enrollment is repeated.')
+            print('The exact old controller reader, if still blocked waiting for its lost acknowledgement, will be terminated after approval.')
     else:
         print('All configured hosts will be prepared and a NEW OpenStack cloud installed.')
     if plan.get('use_testing_images'):
@@ -201,7 +204,7 @@ def parser():
 
 def main(argv=None):
     args = parser().parse_args(argv)
-    args.continue_from = args.continue_platform_from = None
+    args.continue_from = args.continue_platform_from = args.continue_compute_from = args.continue_channel_from = None
     transaction=None
     try:
         if os.geteuid() != 0:
@@ -226,6 +229,8 @@ def main(argv=None):
                 args.output = str(attempt(root))
                 if mode == 'kolla': args.continue_from = str(origin)
                 if mode == 'platform': args.continue_platform_from = str(origin)
+                if mode == 'compute': args.continue_compute_from = str(origin)
+                if mode == 'channel': args.continue_channel_from = str(origin)
             installation = Installation(args)
             transaction = Transaction(args.output, installation.inputs)
             if origin is not None:
@@ -233,7 +238,13 @@ def main(argv=None):
                 remember(root, origin, mode, transaction)
                 print('Installation history: ' + str(transaction.output), flush=True)
             installation.transaction = transaction
-            if args.continue_platform_from:
+            if args.continue_channel_from:
+                from openstack_install_channel_continue import prepare
+                plan = transaction.scan(lambda: prepare(installation, transaction))
+            elif args.continue_compute_from:
+                from openstack_install_compute_continue import prepare
+                plan = transaction.scan(lambda: prepare(installation, transaction))
+            elif args.continue_platform_from:
                 from openstack_install_platform_continue import prepare
                 plan = transaction.scan(lambda: prepare(installation, transaction))
             elif args.continue_from:
@@ -249,7 +260,13 @@ def main(argv=None):
             try:
                 approve(installation.cfg['deployment_id'], plan, yes=args.yes,
                         continuation=root if origin is not None else None)
-                if args.continue_platform_from:
+                if args.continue_channel_from:
+                    from openstack_install_channel_continue import claim
+                    claim(installation, transaction, plan)
+                elif args.continue_compute_from:
+                    from openstack_install_compute_continue import claim
+                    claim(installation, transaction, plan)
+                elif args.continue_platform_from:
                     from openstack_install_platform_continue import claim
                     claim(installation, transaction, plan)
                 elif args.continue_from:

@@ -3938,6 +3938,15 @@ advisory, not a Nova reservation.
 
 ## 11. Add a compute to an existing cloud
 
+For the inverse operation, see [Retiring an OpenStack compute host](OPENSTACK_COMPUTE_REMOVAL.md).
+The `install-openstack.sh remove-compute` coordinator runs on the original
+management host, discovers its completed installation workspace and performs
+controller actions over operator SSH; no manual controller login/key copy is
+required. Retirement does not erase retained containers, helper configuration,
+state/cache directories or bootstrap prerequisites. A removed host is not
+automatically a fresh target for the new-compute workflow: explicitly review
+remaining artifacts before preparing it again.
+
 Required inputs are the existing Kolla deployment directory/inventory/profile,
 the pinned driver/image versions, and SSH address/user/identity, unique hostname,
 management/tunnel interfaces, resource reservations, storage pools and approved
@@ -3969,6 +3978,15 @@ transaction to bypass an ambiguous restart. Changed workloads or ownership block
 the operation. Once new VMs exist, do not replay an old empty-host acceptance plan.
 
 ### 11.1. Deploy a new compute into an existing cloud
+
+For the operator-facing command covering both new and previously retired hosts,
+use [`install-openstack.sh add-compute`](OPENSTACK_COMPUTE_ADDITION.md).
+Its YAML contains only `hosts`; cloud/kit settings come from `--installation`.
+All selected entries are checked before adding them sequentially. Optional
+`--host` selects one entry; the default is every entry in file order. A failure
+stops the batch without rolling back already completed hosts.
+It derives the following lower-level inputs and owns their approval boundaries;
+the remainder of this section documents diagnostic/internal building blocks.
 
 The installer scenario coordinator also supports an explicit `new_compute` input
 for a compute which has **no Nova container or Nova service registration yet**.

@@ -500,6 +500,12 @@ print(json.dumps({'status':'NEW_HAPROXY_DISABLED_UNTIL_INGRESS_APPROVAL'}))
         return result
 
     def install_platform(self):
+        if getattr(self.args,'continue_channel_from',None):
+            from openstack_install_channel_continue import complete
+            return complete(self)
+        if getattr(self.args,'continue_compute_from',None):
+            from openstack_install_compute_continue import complete
+            return complete(self)
         if getattr(self.args,'continue_platform_from',None):
             from openstack_install_platform_continue import complete
             return complete(self)

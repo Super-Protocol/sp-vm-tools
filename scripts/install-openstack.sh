@@ -6,4 +6,12 @@ if [[ "${1:-}" == install ]]; then
     shift
     exec "${SPVM_INSTALLER_PYTHON:-python3}" "${SCRIPT_DIR}/openstack/openstack_install_entry.py" "$@"
 fi
+if [[ "${1:-}" == remove-compute ]]; then
+    shift
+    exec "${SPVM_INSTALLER_PYTHON:-python3}" "${SCRIPT_DIR}/openstack/openstack_remove_entry.py" "$@"
+fi
+if [[ "${1:-}" == add-compute ]]; then
+    shift
+    exec "${SPVM_INSTALLER_PYTHON:-python3}" "${SCRIPT_DIR}/openstack/openstack_add_entry.py" "$@"
+fi
 exec "${SPVM_INSTALLER_PYTHON:-python3}" "${SCRIPT_DIR}/openstack/openstack_installer.py" "$@"

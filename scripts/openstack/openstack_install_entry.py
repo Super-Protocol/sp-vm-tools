@@ -6,13 +6,18 @@ from pathlib import Path
 import sys
 
 
-def main(argv=None):
+def main(argv=None, *, operation='install'):
     argv=list(sys.argv[1:] if argv is None else argv)
     folder=Path(__file__).resolve().parent
     sys.path.insert(0,str(folder))
     # Help must work without a pre-existing environment or third-party packages.
     if '--help' in argv or '-h' in argv:
-        from openstack_install import parser
+        if operation=='add-compute':
+            from openstack_add_entry import parser
+        elif operation=='remove-compute':
+            from openstack_remove_manager import parser
+        else:
+            from openstack_install import parser
         parser().print_help()
         return 0
     p=argparse.ArgumentParser(add_help=False)
@@ -26,11 +31,18 @@ def main(argv=None):
         python=root/'installer-venv/bin/python'
         if receipt.get('status')!='READY' or not python.is_file():raise ValueError()
         if Path(sys.prefix).resolve()!=root/'installer-venv':
-            os.execv(str(python),[str(python),'-I','-B',str(Path(__file__).resolve()),*argv])
+            entry=folder/({'remove-compute':'openstack_remove_entry.py','add-compute':'openstack_add_entry.py'}.get(operation,'openstack_install_entry.py'))
+            os.execv(str(python),[str(python),'-I','-B',str(entry),*argv])
     except (OSError,ValueError):
         print('ERROR: --environment must select the existing READY prepare-environment directory. '
               'No packages or environments were installed.',file=sys.stderr)
         return 2
+    if operation=='add-compute':
+        from openstack_add_manager import main as add
+        return add(argv)
+    if operation=='remove-compute':
+        from openstack_remove_manager import main as remove
+        return remove(argv)
     from openstack_install import main as install
     return install(argv)
 

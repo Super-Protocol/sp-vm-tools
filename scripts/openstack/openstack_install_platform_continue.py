@@ -55,7 +55,7 @@ def validate_bundle_delta(old,new):
         raise InstallerError('Platform continuation permits only the reviewed network-provisioning source update with an unchanged wheel.')
 
 
-def probe(old_root,source_root):
+def probe(old_root,source_root,*,activation=None,activated=False,channel=None):
     """Controller-local GET/authentication only. Never print secret documents."""
     import hashlib,pwd,shlex,yaml
     from keystoneauth1.identity.v3 import Password,ApplicationCredential
@@ -75,8 +75,25 @@ def probe(old_root,source_root):
         raise ValueError('prepared controller input drift')
     backend(source_root/'driver',verified_bundle=True)
     old_manifest=json.loads((old_root/'driver/manifest.json').read_bytes())
-    new_manifest=json.loads((source_root/'driver/manifest.json').read_bytes())
-    validate_bundle_delta(old_manifest,new_manifest)
+    source_manifest=json.loads((source_root/'driver/manifest.json').read_bytes())
+    checkpoint=None
+    if activation is None:
+        new_manifest=source_manifest
+        validate_bundle_delta(old_manifest,new_manifest)
+    else:
+        from openstack_install_compute_continue import validate_delta, native_checkpoint
+        new_manifest=activation['manifest']
+        if channel is None:
+            checkpoint=native_checkpoint(old_root,source_root,activation,claimed=activated)
+        else:
+            from openstack_platform_checkpoint import inspect as inspect_checkpoint
+            native_checkpoint(old_root,Path(channel['source_root']),activation,claimed=True)
+            checkpoint=inspect_checkpoint(Path(channel['source_root'])/'data/platform-install',activation['requests'],
+                claim_root=source_root if channel.get('claimed') else None,ready=True)
+        prior_manifest=json.loads((Path(activation['previous_root'])/'driver/manifest.json').read_bytes())
+        validate_delta(prior_manifest,new_manifest)
+        if source_manifest not in (prior_manifest,new_manifest):
+            raise ValueError('probe source differs from the reviewed bundles')
     frozen=subprocess.run([str(old_root/'sdk/bin/python'),'-m','pip','freeze','--all'],check=True,
         capture_output=True,text=True,timeout=60).stdout
     if frozen!=(data/'sdk-packages.txt').read_text():raise ValueError('installed SDK dependency versions changed')
@@ -87,14 +104,15 @@ def probe(old_root,source_root):
             if name.startswith(prefix) and name.endswith('.py'):
                 target=location/name.removeprefix(prefix)
                 if target.is_symlink() or file_hash(target)!=wanted:raise ValueError('installed driver SDK code changed')
-    previous=data/'platform-install';journal=document(previous/'platform-transaction.json')
-    if (journal.get('status')!='NEEDS_REVIEW' or journal.get('completed')!=['operator-auth']
+    previous=Path(checkpoint['source']) if checkpoint else data/'platform-install'
+    journal=document(previous/'platform-transaction.json')
+    if activation is None and (journal.get('status')!='NEEDS_REVIEW' or journal.get('completed')!=['operator-auth']
             or journal.get('active_phase')!='shared-network' or journal.get('guests_launched') is not False
             or (previous/'continued-by.json').exists()):
         raise ValueError('unreviewed platform boundary or existing continuation')
     network_journal=document(previous/'network/network-transaction.json')
     network_plan=document(previous/'network/network-plan.json')
-    if (network_journal.get('status')!='NEEDS_REVIEW'
+    if ((activation is None and network_journal.get('status')!='NEEDS_REVIEW')
             or network_journal.get('plan_sha256')!=network_plan.get('plan_sha256')
             or network_plan['plan_sha256']!=digest({k:v for k,v in network_plan.items() if k!='plan_sha256'})):
         raise ValueError('failed network journal differs')
@@ -112,8 +130,21 @@ def probe(old_root,source_root):
         if 'admin' not in access.role_names or list(connection.compute.servers(all_projects=True)):
             raise ValueError('empty administrator-scoped cloud required')
         services=list(connection.compute.services(binary='nova-compute'))
-        if len(services)!=len(binding['hosts']) or any(s.state!='up' for s in services):
+        if len(services)!=len(binding['hosts']):
             raise ValueError('prepared compute service inventory is not healthy')
+        if activation is None:
+            if any(s.state!='up' for s in services):raise ValueError('prepared compute is not healthy')
+        else:
+            cfg=__import__('yaml').safe_load(private(data/'deployment.yaml').read_bytes())
+            names={cfg['hosts'][n]['inventory_name']:n for n in binding['hosts']}
+            if {s.host for s in services}!=set(names):raise ValueError('compute service inventory differs')
+            for service in services:
+                failed=names[service.host]==activation['host'] and not activated
+                if failed:
+                    if service.status!='disabled' or service.state not in ('up','down'):
+                        raise ValueError('failed compute must remain quarantined')
+                elif service.state!='up' or service.status!='enabled':
+                    raise ValueError('other/reconciled compute is not up and enabled')
         platform.verify_operator_auth('/etc/spvm/auth',cloud['auth'],0,region,ca)
         spec=platform.specification(data/'platform.json')
         if Path(spec['runtime_dir']).exists() or Path(spec['state_dir']).exists():
@@ -122,9 +153,18 @@ def probe(old_root,source_root):
         loader=importlib.util.spec_from_file_location('reviewed_spvm_network',path)
         network=importlib.util.module_from_spec(loader);loader.loader.exec_module(network)
         state=network.inspect(connection,request)
-        if (state['router']['action']!='CREATE' or state['router']['interface_action']!='ATTACH'
-                or any(v['network_action']!='REUSE' or v['subnet_action']!='REUSE' for v in state['networks'].values())):
-            raise ValueError('only the inspected existing network/subnet pair and absent router are supported')
+        if activation is None:
+            if (state['router']['action']!='CREATE' or state['router']['interface_action']!='ATTACH'
+                    or any(v['network_action']!='REUSE' or v['subnet_action']!='REUSE' for v in state['networks'].values())):
+                raise ValueError('only the inspected existing network/subnet pair and absent router are supported')
+        else:
+            if state!=network_journal['result']['state']:
+                raise ValueError('completed Neutron network/router changed')
+            import openstack_spvm_resources as resources
+            enrollment=document(previous/'enrollment/enrollment-plan.json')
+            resource_state=resources.load_backend(source_root/'driver/deployment/installer.py').inspect(connection,enrollment,access.project_id)
+            if resource_state!=document(previous/'resources/resources-transaction.json')['result']['state']:
+                raise ValueError('completed project resources changed')
         # Verify existing delegated secrets and their live metadata, without
         # invoking provision/rotation or a negative-write canary during --check.
         path=source_root/'driver/deployment/service_credentials.py'
@@ -133,6 +173,9 @@ def probe(old_root,source_root):
         paths=[data/name for name in ('prepared.json','deployment.yaml','compute-binding.json','platform.json','network.json','base-haproxy.cfg','console-context.json','sdk-packages.txt')]
         paths += [clouds,previous/'platform-transaction.json',previous/'network-request.json',
                   previous/'network/network-plan.json',previous/'network/network-transaction.json',Path('/etc/spvm/auth/admin-openrc.sh'),Path(ca)]
+        if checkpoint:
+            paths += [previous/name for name in checkpoint['files']]
+            paths += [Path(activation['previous_root'])/'data/continuation.json']
         gid=pwd.getpwnam(platform.INGRESS_USER).pw_gid
         for purpose,folder in [('ingress','ingress-auth'),('retirement','retirement-auth')]:
             rc=Path('/etc/spvm')/folder/'openrc.sh';info=rc.lstat()
@@ -162,9 +205,10 @@ def probe(old_root,source_root):
                     raise ValueError('service credential roles/scope differ')
             finally:delegated.close()
             paths.append(rc)
-        return {'status':'REVIEWED_PLATFORM_BOUNDARY_READY','machine':prepared['machine'],
+        return {'status':'REVIEWED_COMPUTE_BOUNDARY_READY' if checkpoint else 'REVIEWED_PLATFORM_BOUNDARY_READY','machine':prepared['machine'],
             'project':access.project_id,'user':access.user_id,'network':state,'driver_commit':new_manifest['source_commit'],
-            'files':{str(p):file_hash(p) for p in paths},'guests':0}
+            'files':{str(p):file_hash(p) for p in paths},'guests':0,
+            **({'checkpoint':checkpoint} if checkpoint else {})}
     finally:connection.close();session.close()
 
 

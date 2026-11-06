@@ -412,8 +412,9 @@ def activate_host_worker(path,spec,user,catalog,output):
     return result
 
 
-def post_install(value,path,backend,output,core,*,operations=None,verify_existing_auth=False):
-    """No resume: every mutating child owns a WAL; ambiguous failures require review."""
+def post_install(value,path,backend,output,core,*,operations=None,verify_existing_auth=False,
+                 checkpoint=None,reconciled_host=None):
+    """Fresh completion, or the internally verified first-compute checkpoint."""
     from openstack.connection import Connection
     from keystoneauth1.identity.v3 import Password
     from keystoneauth1.session import Session
@@ -427,12 +428,30 @@ def post_install(value,path,backend,output,core,*,operations=None,verify_existin
     from compute_transaction import execute as activate
     import yaml
     spec=specification(value['platform']);cfg=backend.deployment_config(value['config'])
-    output.mkdir(mode=0o700,exist_ok=False)
+    inherited={}
+    if checkpoint is None:
+        output.mkdir(mode=0o700,exist_ok=False)
+    else:
+        if operations is None or not verify_existing_auth:
+            raise ValueError('reviewed coordinated activation required for a checkpoint')
+        from openstack_platform_checkpoint import restore
+        inherited=restore(checkpoint,output,reconciled_host)
     journal=output/'platform-transaction.json';record={'status':'RUNNING','completed':[],'active_phase':None,'guests_launched':False}
+    if checkpoint is not None:
+        record.update(inherited_from=checkpoint['source'],checkpoint_sha256=digest(checkpoint),
+                      reconciled_compute=reconciled_host)
     write(journal,record)
     def phase(name,callback):
         record['active_phase']=name;write(journal,record)
-        try:result=callback()
+        try:
+            if name in inherited:
+                if list(inherited).index(name)!=len(record['completed']):
+                    raise ValueError('checkpoint phase order differs')
+                result=inherited[name]
+            else:
+                if len(record['completed'])<len(inherited):
+                    raise ValueError('checkpoint prefix changed; no unexpected phase may run')
+                result=callback()
         except BaseException:
             record['status']='NEEDS_REVIEW';write(journal,record);raise
         record['completed'].append(name);record['active_phase']=None;write(journal,record)

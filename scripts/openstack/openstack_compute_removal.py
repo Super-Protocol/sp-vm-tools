@@ -111,15 +111,23 @@ print(json.dumps({'geneve':g['local_ip'],'nat':m['management_address'].split('/'
     return result
 
 
-def stage_workspace(args,cfg,receipt,binding):
-    origin=Path(args.workspace);output=Path(args.output)/'remaining-workspace'
+def stage_workspace(args,cfg,receipt,binding,*,name='remaining-workspace'):
+    origin=Path(args.workspace);output=Path(args.output)/name
+    if workspace.check(origin)!=receipt:
+        raise ValueError('source workspace changed before successor preparation')
     new=copy.deepcopy(cfg);new['hosts'].pop(args.host)
     output.mkdir(mode=0o700)
+    # Tree hashes include empty directories and executable bits, not just bytes.
+    collections=workspace.managed_collections.scan(origin/'collections',private=True)
+    (output/'collections').mkdir(mode=0o700)
+    for relative,entry in sorted(collections.items()):
+        if entry['kind']=='directory':
+            (output/'collections'/relative).mkdir(mode=0o700,parents=True,exist_ok=True)
     alias=cfg['hosts'][args.host].get('inventory_name',args.host)
     for name in receipt['files']:
         if name in ('hosts.ini','compute-binding.json') or name.startswith('kolla/config/nova/'+alias+'/'):
             continue
-        workspace.private_file(output/name,read(origin/name))
+        workspace.managed_collections.copy_workspace_file(origin,output,name)
     # Remove only exact inventory membership/declaration, retaining upstream groups.
     lines=read(origin/'hosts.ini').decode().splitlines(keepends=True)
     inventory=''.join(line for line in lines if not line.strip() or line.strip().startswith(('#','['))
@@ -135,8 +143,10 @@ def stage_workspace(args,cfg,receipt,binding):
         globals_[key]=globals_[key].replace(str(origin),str(output))
     write(output/'kolla/globals.yml',globals_)
     write(output/'journal.json',{'status':receipt['status']})
-    write(output/'workspace.json',{**receipt,'config_sha256':digest(new),
+    write(output/'workspace.json',{**receipt,'collections':str(output/'collections'),'config_sha256':digest(new),
           'compute_binding':body['binding_sha256'],'files':workspace.file_set(output)})
+    if workspace.check(origin)!=receipt:
+        raise ValueError('source workspace changed during successor preparation')
     workspace.check(output)
     return new,output
 
@@ -252,12 +262,16 @@ def main(path,argv):
         return 2
 
 
-def execute(args,output,module,delegation,cfg,receipt,binding,runner):
+def execute(args,output,module,delegation,cfg,receipt,binding,runner,*,coordinator=None):
     planfile=output/'remove-compute-plan.json';journal=output/'transaction.json'
-    inputs={str(Path(args.policy)):file_hash(args.policy),str(Path(delegation['config'])):file_hash(delegation['config']),
-            str(Path(args.known_hosts)):file_hash(args.known_hosts)}
+    inputs=(coordinator.inputs() if coordinator is not None else
+            {str(Path(args.policy)):file_hash(args.policy),str(Path(delegation['config'])):file_hash(delegation['config']),
+             str(Path(args.known_hosts)):file_hash(args.known_hosts)})
     source={p.name:file_hash(p) for p in Path(__file__).parent.glob('*.py')}
     if args.action=='plan-remove-compute':
+        # Exercise the real local successor validation even for --check. Keep a
+        # separate preview; apply builds fresh inputs before any remote mutation.
+        stage_workspace(args,cfg,receipt,binding,name='workspace-preview')
         plan=runner.plan(args.host)
         plan.update(inputs=inputs,installer_sources=source,workspace=str(Path(args.workspace)),workspace_receipt=digest(receipt))
         plan['network']=network(runner,cfg,args.host)
@@ -292,16 +306,23 @@ def execute(args,output,module,delegation,cfg,receipt,binding,runner):
         # Build and validate successor inputs before the first remote mutation.
         new,successor=stage_workspace(args,cfg,receipt,binding)
         write(output/'configuration-before.json',{'config':cfg,'policy':delegation})
+        if coordinator is not None:step('controller-claim',lambda:coordinator.start(plan))
         step('quarantine',lambda:runner.cloud(plan,'quarantine'))
         runner.guard(plan)
+        # Revoke this empty, quarantined target's peer permissions while OVN
+        # still owns its topology. Stopping OVN/removing the last remote chassis
+        # can remove genev_sys_6081 and its routes on surviving peers. Do not
+        # ignore topology drift or weaken Peer.apply's exact comparison.
+        step('peer-network',lambda:network(runner,cfg,args.host,approved=plan['network'],output=output))
         step('stop',lambda:runner.target(args.host,'stop',plan['target']))
         step('executor-revocation',lambda:revoke_executor(runner,delegation,args.host))
         runner.guard(plan,stopped=True)
         step('native-removal',lambda:runner.cloud(plan,'remove'))
         runner.guard(plan,stopped=True,removed=True)
-        step('peer-network',lambda:network(runner,cfg,args.host,approved=plan['network'],output=output))
         # Retire delegation first: the worker must not re-publish removed catalogs.
         def configurations():
+            if coordinator is not None:
+                return coordinator.configure(new,successor,plan)
             policy={**delegation,'automatic':{n:v for n,v in delegation['automatic'].items() if n!=args.host},
                 'executors':{n:v for n,v in delegation['executors'].items() if n!=args.host}}
             write(Path(args.policy),policy);write(Path(delegation['config']),new)
@@ -311,9 +332,11 @@ def execute(args,output,module,delegation,cfg,receipt,binding,runner):
             return {'workspace':str(successor),'config':delegation['config'],'host_removed':args.host}
         step('configuration',configurations)
         step('catalogs',lambda:catalogs(runner,delegation,plan,True))
-        step('refresh-catalogs',lambda:refresh_catalogs(runner,delegation,module.__file__,args.policy))
+        step('refresh-catalogs',lambda:(coordinator.refresh() if coordinator is not None else
+             refresh_catalogs(runner,delegation,module.__file__,args.policy)))
         if catalogs(runner,delegation,plan):raise ValueError('retired catalogs still visible')
         runner.guard(plan,stopped=True,removed=True)
+        if coordinator is not None:step('controller-completion',lambda:coordinator.finish(plan))
         record.update(status='COMPUTE_REMOVED',workspace=str(successor),completed_at=int(time.time()))
         write(journal,record);print(json.dumps(record));return 0
     except BaseException:

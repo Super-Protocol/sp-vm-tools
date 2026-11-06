@@ -23,6 +23,7 @@ def execute(backend,args):
         try:
             for name,h in cfg['hosts'].items():
                 if 'compute' not in h['roles']:continue
+                if getattr(args,'host',None) is not None and name!=args.host:continue
                 # Explicit invocation only. The remote process independently
                 # rejects every existing domain/QEMU process before MMIO.
                 code='import types,sys,json\nm=types.ModuleType("gpu_discovery");exec('+repr(source)+',m.__dict__)\n'+\
@@ -60,6 +61,7 @@ print(json.dumps(inventory))
 def main(backend,argv):
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('action',choices=['prepare-gpus'])
     for name in ('config','known-hosts','output'):p.add_argument('--'+name,required=True)
+    p.add_argument('--host',help='Inspect/prepare only this compute; do not probe occupied existing peers')
     args=p.parse_args(argv)
     if os.geteuid()!=0:raise ValueError('root GPU preparation coordinator required')
     print(json.dumps(execute(backend,args)));return 0

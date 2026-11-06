@@ -11,6 +11,26 @@ here; hardware bootstrap and VM launcher scripts remain separate in `scripts/`.
 Keep these modules together: they use sibling imports and source-hash bindings.
 No compatibility copies are maintained in the parent directory.
 
+`install-openstack.sh add-compute --environment ... --config ...
+--installation ... --output ...` accepts a host-only YAML and checks all selected
+computes before adding them sequentially. Optional `--host` selects one entry.
+Cloud/kit settings come from completed installation receipts, not this YAML.
+The batch stops on its first failure without rolling back earlier successes.
+Each target can be new or previously retired. Classification is automatic;
+owned leftovers are archived, not migrated. A registered exact-ready host is a
+read-only NOOP. Use `--check` for inspection and `--yes` for explicit apply.
+See `../../docs/OPENSTACK_COMPUTE_ADDITION.md` for version pins, workload refusal,
+credential boundaries and the verified acceptance scope.
+
+`install-openstack.sh remove-compute --environment ... --config ...
+--installation ... --host ... --output ...` retires a reachable empty compute-only
+host from the original management machine. Use `--check` for planning only and
+explicit host confirmation or `--yes` for apply. The bound workspace stays local;
+the controller SDK/auth and worker lock are accessed over operator SSH without
+copying keys/credentials or installing a remote listener. See
+`../../docs/OPENSTACK_COMPUTE_REMOVAL.md` for the complete safety/retained-state
+contract. Do not use fresh `install` or Nova service-disable as retirement.
+
 `install-openstack.sh install` is the integrated fresh-install entry point.
 `openstack_install_entry.py` selects the explicit READY Python environment;
 `openstack_install.py` owns the durable transaction/approval; fixed phases live
@@ -30,6 +50,11 @@ It retains private attempt history within that directory; no public phase or
 continuation flag is needed. Check-only/approval-only runs can be scanned again;
 unknown partial mutations are refused, not replayed. Completed installations
 are not installed again. No workspace/configuration migration is performed.
+`openstack_install_compute_continue.py` additionally reconciles only a first
+compute stopped/quarantined at runtime enrollment with unchanged bootstrap
+state. `openstack_platform_checkpoint.py` preserves completed platform evidence
+without replaying auth/network/Barbican writes. Native claims precede activation;
+unknown/partially applied runtime or start actions still fail closed.
 See [one-command fresh installation](../../docs/OPENSTACK_SINGLE_INSTALL.md) for
 the supported profile, management Docker prerequisite, error/retry rules and
 the pending live acceptance boundary.
