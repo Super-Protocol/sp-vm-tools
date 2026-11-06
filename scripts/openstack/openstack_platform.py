@@ -84,6 +84,27 @@ def prepare_account(value,output):
     return result
 
 
+def operator_auth_text(auth,region,ca):
+    names={'auth_url':'OS_AUTH_URL','username':'OS_USERNAME','password':'OS_PASSWORD','project_name':'OS_PROJECT_NAME',
+           'user_domain_name':'OS_USER_DOMAIN_NAME','project_domain_name':'OS_PROJECT_DOMAIN_NAME'}
+    env={target:auth[source] for source,target in names.items()}
+    env.update(OS_IDENTITY_API_VERSION='3',OS_INTERFACE='internal',OS_REGION_NAME=region,OS_CACERT=ca)
+    return ('for spvm_auth_var in "${!OS_@}"; do unset "$spvm_auth_var"; done\nunset spvm_auth_var\n'
+        +''.join('export '+k+'='+shlex.quote(str(v))+'\n' for k,v in env.items()))
+
+
+def verify_operator_auth(authdir,auth,operator_group,region,ca):
+    directory=Path(authdir);target=directory/'admin-openrc.sh'
+    for path,mode in ((directory,0o750),(target,0o640)):
+        info=path.lstat()
+        if path.is_symlink() or info.st_uid!=0 or info.st_gid!=operator_group or info.st_mode&0o777!=mode:
+            raise ValueError('existing operator auth ownership/mode differs')
+    if not target.is_file() or target.stat().st_nlink!=1 or target.stat().st_size>32768:
+        raise ValueError('bounded existing operator auth required')
+    if target.read_text()!=operator_auth_text(auth,region,ca):
+        raise ValueError('existing operator auth scope differs')
+
+
 def install_operator_auth(authdir, auth, operator_group, region, ca):
     """Install root-owned auth readable only by its explicitly selected group.
 
@@ -93,14 +114,9 @@ def install_operator_auth(authdir, auth, operator_group, region, ca):
     authdir=Path(authdir)
     authdir.mkdir(mode=0o750,exist_ok=False)
     os.chown(authdir,0,operator_group);authdir.chmod(0o750)
-    names={'auth_url':'OS_AUTH_URL','username':'OS_USERNAME','password':'OS_PASSWORD','project_name':'OS_PROJECT_NAME',
-           'user_domain_name':'OS_USER_DOMAIN_NAME','project_domain_name':'OS_PROJECT_DOMAIN_NAME'}
-    env={target:auth[source] for source,target in names.items()}
-    env.update(OS_IDENTITY_API_VERSION='3',OS_INTERFACE='internal',OS_REGION_NAME=region,OS_CACERT=ca)
     target=authdir/'admin-openrc.sh'
     with target.open('x') as stream:
-        stream.write('for spvm_auth_var in "${!OS_@}"; do unset "$spvm_auth_var"; done\nunset spvm_auth_var\n')
-        stream.write(''.join('export '+k+'='+shlex.quote(str(v))+'\n' for k,v in env.items()))
+        stream.write(operator_auth_text(auth,region,ca))
     target.chmod(0o640);os.chown(target,0,operator_group)
 
 
@@ -396,7 +412,7 @@ def activate_host_worker(path,spec,user,catalog,output):
     return result
 
 
-def post_install(value,path,backend,output,core,*,operations=None):
+def post_install(value,path,backend,output,core,*,operations=None,verify_existing_auth=False):
     """No resume: every mutating child owns a WAL; ambiguous failures require review."""
     from openstack.connection import Connection
     from keystoneauth1.identity.v3 import Password
@@ -443,15 +459,25 @@ def post_install(value,path,backend,output,core,*,operations=None):
         authdir=Path('/etc/spvm/auth')
         ingress_authdir=Path('/etc/spvm/ingress-auth')
         def private_operator_auth():
-            install_operator_auth(authdir,auth,0,binding['bootstrap_runtime']['region_name'],ca)
+            if verify_existing_auth:
+                verify_operator_auth(authdir,auth,0,binding['bootstrap_runtime']['region_name'],ca)
+            else:
+                install_operator_auth(authdir,auth,0,binding['bootstrap_runtime']['region_name'],ca)
             source=Path(path).parent/'service_credentials.py'
             definition=importlib.util.spec_from_file_location('platform_service_credentials',source)
             credentials=importlib.util.module_from_spec(definition);definition.loader.exec_module(credentials)
             result={}
             for purpose,directory in [('ingress',ingress_authdir),('retirement',Path('/etc/spvm/retirement-auth'))]:
-                directory.mkdir(mode=0o750,exist_ok=True)
+                if verify_existing_auth and not (directory/'openrc.sh').is_file():
+                    raise ValueError('previously completed service credential disappeared; no implicit recreation')
+                if verify_existing_auth:
+                    info=directory.lstat()
+                    if directory.is_symlink() or info.st_uid!=0 or info.st_gid!=ingress_group or info.st_mode&0o777!=0o750:
+                        raise ValueError('existing service auth directory ownership/mode differs')
+                else:
+                    directory.mkdir(mode=0o750,exist_ok=True)
+                    os.chown(directory,0,ingress_group);directory.chmod(0o750)
                 credentials.protected_directory(directory)
-                os.chown(directory,0,ingress_group);directory.chmod(0o750)
                 result[purpose]=credentials.configure(connection,purpose,'spvm-'+purpose+'-'+cfg['deployment_id'],
                     directory/'openrc.sh',ingress_group,auth['auth_url'],binding['bootstrap_runtime']['region_name'],ca)
             return result

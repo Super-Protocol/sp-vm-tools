@@ -106,6 +106,42 @@ installation and authenticated live UI acceptance, which must still complete.
 
 ## Scan, approval and execution
 
+### One output directory for the installation
+
+Keep the same `--output` for checking, approval and subsequent continuation.
+A new directory starts a fresh installation. An existing directory is validated
+under the coordinator lock before any server operation. A check-only run or
+refused approval can be scanned again because no installation phase started.
+Completed installations return their recorded result without replaying phases;
+this is not a fresh live health check. Changed inputs or inconsistent evidence
+are rejected, not silently adopted.
+
+After successful checks, an existing output prints that installation will
+continue from the previous verified point and asks
+`Continue the previous installation? [y/N]:`. Only `y`/`yes` accepts; an empty
+answer, `no` or EOF refuses without claiming the continuation or starting an
+installation phase. This replaces the fresh-install deployment-name prompt,
+not an additional question. `--yes` explicitly accepts continuation without
+prompting, but never bypasses checks or enables an unsupported recovery.
+`--check` remains read-only with respect to servers and asks no confirmation.
+Already completed installations remain a no-op, without a continuation prompt.
+
+Continuation is selected from the journal, not from an administrator-supplied
+phase name. The currently supported post-mutation boundaries are the reviewed
+test-image Kolla prechecks refusal and the reviewed OVN router refusal below.
+Other interrupted or failed operations stop with the phase and evidence path:
+the installer does **not** assume that a failed command made no changes. This
+does not implement arbitrary-phase recovery or rollback. Completed host
+preparation and Kolla phases are never repeated just to get past an error.
+
+The original `installation.json`, child journals and logs remain intact.
+New local evidence is written below `attempts/attempt-NNNNNN/`; the private
+`attempts/current.json` locates the latest attempt. A checked or unapproved
+attempt does not claim the deployment boundary. A real approved continuation
+claims it once before mutations. All history stays root-private; symlinks,
+unrecognized directories, pointer cycles and inconsistent lineage are refused.
+Do not delete evidence or change output to bypass a safety refusal.
+
 ### Explicit upstream test-image acknowledgement
 
 This built-in profile uses `quay.io/openstack.kolla` images, which upstream
@@ -118,8 +154,10 @@ It does not turn this kit into a production-certified distribution.
 
 ### Reviewed continuation after the test-image prechecks refusal
 
-`--continue-from /absolute/previous-run --output /absolute/new-run` is a narrow,
-explicit continuation, **not** general resume or automatic repair. It accepts
+Repeat the ordinary install command with the same `--output`. The installer
+selects this reconciler only when its journal identifies this boundary. There
+are no public continuation-mode flags and no need to select a new run number.
+This is not general repair of unknown partial operations. It accepts
 only a prepared fresh installation whose parent stopped at Kolla and whose
 child stopped at `prechecks` with the specific missing-test-images refusal,
 zero completed Kolla phases and no deploy/post-deploy execution evidence.
@@ -138,8 +176,8 @@ Use `--check` to validate without running Kolla or reserving a continuation.
 Execution requires the normal confirmation or `--yes`. Only `kolla` and
 `platform` run: storage, GPU, images, network and helper preparation are never
 replayed. The original journals are preserved; an exclusive `continued-by.json`
-marker reserves one continuation before deployment. Another failure needs
-manual review, not a second automatic retry. Do not delete markers or rewrite
+marker reserves one continuation before deployment. A later failure is examined
+at its own boundary; unknown outcomes need manual review, not a blind retry. Do not delete markers or rewrite
 failed journals to manufacture successful boundaries.
 
 `--check` performs the all-host read-only scan and writes a private **local**
@@ -154,7 +192,7 @@ sudo bash scripts/install-openstack.sh install \
   --output /var/lib/spvm-check-01 --use-test-images --check
 ```
 
-For installation use a **different new output directory**, without `--check`.
+For installation repeat the command with the **same output directory**, without `--check`.
 The command scans all hosts, presents the selected hosts/pools and asks the
 administrator to type the deployment name once. Without a terminal it refuses
 implicit approval; `--yes` is an explicit noninteractive opt-in. It is not
@@ -217,6 +255,76 @@ independent dependency resolution is not promised to be bit-for-bit identical.
 
 ## Failures and evidence
 
+### Host-side runtime dependency preflight
+
+Initial compute activation must validate the runtime request using the prepared,
+measured helper package before disabling scheduling or stopping Nova. The driver
+is not installed into system Python. The isolated host script verifies and uses
+`/usr/local/libexec/nova-spvm`; it does not use forwarded Python paths or install
+global packages. Failure output identifies the compute, activation step and
+private evidence directory. Bounded remote stderr is saved only in mode-0600
+`observations/private-remote-*.json`; do not publish those diagnostics.
+
+The observed super6 failure on 2026-11-06 stopped at `enroll` after quarantine
+and Nova stop. Read-only inspection with the corrected host payload confirmed
+the expected bootstrap runtime and an empty stopped host. No runtime enrollment,
+Nova start, scheduling enable or platform continuation was performed by that
+inspection. The cloud had zero servers; super7 remained up/enabled and super6
+down/disabled. The idle libvirt process had a refreshed PID/start timestamp,
+so the old protected-services baseline cannot simply be asserted unchanged.
+Use a new verified bundle and an explicitly reconciled continuation; do not
+reset old journals or present a read-only payload test as successful activation.
+
+### Same-output validation evidence
+
+The 66 targeted synthetic tests cover transaction ordering, both reviewed
+reconcilers, same-command check/apply/no-op sequences, refused unknown failures,
+private history validation and Skyline checks. Shell syntax and dependency-free
+public `--help` passed. Tests do not prove successful live continuation.
+
+Three real read-only invocations with the same output
+`/var/lib/spvm-openstack-install-01/run-05` passed on super7 and super6; evidence
+is below `attempts/attempt-000001` through `attempt-000003`. Selection chose
+platform only and retained the original failed journal. No continuation claim,
+router creation, Kolla deployment or other installation phase was executed.
+
+### Reviewed platform-only continuation of the OVN router refusal
+
+Repeating the ordinary command with the same `--output` selects the platform
+reconciler for the observed `Provider ovn does not support ha=False` boundary:
+Kolla's three phases are complete, platform completed only `operator-auth`,
+the failed action is `shared-network`, the two exact networks/subnets exist,
+the router is absent, all computes are healthy and there are no guests.
+It does not accept other platform failures or attempt generic repair/adoption.
+
+The selected clean bundle may differ only in `deployment/spvm_network.py` and
+its documentation; wheel, version, capabilities and all other sources must
+match. The reviewed update must already be staged on the controller under
+`/opt/spvm-openstack/<deployment-id>-update-<source-commit-prefix>`.
+Only `driver.directory` may change in the infrastructure YAML; the prepared
+region, guest/debug/base-image policies, workspace, SSH trust, identities and
+host state are rechecked. Existing SDK versions and installed driver module
+bytes must still match. `--use-test-images` remains explicit.
+
+`--check` performs GET/authentication and filesystem checks only: root-private
+state lineage, unchanged credentials and delegation metadata, network scope,
+compute readiness and host observations. It does not create a router, deploy
+sources or reserve a continuation. A new real run rechecks this review before
+applying anything. `--yes` replaces only the administrator confirmation.
+
+Only platform completion runs; Kolla, disk/pool preparation, helper deployment
+and image delivery are not repeated. Existing operator/service auth is verified,
+not recreated or rotated. New versioned controller sources and private journals
+are used; original failed journals remain unchanged. Exclusive durable markers
+on both the management host and controller prevent duplicate continuations.
+No SSH key/agent is sent to the controller. The root-local SDK and validated
+existing auth are used over the finite installation channel.
+
+This mode changes provider-default router handling, not control-plane HA.
+Any subsequent partial failure requires another explicit review; do not remove
+markers or rewrite journals to retry blindly. Success still requires all native
+API, compute, web/ingress and GUI checks, not just a created router.
+
 The private output directory contains `installation.json`, `plan.json`, generated
 configs, child plans/results and private logs. Source/config/environment and
 bundle hashes are checked before each phase. The parent intent is fsynced before
@@ -243,7 +351,7 @@ identical with the libvirt connections held. Evidence is private under
 `/var/lib/spvm-openstack-install-01/run-04-real-prechecks-01`; the explicit
 continuation was not reserved and no `deploy` or platform completion was run.
 This proves the prechecks fix, not a completed cloud installation. Continue the
-reviewed failed run using a new output directory and `--continue-from`, never
+reviewed failed run using the same output directory, never
 by changing the failed journal's status or replaying initial preparation.
 
 This new entry point has synthetic failure/order/approval/protocol checks and

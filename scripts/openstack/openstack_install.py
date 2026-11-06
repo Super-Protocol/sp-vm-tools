@@ -122,7 +122,7 @@ class Transaction:
             for name in PHASES[len(self.record['completed']):]:
                 self.unchanged()
                 self.emit('Installing: ' + name, flush=True)
-                self.record.update(status='RUNNING', active_phase=name)
+                self.record.update(status='RUNNING', active_phase=name, mutation_started=True)
                 self.save()  # Write intent BEFORE allowing any child mutation.
                 result = phases[name]()
                 if not isinstance(result, dict) or result.get('blockers'):
@@ -145,13 +145,16 @@ class Transaction:
             raise
 
 
-def approve(deployment, plan, *, yes=False, stream=None):
+def approve(deployment, plan, *, yes=False, stream=None, continuation=None):
     """Never infer permission from a noninteractive session or a stale receipt."""
     stream = stream or sys.stdin
     if not yes and not stream.isatty():
         raise InstallerError('Installation requires confirmation. Run interactively, or explicitly supply --yes after reviewing --check.')
+    if continuation is not None:
+        print('Installation directory already exists: ' + str(continuation))
+        print('Installation will continue from the previous verified point; completed phases will not be repeated.')
     if plan.get('continued_from'):
-        print('Continue after reviewed Kolla prechecks failure. Only Kolla and platform completion will run.')
+        print('Reviewed continuation. Remaining phases: '+', '.join(plan.get('remaining_phases',['kolla','platform']))+'.')
         print('Previous preparation is retained; the failed transaction is not reset or replayed.')
     else:
         print('All configured hosts will be prepared and a NEW OpenStack cloud installed.')
@@ -167,7 +170,15 @@ def approve(deployment, plan, *, yes=False, stream=None):
                 print('    WARNING: this pool shares the root filesystem with the OS; the reserve is not a disk partition.')
     if plan.get('management_mode')=='shared-interface':
         print('WARNING: shared-interface management is not an encrypted inter-host network. Review exposure before approval.')
-    if yes:return
+    if yes:
+        if continuation is not None:
+            print('Continuation approved by --yes.')
+        return
+    if continuation is not None:
+        print('Continue the previous installation? [y/N]: ', end='', flush=True)
+        if stream.readline().strip().lower() not in ('y', 'yes'):
+            raise InstallerError('Continuation not approved; no installation phase was started.')
+        return
     print('Type the deployment name to approve (' + deployment + '): ', end='', flush=True)
     if stream.readline().strip() != deployment:
         raise InstallerError('Installation not approved; no installation phase was started.')
@@ -177,20 +188,20 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--config', required=True, help='Infrastructure-only deployment YAML; no provider config or guest build')
     p.add_argument('--environment', required=True, help='READY prepare-environment directory')
-    p.add_argument('--output', required=True, help='New root-protected transaction directory')
+    p.add_argument('--output', required=True, help='Root-private installation directory; an existing installation is checked for safe continuation')
     p.add_argument('--identity-file', help='Local operator SSH private key; never copied to a server')
     p.add_argument('--known-hosts', help='Local SSH trust file; otherwise use invoking-user defaults')
     p.add_argument('--check', action='store_true', help='Read-only host scan and local plan only; no host mutation/download')
-    p.add_argument('--yes', action='store_true', help='Explicit approval of installation after successful all-host checks')
+    p.add_argument('--yes', action='store_true', help='Approve installation or continuation without prompting, after successful all-host checks')
     p.add_argument('--allow-experimental-ubuntu26', action='store_true')
     p.add_argument('--use-test-images', dest='use_testing_images', action='store_true',
                    help='Explicitly acknowledge upstream quay.io/openstack.kolla test images; not implied by --yes')
-    p.add_argument('--continue-from', help='Reviewed previous transaction stopped at Kolla prechecks only; requires a NEW --output')
     return p
 
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    args.continue_from = args.continue_platform_from = None
     transaction=None
     try:
         if os.geteuid() != 0:
@@ -198,11 +209,34 @@ def main(argv=None):
         protected_parent(Path(args.output).parent)
         # Import only after parsing --help; this module has no third-party dependency.
         from openstack_install_phases import Installation
-        installation = Installation(args)
         with deployment_lock():
+            root = Path(args.output)
+            origin = mode = None
+            if root.exists() or root.is_symlink():
+                from openstack_install_resume import select, attempt
+                origin, mode = select(root)
+                if mode == 'ready':
+                    recorded = json.loads((origin / 'installation.json').read_bytes())['inputs']
+                    verified = Installation(args)
+                    if any(recorded.get(name) != value for name, value in verified.inputs.items()):
+                        raise InstallerError('The supplied configuration, environment, identity or sources differ from the completed installation.')
+                    print('Installation already recorded as OPENSTACK_READY_NO_SWARM_CREATED: ' + str(origin))
+                    print('No phases were repeated. This is not a new live health check.')
+                    return 0
+                args.output = str(attempt(root))
+                if mode == 'kolla': args.continue_from = str(origin)
+                if mode == 'platform': args.continue_platform_from = str(origin)
+            installation = Installation(args)
             transaction = Transaction(args.output, installation.inputs)
+            if origin is not None:
+                from openstack_install_resume import remember
+                remember(root, origin, mode, transaction)
+                print('Installation history: ' + str(transaction.output), flush=True)
             installation.transaction = transaction
-            if args.continue_from:
+            if args.continue_platform_from:
+                from openstack_install_platform_continue import prepare
+                plan = transaction.scan(lambda: prepare(installation, transaction))
+            elif args.continue_from:
                 from openstack_install_continue import prepare
                 plan = transaction.scan(lambda: prepare(installation, transaction))
             else:
@@ -213,10 +247,17 @@ def main(argv=None):
                 transaction.save()
                 return 0
             try:
-                approve(installation.cfg['deployment_id'], plan, yes=args.yes)
-                if args.continue_from:
+                approve(installation.cfg['deployment_id'], plan, yes=args.yes,
+                        continuation=root if origin is not None else None)
+                if args.continue_platform_from:
+                    from openstack_install_platform_continue import claim
+                    claim(installation, transaction, plan)
+                elif args.continue_from:
                     from openstack_install_continue import claim
                     claim(installation, transaction, plan)
+                elif origin is not None:
+                    from openstack_install_resume import claim_scan
+                    claim_scan(origin, transaction, plan)
                 result = transaction.apply(plan, installation.phases())
             except BaseException as error:
                 if transaction.record['status'] != 'NEEDS_REVIEW':

@@ -20,6 +20,16 @@ The current test profile requires explicit `--use-test-images`; `--yes` does
 not imply acknowledgement. `openstack_install_continue.py` provides only the
 reviewed test-image prechecks refusal continuation into a new transaction,
 never a generic failed-deploy retry or replay of host preparation.
+`openstack_install_platform_continue.py` separately reviews only the observed
+OVN router-default refusal after successful Kolla. It keeps the driver wheel,
+SDK, credentials and prepared resources, and runs only platform completion in
+new one-shot controller/management journals. Neither mode is generic recovery.
+`openstack_install_resume.py` selects these reviewed boundaries automatically
+when the administrator repeats the ordinary command with the same `--output`.
+It retains private attempt history within that directory; no public phase or
+continuation flag is needed. Check-only/approval-only runs can be scanned again;
+unknown partial mutations are refused, not replayed. Completed installations
+are not installed again. No workspace/configuration migration is performed.
 See [one-command fresh installation](../../docs/OPENSTACK_SINGLE_INSTALL.md) for
 the supported profile, management Docker prerequisite, error/retry rules and
 the pending live acceptance boundary.

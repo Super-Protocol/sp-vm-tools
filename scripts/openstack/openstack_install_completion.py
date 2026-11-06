@@ -122,8 +122,13 @@ for name,encoded in payload['files'].items():
 for p in root.rglob('*'):
  if p.is_dir():p.chmod(0o755)
 sys.path.insert(0,str(root/'tools'))
-from openstack_install_completion import setup
-print(json.dumps({'result':setup(root,payload)}),flush=True)
+if 'platform_continuation' in payload:
+ from openstack_install_platform_continue import setup_controller
+ result=setup_controller(root,payload)
+else:
+ from openstack_install_completion import setup
+ result=setup(root,payload)
+print(json.dumps({'result':result}),flush=True)
 '''
 
 
@@ -297,7 +302,11 @@ class Operations:
             plan = runner.plan(name); write(target / 'plan.json', plan)
             result = execute(plan, plan['plan_sha256'], target / 'transaction', runner)
             if result['status'] != 'COMPUTE_READY' or result['guests_restarted'] is not False:
-                raise InstallerError('Compute activation failed; no automatic retry.')
+                step=result.get('inflight')
+                if step not in ('quarantine','stop','enroll','start','accept','enable',None):step='unknown'
+                raise InstallerError('Compute activation failed on '+name+' at '+str(step)+'. Inspect '
+                    +str(target/'transaction/transaction.json')+' and private-remote-*.json under '
+                    +str(target/'observations')+'. Scheduling remains quarantined when confirmed by the journal; no automatic retry.')
             self.activated.add(name)
             return {'status': result['status'], 'guests_restarted': result['guests_restarted']}
         if operation == 'host-audits':

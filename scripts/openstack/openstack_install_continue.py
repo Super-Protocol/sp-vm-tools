@@ -100,8 +100,8 @@ def prepare(i,tx):
         raise InstallerError('Continuation requires explicit --use-test-images acknowledgement; --yes is not sufficient.')
     origin=Path(i.args.continue_from)
     protected_parent(origin)
-    if i.output==origin or i.output.is_relative_to(origin) or origin.is_relative_to(i.output):
-        raise InstallerError('Use a NEW sibling output directory for continuation.')
+    if i.output==origin or origin.is_relative_to(i.output):
+        raise InstallerError('Continuation evidence must be separate from the original transaction.')
     parent,core,old_core_plan,completed=reviewed(origin)
     tools=Path(__file__).resolve().parent
     # Explicitly approved updated coordinator code is allowed. Configuration,
