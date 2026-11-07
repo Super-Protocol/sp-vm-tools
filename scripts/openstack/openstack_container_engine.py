@@ -201,11 +201,13 @@ def inputs(args, backend):
     cfg = backend.deployment_config(args.config)
     if args.host not in cfg['hosts']:
         raise ValueError('explicit configured OpenStack host required')
-    if Path(args.kolla_source).resolve()!=Path(args.kolla_source):
+    if (Path(args.kolla_source).resolve()!=Path(args.kolla_source)
+            or '*' in str(args.kolla_source) or any(ord(c)<32 for c in str(args.kolla_source))):
         raise ValueError('absolute resolved Kolla source required')
-    revision = subprocess.run(['git','-C',args.kolla_source,'rev-parse','HEAD'],
+    git=['git','-c','safe.directory='+str(args.kolla_source),'-C',str(args.kolla_source)]
+    revision = subprocess.run(git+['rev-parse','HEAD'],
                              check=True,capture_output=True,text=True,timeout=30).stdout.strip()
-    dirty = subprocess.run(['git','-C',args.kolla_source,'status','--porcelain'],
+    dirty = subprocess.run(git+['status','--porcelain'],
                           check=True,capture_output=True,text=True,timeout=30).stdout
     if revision != cfg['kolla']['revision'] or dirty:
         raise ValueError('clean pinned Kolla source required')

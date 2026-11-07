@@ -171,8 +171,10 @@ print(json.dumps({'inventory_target_bound':True}))
 
 def inputs(spec):
     request(spec);source=Path(spec['source'])
+    if source.resolve()!=source or '*' in str(source) or any(ord(c)<32 for c in str(source)):
+        raise ValueError('canonical wildcard-free pinned Kolla source required')
     inventory_binding(spec)
-    def git(*a):return subprocess.run(['git','-C',str(source),*a],check=True,capture_output=True,text=True,timeout=30).stdout.strip()
+    def git(*a):return subprocess.run(['git','-c','safe.directory='+str(source),'-C',str(source),*a],check=True,capture_output=True,text=True,timeout=30).stdout.strip()
     if git('rev-parse','HEAD')!=spec['revision'] or git('status','--porcelain','--untracked-files=no'):
         raise ValueError('clean exact pinned Kolla source required')
     defaults=yaml.safe_load(read(source/'ansible/roles/nova-cell/defaults/main.yml'))

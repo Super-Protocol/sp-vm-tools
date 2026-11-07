@@ -33,7 +33,8 @@ def command(args, log, *, cwd, env=None):
 
 def pinned(source, revision):
     source=Path(source)
-    if not source.is_absolute() or source.resolve()!=source:
+    if (not source.is_absolute() or source.resolve()!=source or '*' in str(source)
+            or any(ord(c)<32 for c in str(source))):
         raise ValueError('absolute resolved Kolla source required')
     git=['git','-c','safe.directory='+str(source),'-C',str(source)]
     head=subprocess.run(git+['rev-parse','HEAD'],check=True,capture_output=True,text=True,timeout=30).stdout.strip()
@@ -224,7 +225,7 @@ def init(args,backend):
             kolla_external_fqdn_cert=str(output/'kolla/certificates/haproxy.pem'),
             kolla_enable_tls_internal=True,kolla_copy_ca_into_containers=True)
         private_file(output/'kolla/globals.yml',yaml.safe_dump(globals_,sort_keys=True))
-        template=subprocess.run(['git','-C',str(source),'show',cfg['kolla']['revision']+':etc/kolla/passwords.yml'],
+        template=subprocess.run(['git','-c','safe.directory='+str(source),'-C',str(source),'show',cfg['kolla']['revision']+':etc/kolla/passwords.yml'],
                                 capture_output=True,check=True,timeout=30).stdout
         private_file(output/'kolla/passwords.yml',template)
         command([str(python),str(source/'kolla_ansible/cmd/genpwd.py'),'-p',str(output/'kolla/passwords.yml')],
