@@ -39,12 +39,14 @@ hosts; determine which target/bootstrap/transport details genuinely need input.
 The current host-only YAML/batch frontend is an intermediate simplification:
 it still requires the original local installation receipts and linked history.
 
-## In progress: management CLI and manual resource allocation (2026-11-07)
+## Completed: management CLI and manual resource allocation (2026-11-07)
 
 The entry point is now `scripts/spvm-openstack.sh`; install, add-compute and
 remove-compute are subcommands. The old filename is removed without a wrapper.
-The manual resource contract is implemented for local verification; publication
-and live acceptance are still pending. Do not treat this note as stand acceptance.
+The matching contract was published as driver 0.2.36 and accepted on the cleared
+two-host CC stand, including real remove/add and manual GUI/CLI resource setup.
+See [the acceptance report](OPENSTACK_MANUAL_RESOURCES_ACCEPTANCE_20261107.md)
+for commits, artifact identity, corrected defects, evidence and limitations.
 See [manual host resources](OPENSTACK_HOST_RESOURCES.md).
 
 ## Planned follow-up: native OpenStack control-plane HA (2026-11-06)
@@ -72,10 +74,12 @@ conductors, MariaDB/Galera and RabbitMQ with a tested one-controller-loss quorum
   and partial/lost acknowledgements. Distinguish deployment-host access, common
   API availability and correctness of persistent control-plane state.
 
-## Planned follow-up: install first, allocate host resources separately (2026-11-06)
+## Completed: install first, allocate host resources separately (2026-11-06)
 
-Status: **implementation and verification in progress**. The checkpoints below
-describe earlier behavior, not acceptance of the new manual resource contract.
+Status: **implemented and accepted on the cleared CC stand, 2026-11-07**.
+The requirements below are retained as scope. Later historical checkpoints do
+not describe the new installation contract. Post-install recommendations and HA
+remain separate, unimplemented workstreams.
 
 ### Installation and resource lifecycle
 
@@ -110,11 +114,11 @@ describe earlier behavior, not acceptance of the new manual resource contract.
 
 ### Remove misleading Automatic mode and the installation baseline
 
-The current `Automatic` label is derived by comparing actual settings with a
-baseline saved at installation. CPU/RAM are hardware totals minus saved host
-reserves; pool budgets are capped by the saved budget and current free space
-minus reserve. Matching these numbers does not establish a persistent automatic
-allocation policy, and catalog refresh does not autonomously apply that policy.
+The removed `Automatic` label was derived by comparing actual settings with a
+baseline saved at installation. CPU/RAM were hardware totals minus saved host
+reserves; pool budgets were capped by the saved budget and current free space
+minus reserve. Matching those numbers did not establish a persistent automatic
+allocation policy, and catalog refresh did not autonomously apply that policy.
 
 - Remove the `Automatic / administrator defaults` selector and the API/CLI
   `auto` budget mode, installation-baseline policy/catalog dependencies and the
@@ -122,7 +126,7 @@ allocation policy, and catalog refresh does not autonomously apply that policy.
 - Display detected hardware and the actually applied explicit budgets. Before
   first configuration, display `Not configured`, not inferred automatic values
   or a fictitious positive budget. Do not merely rename the obsolete mode.
-- Keep autodetection/recommendations as a separate optional post-install action:
+- Future follow-up, **not implemented here**: optional post-install recommendations;
   preview recommended values and apply them only on explicit administrative
   request. Once applied, they are ordinary explicit budgets, not an ongoing
   automatic mode. Refreshes/reboots must not overwrite manual choices.

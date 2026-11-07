@@ -65,7 +65,10 @@ An inconsistent or interrupted state cannot be enabled.
 `/var/lib/spvm/host-resources.json` is root-owned `0600` state, bound to the
 compute UUID. It stores applied CPU/RAM limits, managed pool definitions, the
 administrator flag, revision and pending transaction. GPU inventory remains in
-the protected host GPU configuration. Installation workspaces preserve
+the protected host GPU configuration. Runtime GPU changes update only verified
+live compute/helper and controller Nova configuration; they do not require
+controller-local Kolla input files or rewrite installation workspaces.
+Installation workspaces preserve
 infrastructure and provenance, **not current resource budgets**. Resource edits
 do not rewrite deployment YAML or invalidate it by changing numeric baselines.
 
