@@ -391,6 +391,10 @@ print(json.dumps({'status':'FRESH_HOST_CHECKED','haproxy':ha}))
                                    output=str(self.output / profile))
             plan = packages.execute(args, self.path, self.backend)
             if plan.get('blockers'):
+                if any('MANAGED_API_CA_CONFLICT' in str(reason) for reason in plan['blockers']):
+                    raise InstallerError('An existing managed OpenStack API CA differs from this NEW installation. '
+                        'No trust anchor was overwritten. Inspect '+str(self.output/profile)+' and verify the previous cloud is fully retired. '
+                        'Archive/remove only its proven old CA anchor before starting a new clean installation; --yes does not replace trust.')
                 raise InstallerError('Dependency checks failed: ' + ', '.join(plan['blockers']))
             args.action = 'prepare-' + profile; args.plan_sha256 = plan['plan_sha256']
             packages.execute(args, self.path, self.backend)

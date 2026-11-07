@@ -177,3 +177,10 @@ an evacuation. Removing/re-adding an empty compute installs it **UNCONFIGURED**
 again; previous budgets are not restored from the installation workspace.
 Retired pool directories and their data are not adopted or deleted. Use an empty
 directory or perform separately reviewed administrator data handling.
+
+An arbitrary external Kolla reconfigure is not a resource-setting API. Old
+installation overrides reserve all CPU/RAM and are not current budget backups.
+Reapplying them can create a protected/native configuration mismatch; admission
+then fails closed rather than silently restoring installation defaults. Use the
+typed resource APIs. A controlled in-place upgrade that preserves live host
+state is a separate workflow, not a promise made by this fresh installer.

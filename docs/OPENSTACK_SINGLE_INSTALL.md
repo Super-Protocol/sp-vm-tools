@@ -22,6 +22,14 @@ distribute service keys, allow agent forwarding, weaken host-key checking or
 change remote sudo policy. Passwordless non-TTY sudo remains a prerequisite.
 Caller-supplied Ansible environment/hooks are still filtered.
 
+A clean-reset procedure must also retire the previous deployment's **proven**
+managed host CA anchor. Its filename is deployment-bound, not a content hash:
+a new installation of the same deployment ID creates a different CA and refuses
+to overwrite the old anchor. Confirm the old cloud is gone, preserve its public
+certificate/evidence, remove only that exact anchor and refresh the system trust
+store. Never remove unrelated CAs, accept an unverified replacement or use
+`--yes` as a trust override. The installer is not a reset/migration command.
+
 ## Inputs and prerequisites
 
 Use the infrastructure-only deployment YAML described in
