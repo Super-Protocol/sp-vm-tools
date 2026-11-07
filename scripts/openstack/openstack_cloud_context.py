@@ -348,7 +348,14 @@ def copy_driver(source, target):
         item = path.lstat()
         if path.resolve() != path or not stat.S_ISREG(item.st_mode) or item.st_nlink != 1 or file_hash(path) != expected:
             raise InstallerError('Driver snapshot source differs from the verified manifest.')
-        destination = target/relative; destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        destination = target/relative
+        # Path.mkdir(parents=True) uses the process umask for intermediate
+        # directories, not its explicit mode. Keep every private artifact
+        # directory private even when the invoking shell uses umask 022.
+        parent = target
+        for part in destination.relative_to(target).parts[:-1]:
+            parent = parent / part
+            parent.mkdir(mode=0o700, exist_ok=True)
         with path.open('rb') as src, destination.open('xb') as dst:
             os.fchmod(dst.fileno(), 0o700 if item.st_mode & 0o100 else 0o600)
             shutil.copyfileobj(src, dst, 1024**2)
