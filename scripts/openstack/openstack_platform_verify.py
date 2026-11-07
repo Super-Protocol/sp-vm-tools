@@ -9,6 +9,40 @@ import time
 from urllib.request import Request,HTTPSHandler,HTTPCookieProcessor,build_opener
 
 
+def verify_initial_resources(connection,binding,capacity,lifecycle):
+    """Fresh enrollment is technically ready but has zero workload admission."""
+    roots={h['compute_uuid'] for h in binding['hosts'].values()}
+    if (capacity.get('schema_version')!=1 or not 0<=time.time()-capacity['observed_at']<=120
+            or set(capacity['hosts'])!=roots
+            or any(h.get('enabled') is not False or h.get('gpu_free') for h in capacity['hosts'].values())
+            or any(p.get('candidate_roots') for p in capacity['profiles'].values())):
+        raise ValueError('initial capacity must be fresh, complete and disabled without workload candidates')
+    if (len(lifecycle)!=len(roots) or {r['resources']['compute_uuid'] for r in lifecycle}!=roots):
+        raise ValueError('initial lifecycle catalogs must cover the exact compute fleet')
+    for row in lifecycle:
+        value=row['resources']
+        if (row['status']!='UNCONFIGURED' or row['nova_status']!='disabled' or not row['technical_ready']
+                or value['enabled'] is not False or value['vcpus'] is not None or value['memory_mb'] is not None
+                or value['pools'] or value['transaction'] is not None
+                or set(row['blockers'])!={'CPU_RAM_NOT_CONFIGURED','STATE_POOL_NOT_CONFIGURED'}):
+            raise ValueError('fresh compute must be healthy, UNCONFIGURED and disabled with no assigned resources')
+        root=value['compute_uuid']
+        response=connection.placement.get('/resource_providers/'+root+'/inventories',microversion='1.39');response.raise_for_status()
+        inventories=response.json()['inventories']
+        for name in ('VCPU','MEMORY_MB'):
+            current=inventories.get(name,{})
+            if (type(current.get('total')) is not int or current['total']<=0
+                    or current.get('reserved')!=current['total'] or current.get('allocation_ratio')!=1.0):
+                raise ValueError('initial CPU/RAM inventory requires real positive totals and zero available capacity')
+        response=connection.placement.get('/resource_providers?in_tree='+root,microversion='1.39');response.raise_for_status()
+        if len(response.json()['resource_providers'])!=1:
+            raise ValueError('unconfigured compute must not publish workload pool or GPU providers')
+        response=connection.placement.get('/resource_providers/'+root+'/traits',microversion='1.39');response.raise_for_status()
+        if set(response.json()['traits'])&{'CUSTOM_SPVM_CC_READY','CUSTOM_SPVM_DEBUG_READY'}:
+            raise ValueError('unconfigured compute must not advertise SPVM workload readiness')
+    return {'resource_status':'UNCONFIGURED','scheduling_enabled':False,'resources_assigned':False}
+
+
 def verify(spec,path,connection,auth,binding):
     root=Path(path).parent/'skyline'
     def load(name):
@@ -59,18 +93,20 @@ def verify(spec,path,connection,auth,binding):
                 or catalogs['clusters']['clusters'] or catalogs['provider-templates']['templates']):
             raise ValueError('installation must leave image, flavor, provider and Swarm catalogs empty')
         capacity=json.loads(Path('/run/spvm-web-capacity/capacity.json').read_text())
-        if (capacity.get('schema_version')!=1 or not 0<=time.time()-capacity['observed_at']<=120
-                or set(capacity['hosts'])!={h['compute_uuid'] for h in binding['hosts'].values()}
-                or any(not h['enabled'] for h in capacity['hosts'].values())
-                or any(not capacity['profiles'].get(p['id'],{}).get('candidate_roots') for p in creation['profiles'])):
-            raise ValueError('native capacity snapshot is stale/incomplete or an initial flavor has no eligible host')
+        from openstack_spvm import host_lifecycle,host_gpus,host_pools
+        policy=json.loads(Path('/etc/spvm/host-budget-policy.json').read_text())
+        publishers=policy['reader_user_ids']
+        initial=verify_initial_resources(connection,binding,capacity,host_lifecycle.catalogs(connection,publishers))
+        if (any(p['pools'] for p in host_pools.catalogs(connection,publishers))
+                or any(d['enabled'] for h in host_gpus.catalogs(connection,publishers) for d in h['configuration']['devices'])):
+            raise ValueError('initial pool and GPU configuration must remain unassigned')
         result.update(authenticated_gui=True,template_count=len(creation['templates']),
-                      image_count=len(creation['images']),profile_count=len(creation['profiles']),native_capacity_verified=True)
+                      image_count=len(creation['images']),profile_count=len(creation['profiles']),native_capacity_verified=True,**initial)
     finally:
         if logged_in and call(base+'/logout',{})[0]!=200:raise ValueError('acceptance logout failed')
     if list(connection.compute.servers(all_projects=True)):raise ValueError('expected empty Nova cloud')
     services=list(connection.compute.services(binary='nova-compute'))
-    if len(services)!=len(binding['hosts']) or any(s.state!='up' or s.status!='enabled' for s in services):
-        raise ValueError('compute service acceptance failed')
+    if len(services)!=len(binding['hosts']) or any(s.state!='up' or s.status!='disabled' for s in services):
+        raise ValueError('fresh compute services must be up and administratively disabled')
     result.update(status='PLATFORM_API_AND_GUI_VERIFIED_NO_GUESTS',compute_hosts=len(services),guests_launched=False)
     return result

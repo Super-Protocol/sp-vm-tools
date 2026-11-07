@@ -34,6 +34,12 @@ remain physical and positive, with `reserved == total` until first assignment;
 no fictitious positive workload budget is advertised. Workload pools, GPU
 registrations and SPVM readiness traits are absent until explicitly configured.
 
+Final installation acceptance expects this deny-all state: healthy disabled
+compute services, `UNCONFIGURED` protected catalogs, real CPU/RAM totals fully
+reserved, no workload child providers, no enabled GPUs and no SPVM-ready traits.
+Zero schedulable hosts and an empty flavor-candidate catalog are successful
+initial outcomes, not reasons to enable a host or invent a resource budget.
+
 ## States and authority
 
 | Resource status | Meaning |
