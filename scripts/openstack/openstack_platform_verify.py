@@ -43,6 +43,22 @@ def verify_initial_resources(connection,binding,capacity,lifecycle):
     return {'resource_status':'UNCONFIGURED','scheduling_enabled':False,'resources_assigned':False}
 
 
+def initial_catalogs(connection,publishers,binding,read,*,timeout=120):
+    """Wait only for a missing publication; invalid present state fails below."""
+    expected={h['compute_uuid'] for h in binding['hosts'].values()}
+    deadline=time.monotonic()+timeout
+    while True:
+        rows=read(connection,publishers)
+        roots=[r['resources']['compute_uuid'] for r in rows]
+        if len(roots)!=len(set(roots)) or set(roots)-expected:
+            raise ValueError('initial lifecycle catalog contains duplicate or unexpected compute identities')
+        if set(roots)==expected:
+            return rows
+        if time.monotonic()>=deadline:
+            raise ValueError('initial lifecycle publication incomplete after bounded read-only wait')
+        time.sleep(2)
+
+
 def verify(spec,path,connection,auth,binding):
     root=Path(path).parent/'skyline'
     def load(name):
@@ -96,7 +112,8 @@ def verify(spec,path,connection,auth,binding):
         from openstack_spvm import host_lifecycle,host_gpus,host_pools
         policy=json.loads(Path('/etc/spvm/host-budget-policy.json').read_text())
         publishers=policy['reader_user_ids']
-        initial=verify_initial_resources(connection,binding,capacity,host_lifecycle.catalogs(connection,publishers))
+        lifecycle=initial_catalogs(connection,publishers,binding,host_lifecycle.catalogs)
+        initial=verify_initial_resources(connection,binding,capacity,lifecycle)
         if (any(p['pools'] for p in host_pools.catalogs(connection,publishers))
                 or any(d['enabled'] for h in host_gpus.catalogs(connection,publishers) for d in h['configuration']['devices'])):
             raise ValueError('initial pool and GPU configuration must remain unassigned')

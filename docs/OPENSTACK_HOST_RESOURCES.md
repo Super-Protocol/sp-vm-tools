@@ -39,6 +39,9 @@ compute services, `UNCONFIGURED` protected catalogs, real CPU/RAM totals fully
 reserved, no workload child providers, no enabled GPUs and no SPVM-ready traits.
 Zero schedulable hosts and an empty flavor-candidate catalog are successful
 initial outcomes, not reasons to enable a host or invent a resource budget.
+Acceptance allows a bounded read-only wait for missing host publications during
+catalog replacement. It does not replay configuration operations, accept stale
+or invalid present state, or suppress authentication and Placement failures.
 
 ## States and authority
 
