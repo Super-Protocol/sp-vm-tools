@@ -296,7 +296,14 @@ try:
  if st.st_nlink!=1 or st.st_mode&0o777!=0o600 or st.st_size>65536:raise ValueError('private bounded dispatcher identity required')
  publisher=json.loads(dispatcher_path.read_bytes())['user_id']
  if publisher not in r['readers'] or publisher==c.session.get_user_id():raise ValueError('enrolled dispatcher identity required')
- directory=Path('/var/lib/spvm-host-budget-worker')/('addition-executor-'+r['operation']);directory.mkdir(mode=0o700)
+ # Credential provisioning receipts are not resource mutation WALs. Keeping
+ # them in the worker namespace would fence every host as an unknown request.
+ base=Path('/var/lib/spvm-compute-additions');base.mkdir(mode=0o700,exist_ok=True)
+ for parent in (base,*base.parents):
+  st=parent.lstat()
+  if parent.is_symlink() or st.st_uid!=0 or st.st_mode&0o022:raise ValueError('untrusted compute-addition journal directory')
+ if base.stat().st_mode&0o077:raise ValueError('private compute-addition journal directory required')
+ directory=base/('executor-'+r['operation']);directory.mkdir(mode=0o700)
  label='spvm-host-'+hashlib.sha256((r['project']+r['deployment']+r['identity']['compute_uuid']+r['operation']).encode()).hexdigest()[:24]
  private=provision(c,label,r['auth_url'],r['region'],'/etc/ssl/certs/ca-certificates.crt',lambda state:write(directory/'transaction.json',state))
  print(json.dumps({'credentials':private,'dispatcher_user_id':publisher}))

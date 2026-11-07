@@ -45,6 +45,10 @@ or invalid present state, or suppress authentication and Placement failures.
 The final physical-host audit runs explicitly on the operator coordinator after
 controller completion. Runtime catalogs are collected through the restricted
 executors; they do not need to call an operator SSH-audit callback.
+Compute-addition credential receipts live separately under
+`/var/lib/spvm-compute-additions`, never in the resource worker's transaction
+namespace. Unknown or unfinished resource transactions still block changes;
+there is no automatic deletion, repair or replay of their journals.
 
 ## States and authority
 
