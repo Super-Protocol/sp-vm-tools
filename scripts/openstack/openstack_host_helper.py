@@ -20,7 +20,7 @@ from openstack_container_engine import digest, file_hash, write
 MODULES=('host_helper.py','host_storage.py','host_network.py','host_provider.py','host_launch.py',
          'host_runtime.py','host_execution.py','host_vif_cleanup.py','state_store.py',
          'seed_reconcile_worker.py','release_service_smoke.py','storage_discovery.py',
-         'gpu_discovery.py','host_gpu_host.py','host_gpu_native.py','host_budget_host.py','runtime_maintenance.py')
+         'gpu_discovery.py','host_gpu_host.py','host_gpu_native.py','host_budget_host.py','host_resources.py','runtime_maintenance.py')
 SCRIPTS=('start_super_protocol.sh','start_super_protocol_libvirt.sh','libvirt_launcher.py')
 ACCOUNT='kolla-nova'
 UID=42436
@@ -29,7 +29,7 @@ ROOTS={k:'/var/lib/spvm/'+v for k,v in
 FIXED=('/usr/local/libexec/spvm','/usr/local/libexec/nova-spvm',
        '/usr/local/bin/spvm_cloud.py','/etc/spvm/host-helper.json','/etc/spvm/compute-pools.json',
        '/etc/spvm/runtime-services.json','/etc/spvm/launch-policy.json','/etc/spvm/gpu-inventory.json','/etc/systemd/system/host-helper.service',
-       '/etc/systemd/system/host-helper.socket','/etc/tmpfiles.d/spvm.conf',
+       '/etc/systemd/system/host-helper.socket','/etc/tmpfiles.d/spvm.conf','/var/lib/spvm/host-resources.json',
        '/etc/polkit-1/rules.d/49-spvm-kolla-nova.rules','/var/lib/nova/compute_id')
 
 
@@ -128,7 +128,7 @@ def source_manifest(backend_path,spec,*,bootstrap=False):
     if path.resolve()!=path or not path.is_file() or path.stat().st_size>1048576:
         raise ValueError('driver capability manifest required')
     value=json.loads(path.read_text())
-    needed={'grant-bound-release-selection','guest-api-registry-presence','gpu-profile-placement-v1','gpu-pci-identity-v1','explicit-host-launch-policy-v1'}
+    needed={'grant-bound-release-selection','guest-api-registry-presence','gpu-profile-placement-v1','gpu-pci-identity-v1','explicit-host-launch-policy-v1','manual-host-resource-lifecycle-v1'}
     needed.update({'administrator-release-registration','image-independent-host-provisioning'})
     if bootstrap:needed.add('deny-all-runtime-bootstrap')
     if value.get('schema_version')!=1 or not needed<=set(value.get('capabilities',[])):
@@ -251,6 +251,11 @@ class Host:
         dynamic=self.trusted(spec['registered_release_cache_root'])
         if dynamic.exists() and (not dynamic.is_dir() or dynamic.stat().st_mode & 0o067):
             raise ValueError('registered release cache root must be private')
+        cache_parent=dynamic
+        while not cache_parent.exists():cache_parent=cache_parent.parent
+        cache_space=os.statvfs(cache_parent)
+        if cache_space.f_flag & os.ST_RDONLY or cache_space.f_bavail*cache_space.f_frsize<10*2**30:
+            raise ValueError('registered image cache requires a writable filesystem with at least 10 GiB free')
         pools,devices=[],set()
         for item in spec['pools']:
             mount=self.trusted(item['mount'],directory=True)
@@ -330,7 +335,9 @@ class Host:
                 'timeout':1200,'allow_debug_launch':spec['allow_debug'],
                 'registered_release_cache_root':spec['registered_release_cache_root'],
                 'release_gate':'guest-api-registry-presence-v1'}}
-        files={**files,'/etc/spvm/host-helper.json':(json.dumps(config,indent=2).encode(),0o600),
+        from nova_spvm.host_resources import initial
+        files={**files,'/var/lib/spvm/host-resources.json':(json.dumps(initial(spec['compute_uuid'])).encode(),0o600),
+            '/etc/spvm/host-helper.json':(json.dumps(config,indent=2).encode(),0o600),
             '/etc/spvm/launch-policy.json':(json.dumps({'mode':spec['launch_mode'],
                 'allow_debug':spec['allow_debug']},sort_keys=True).encode(),0o644),
             '/etc/spvm/gpu-inventory.json':(json.dumps(spec['gpu_inventory'],sort_keys=True).encode(),0o644),

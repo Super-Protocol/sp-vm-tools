@@ -24,7 +24,7 @@ from openstack_compute_identity import identities,verify_rule
 
 FIELDS={'schema_version','controller','sdk_venv','network',
         'web_user','operator_user','runtime_dir','state_dir','origins','host_sources',
-        'ingress_address','base_haproxy_config','quota_from_host_budgets','console_manifest'}
+        'ingress_address','base_haproxy_config','preserve_project_quotas','console_manifest'}
 INGRESS_USER='spvm-ingress'
 
 
@@ -123,7 +123,7 @@ def install_operator_auth(authdir, auth, operator_group, region, ca):
 def specification(filename):
     value=json.loads(read(filename))
     if (not isinstance(value,dict) or set(value)-{'release_registration'}!=FIELDS or type(value['schema_version']) is not int
-            or value['schema_version']!=1 or value['quota_from_host_budgets'] is not True):
+            or value['schema_version']!=1 or value['preserve_project_quotas'] is not True):
         raise ValueError('exact fresh platform completion specification required')
     if 'release_registration' in value and type(value['release_registration']) is not bool:
         raise ValueError('explicit boolean release registration opt-in required')
@@ -374,14 +374,10 @@ def prepare_host_catalog(value,path,backend,connection,spec,cfg,project,user,exe
     """
     import fcntl
     from openstack_host_budgets import Worker
-    automatic={name:{**host['compute_resources'],'pools':[
-        {k:p[k] for k in ('id','budget_gib','reserve_gib')}
-        for p in host['storage_pools'] if p.get('enabled',True)]}
-        for name,host in cfg['hosts'].items() if 'compute' in host['roles']}
     policy={'schema_version':1,'config':value['config'],'controller':spec['controller'],
         'controller_machine_sha256':hashlib.sha256(Path('/etc/machine-id').read_bytes().strip()).hexdigest(),
         'openrc':'/etc/spvm/auth/admin-openrc.sh','project_id':project,
-        'admin_user_ids':[user],'reader_user_ids':[executors['publisher_user_id']],'automatic':automatic,
+        'admin_user_ids':[user],'reader_user_ids':[executors['publisher_user_id']],
         'executors':executors['executors'],'dispatcher_credentials':executors['dispatcher_credentials']}
     filename=Path('/etc/spvm/host-budget-policy.json')
     with filename.open('x') as stream:json.dump(policy,stream,indent=2)
@@ -390,9 +386,9 @@ def prepare_host_catalog(value,path,backend,connection,spec,cfg,project,user,exe
     descriptor=os.open(worker.root/'worker.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
     try:
         fcntl.flock(descriptor,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        worker.sync();worker.sync_pools();worker.sync_gpus()
+        worker.sync_catalogs()
     finally:os.close(descriptor)
-    return {'status':'HOST_CATALOGS_INITIALIZED','policy':str(filename),'hosts':sorted(automatic),
+    return {'status':'HOST_CATALOGS_INITIALIZED','policy':str(filename),'hosts':sorted(executors['executors']),
         'publisher_user_id':executors['publisher_user_id'],
         'budgets_changed':False,'guests_changed':False}
 
@@ -555,14 +551,9 @@ def post_install(value,path,backend,output,core,*,operations=None,verify_existin
                 return {'status':result['status'],'guests_restarted':result['guests_restarted']}
             phase('compute-'+name,activate_compute)
         def quota():
-            import resource_audit
-            physical=resource_audit.validate(cfg,backend.host_audits(cfg) if operations is None else operations('host-audits',{}))
-            limits={'cores':sum(h['vm_capacity_ceiling']['vcpus'] for h in physical['hosts'].values()),
-                    'ram':sum(h['vm_capacity_ceiling']['memory_mb'] for h in physical['hosts'].values())}
-            limits['instances']=limits['cores'];before=connection.compute.get_quota_set(project)
-            write(output/'quota-intent.json',{'project':project,'limits':limits,'before':{k:getattr(before,k) for k in limits}})
-            connection.compute.update_quota_set(project,**limits);after=connection.compute.get_quota_set(project)
-            if any(getattr(after,k)!=v for k,v in limits.items()):raise ValueError('quota validation failed')
+            before=connection.compute.get_quota_set(project)
+            limits={k:getattr(before,k) for k in ('cores','ram','instances')}
+            write(output/'project-quotas.json',{'project':project,'limits':limits,'changed':False})
             return limits
         phase('quota',quota)
         def ingress_scaffold():

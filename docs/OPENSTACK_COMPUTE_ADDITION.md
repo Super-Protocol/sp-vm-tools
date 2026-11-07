@@ -15,9 +15,6 @@ hosts:
     launch_mode: tdx
     management_interface: mgmt0
     tunnel_interface: mgmt0
-    compute_resources: {reserved_cpus: 4, reserved_memory_mb: 16384}
-    storage_pools: auto
-    storage_discovery: {reserve_gib: 200}
   compute03:
     address: 192.0.2.21
     user: operator
@@ -25,9 +22,6 @@ hosts:
     launch_mode: tdx
     management_interface: mgmt0
     tunnel_interface: mgmt0
-    compute_resources: {reserved_cpus: 4, reserved_memory_mb: 16384}
-    storage_pools: auto
-    storage_discovery: {reserve_gib: 200}
 ```
 
 `roles` defaults to `[compute]`; other roles are refused. Omit `--host` to process
@@ -40,7 +34,7 @@ explicit and there is no CC-to-untrusted fallback. The YAML root accepts only
 cloud configuration is not accepted as a compatibility input.
 
 ```bash
-sudo bash scripts/install-openstack.sh add-compute \
+sudo bash scripts/spvm-openstack.sh add-compute \
   --config /srv/private/computes.yaml \
   --environment /srv/private/installer-environment \
   --installation /var/lib/spvm-install/run-01 \
@@ -66,9 +60,9 @@ This command does not make Ubuntu 26 upstream-supported.
 ## Inputs and version selection
 
 The YAML describes **only the selected computes**: address/user, bootstrap launch mode, management/tunnel
-interfaces, CPU/RAM reservations and storage policy. Automatic storage discovery
-is supported. Resource configuration remains required until the separately
-planned post-install resource-allocation interface is implemented.
+interfaces and launch mode. Resource fields are rejected. The new host is
+UNCONFIGURED and disabled; assign resources and explicitly Enable it afterward.
+See [manual resources](OPENSTACK_HOST_RESOURCES.md).
 
 The original `--installation` supplies cloud/network/Kolla/image settings, API
 CA and password store. The management kit is selected only from manifest hashes
@@ -100,8 +94,9 @@ returns `COMPUTES_ADDED`. Child results are `COMPUTE_ADDED` or
 `ALREADY_ADDED_VERIFIED`. A used/partial batch directory is never overwritten,
 resumed or migrated. Review ambiguous mutations before any further operation.
 
-Existing hosts, their budgets/GPU policy and control-plane configuration are
-taken from the latest **completed** workspace. The command follows explicit,
+Existing infrastructure and control-plane provenance are taken from the latest
+**completed** workspace. Current budgets and GPU settings remain authoritative
+on each protected host and are not restored from that workspace. The command follows explicit,
 verified successful add/remove supersessions from the original installation;
 unfinished transactions and configuration drift are not silently adopted.
 The selected verified driver, Kolla revision and immutable compute image must

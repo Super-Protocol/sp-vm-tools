@@ -81,6 +81,8 @@ def backend(directory, *, verified_bundle=False):
         base = path.parent.parent
         manifest = json.loads((base/'manifest.json').read_text())
         hashes = manifest.get('source_sha256')
+        if 'manual-host-resource-lifecycle-v1' not in manifest.get('capabilities',[]):
+            raise ValueError('Driver kit lacks manual-host-resource-lifecycle-v1. Use a matching new kit; old configurations and workspaces are not migrated.')
         if (manifest.get('schema_version') != 1 or manifest.get('source_tree_dirty') is not False
                 or not re.fullmatch('[a-f0-9]{40}', str(manifest.get('source_commit', '')))
                 or not isinstance(hashes, dict) or 'deployment/installer.py' not in hashes):
@@ -148,8 +150,6 @@ def main(argv=None):
         'Pass backend arguments after --. Example: --driver-dir /srv/swarm-cloud -- '
         'preflight --config deployment.yaml --output /srv/check-01. '
         'Owned preparation commands: plan-container-engine, prepare-container-engine. '
-        'Mounted state storage: plan-storage, prepare-storage (outputs resolved deployment YAML). '
-        'GPU identity preparation: prepare-gpus (explicit empty-host detection and resolved YAML). '
         'New-cloud inputs: init-kolla, check-kolla-workspace, list-kolla-tasks. '
         'Fresh compute configuration: stage-kolla-computes. Existing inventory extension: stage-add-compute-workspace. '
         'Initial-cloud checks: plan-kolla-prechecks, run-kolla-prechecks. '
@@ -236,18 +236,12 @@ def main(argv=None):
             raise InstallerError('Cannot resolve local SSH settings. Check --identity-file / --known-hosts paths and permissions, or SSH_AUTH_SOCK ownership. Defaults belong to the invoking user, including under sudo.') from None
         os.environ['SPVM_INSTALLER_SSH_POLICY']=json.dumps(transport,sort_keys=True)
         os.environ['SPVM_INSTALLER_SSH_BACKEND']=str(path.parent)
-        trust_commands={'plan-storage','prepare-storage','prepare-gpus',
+        trust_commands={
             'plan-base-packages','prepare-base-packages','plan-host-sdk','prepare-host-sdk','plan-api-trust','prepare-api-trust',
             'initial-host-status','plan-kolla-prechecks','run-kolla-prechecks','plan-kolla-install','run-kolla-install',
             'verify-kolla-existing','plan-container-engine','prepare-container-engine'}
         if remaining[0] in trust_commands and override('known-hosts') is None:
             remaining+=['--known-hosts',transport['known_hosts']]
-        if remaining[0]=='prepare-gpus':
-            from openstack_gpu_prepare import main as gpu_prepare
-            return gpu_prepare(path,remaining)
-        if remaining[0] in ('plan-storage','prepare-storage'):
-            from openstack_storage_prepare import main as storage_prepare
-            return storage_prepare(path,remaining)
         if remaining[0]=='stage-kolla-identities':
             from openstack_compute_identity import main as compute_identity
             return compute_identity(path,remaining)

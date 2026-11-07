@@ -3,7 +3,7 @@
 The public entry point is:
 
 ```bash
-sudo bash scripts/install-openstack.sh install \
+sudo bash scripts/spvm-openstack.sh install \
   --config /srv/spvm/deployment.yaml \
   --environment /srv/spvm/environment-01 \
   --output /var/lib/spvm-install-01 \
@@ -20,7 +20,7 @@ SSH keys, launch guests, import a provider configuration or create a Swarm.
 Use the infrastructure-only deployment YAML described in
 [the deployment guide](OPENSTACK_DEPLOYMENT.md). `driver.directory` selects a
 previously verified, expanded release bundle with source checksums and its
-matching wheel; `host-control-api-v1` and the current infrastructure-first
+matching wheel; `manual-host-resource-lifecycle-v1`, `host-control-api-v1` and infrastructure-first
 capabilities are mandatory. No compatibility or workspace migration is offered.
 
 `--environment` is the READY directory created by `prepare-environment.sh`.
@@ -40,7 +40,8 @@ required. Actual image build/export failures remain failures, not readiness.
 Every server must already have its appropriate hardware bootstrap, working
 operator SSH and passwordless sudo. A service-only controller need not have KVM.
 Compute hosts must be empty and have an explicitly configured launch mode and
-resource reserves. There must be no old OpenStack configuration, helper,
+no initial resource fields. Assign resources after installation using
+[manual host resources](OPENSTACK_HOST_RESOURCES.md). There must be no old OpenStack configuration, helper,
 occupied service targets, native OVS runtime or unexplained cloud state.
 An enabled/running native HAProxy is not automatically taken over.
 
@@ -187,7 +188,7 @@ downloads no dependency. Local launcher validation uses a private copy. The
 command returns nonzero if a host or local prerequisite is blocked.
 
 ```bash
-sudo bash scripts/install-openstack.sh install \
+sudo bash scripts/spvm-openstack.sh install \
   --config /srv/spvm/deployment.yaml \
   --environment /srv/spvm/environment-01 \
   --output /var/lib/spvm-check-01 --use-test-images --check
@@ -454,7 +455,7 @@ bindings and the earlier host-catalog API. Production checks were not weakened
 to satisfy those fixtures.
 
 A real read-only run from `petr-dev` succeeded against `super7` and `super6`,
-starting with the original infrastructure YAML (`storage_pools: auto`) and the
+starting with the original infrastructure YAML (without resource fields) and the
 existing READY environment. It validated pip/import/CLI/collection state and
 both hosts, then recorded `CHECKED_NOT_INSTALLED`. Private evidence is in
 `/var/lib/spvm-openstack-install-01/one-command-check-08`. Earlier local failed

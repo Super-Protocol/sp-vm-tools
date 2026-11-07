@@ -35,7 +35,7 @@ def context(path,args):
     module.ssh_arguments=ssh
     cfg=module.deployment_config(delegation['config'])
     if (os.geteuid()!=0 or cfg['hosts'][delegation['controller']].get('inventory_name',delegation['controller'])!=socket.gethostname()
-            or args.host not in delegation['automatic'] or cfg['hosts'][args.host]['roles']!=['compute']):
+            or args.host not in delegation['executors'] or cfg['hosts'][args.host]['roles']!=['compute']):
         raise ValueError('root-local controller and delegated compute-only target required')
     receipt=workspace.check(args.workspace)
     binding=json.loads(read(Path(args.workspace)/'compute-binding.json'))
@@ -159,7 +159,7 @@ c=openstack.connect(verify='/etc/ssl/certs/ca-certificates.crt',api_timeout=30)
 try:
  if c.session.get_project_id()!=PROJECT:raise ValueError('catalog project differs')
  result={}
- for prefix in ('spvm-host-budget-','spvm-host-pool-','spvm-host-gpu-'):
+ for prefix in ('spvm-host-budget-','spvm-host-pool-','spvm-host-gpu-','spvm-host-lifecycle-'):
   name=prefix+ROOT+'-catalog';saved=flow.record(c.key_manager,name,PUBLISHERS)
   if saved is None:continue
   payload=flow.parse_json(saved[1])
@@ -190,11 +190,11 @@ module=backend(BACKEND)
 c=openstack.connect(verify='/etc/ssl/certs/ca-certificates.crt',api_timeout=30)
 try:
  worker=Worker(config,BACKEND,module,c,policy_path=POLICY)
- worker.sync();worker.sync_pools();worker.sync_gpus()
+ worker.sync_catalogs()
 finally:c.close()
 p=subprocess.run(['systemctl','start','spvm-web-capacity.service'],capture_output=True,timeout=120)
 if p.returncode:raise ValueError('capacity collection failed')
-print(json.dumps({'status':'REMAINING_HOST_CATALOGS_REFRESHED','hosts':sorted(config['automatic'])}))
+print(json.dumps({'status':'REMAINING_HOST_CATALOGS_REFRESHED','hosts':sorted(config['executors'])}))
 '''
     return runner.remote(delegation['controller'],code,controller=True,auth=True)
 
@@ -307,7 +307,7 @@ def execute(args,output,module,delegation,cfg,receipt,binding,runner,*,coordinat
         new,successor=stage_workspace(args,cfg,receipt,binding)
         write(output/'configuration-before.json',{'config':cfg,'policy':delegation})
         if coordinator is not None:step('controller-claim',lambda:coordinator.start(plan))
-        step('quarantine',lambda:runner.cloud(plan,'quarantine'))
+        step('quarantine',lambda:runner.quarantine(plan))
         runner.guard(plan)
         # Revoke this empty, quarantined target's peer permissions while OVN
         # still owns its topology. Stopping OVN/removing the last remote chassis
@@ -323,7 +323,7 @@ def execute(args,output,module,delegation,cfg,receipt,binding,runner,*,coordinat
         def configurations():
             if coordinator is not None:
                 return coordinator.configure(new,successor,plan)
-            policy={**delegation,'automatic':{n:v for n,v in delegation['automatic'].items() if n!=args.host},
+            policy={**delegation,
                 'executors':{n:v for n,v in delegation['executors'].items() if n!=args.host}}
             write(Path(args.policy),policy);write(Path(delegation['config']),new)
             write(output/'remaining-deployment.yaml',new)

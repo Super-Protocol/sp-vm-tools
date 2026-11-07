@@ -147,7 +147,7 @@ build/cache binding as the existing deployment.
 Prepare a new private workspace, without any remote mutation:
 
 ```bash
-sudo scripts/install-openstack.sh --driver-dir /srv/selected-driver -- \
+sudo scripts/spvm-openstack.sh --driver-dir /srv/selected-driver -- \
   stage-add-compute-workspace \
   --config /srv/operator/deployment-existing.yaml \
   --new-config /srv/operator/deployment-three-hosts.yaml \

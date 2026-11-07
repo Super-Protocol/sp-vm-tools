@@ -123,7 +123,7 @@ preflight and the helper request mapping, whose storage/GPU/host-policy settings
 already reviewed:
 
 ```bash
-scripts/install-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
+scripts/spvm-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
   stage-kolla-identities --config /srv/operator/deployment.yaml \
   --audit /srv/operator/preflight/audit.json \
   --requests /srv/operator/helper-requests.json \
@@ -285,12 +285,12 @@ conflict override.
 
 ```bash
 export SPVM_INSTALLER_PYTHON=/srv/operator/client-venv/bin/python
-scripts/install-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
+scripts/spvm-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
   plan-openstack --request /srv/operator/workflow.json \
   --output /srv/operator/platform-install-01
 
 # Review the plan and exact source/input checksums before authorizing changes.
-scripts/install-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
+scripts/spvm-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
   apply-openstack --request /srv/operator/workflow.json \
   --output /srv/operator/platform-install-01 \
   --plan-sha256 REPLACE_WITH_APPROVED_SHA256 --allow-changes

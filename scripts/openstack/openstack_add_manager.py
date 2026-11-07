@@ -131,15 +131,7 @@ class Addition:
     def observe(self):
         from openstack_compute_identity import native_uuid
         cfg=self.i.cfg;host=self.args.host
-        # Automatic pools need read-only resolution before the hardware audit.
-        # Unlike fresh storage preparation this discovery does not require
-        # deleting existing enrollment first and does not create directories.
         audit_cfg=copy.deepcopy(cfg)
-        if audit_cfg['hosts'][host]['storage_pools']=='auto':
-            source=(self.i.path.parent/'storage_discovery.py').read_text()
-            observed=self.runner.remote(host,'SOURCE='+repr(source)+'\nimport types,json\nm=types.ModuleType("storage_discovery");exec(SOURCE,m.__dict__)\nprint(json.dumps(m.discover()))\n')
-            from storage_discovery import automatic
-            audit_cfg['hosts'][host]['storage_pools']=automatic(observed,**audit_cfg['hosts'][host].get('storage_discovery',{}))
         audits=self.i.backend.host_audits(audit_cfg);self.i.audits=audits
         if audits[host]['os_version']=='26.04' and not self.args.allow_experimental_ubuntu26:
             raise InstallerError('Ubuntu 26 compute requires --allow-experimental-ubuntu26.')
@@ -161,7 +153,7 @@ class Addition:
             if plan['mode']!='NOOP' or plan['status']!='NOOP_READY':raise InstallerError('Registered host is not an exact ready match; add-compute does not repair occupied deployments.')
             return {'kind':'add-compute-v1','classification':'registered','cloud':cloud,'ready_plan':plan,'facts':None}
         if host in self.old['hosts']:raise InstallerError('Active inventory contains an absent compute; retire/review it first, never silently recreate a failed node.')
-        self.pools=audit_cfg['hosts'][host]['storage_pools']
+        self.pools=[]
         facts=actor(self.runner,host,self.identity,self.pools)
         classification=target.classify(facts,cloud,self.identity,self.proof)
         import openstack_launcher as launcher
@@ -210,7 +202,6 @@ else:
   if set(new['hosts'])!=set(old['hosts'])|{name} or new['hosts'][name]['roles']!=['compute']:raise ValueError('exact compute addition required')
   directory=claim.parent/('addition-'+r['operation']);directory.mkdir(mode=0o700)
   write(directory/'configuration-before.json',{'config':old,'policy':v})
-  h=new['hosts'][name];v['automatic'][name]={**h['compute_resources'],'pools':[{k:p[k] for k in ('id','budget_gib','reserve_gib')} for p in h['storage_pools'] if p.get('enabled',True)]}
   v['executors'][name]=r['executor'];record['configuration_inflight']=True;write(claim,record)
   write(policy,v);write(config,new)
   record.update(configuration_inflight=False,policy_sha256=file_hash(policy),config_sha256=file_hash(config));write(claim,record)
@@ -223,15 +214,6 @@ print(json.dumps({'status':record['status']}))
         return self.c.remote(code)
 
     def prepare_inputs(self):
-        import openstack_storage_prepare as storage
-        import openstack_gpu_prepare as gpu
-        i=self.i;host=self.args.host
-        args=i.phase_args(action='plan-storage',host=host,output=str(self.output/'storage'),replace_existing_state=False)
-        args.config=i.config
-        result=storage.execute(i.path,args);args.action='prepare-storage';args.plan_sha256=result['plan_sha256']
-        result=storage.execute(i.path,args);i.config=result['resolved_config'];i.refresh()
-        result=gpu.execute(i.path,i.phase_args(host=host,output=str(self.output/'gpu')))
-        i.config=result['resolved_config'];i.refresh()
         return self.finish_inputs()
 
     def finish_inputs(self):
@@ -240,13 +222,14 @@ print(json.dumps({'status':record['status']}))
         i.network_documents()
         from nova_spvm.gpu_profiles import catalog
         import openstack_host_helper as helper
-        h=i.cfg['hosts'][host];mount=max((p for p in h['storage_pools'] if p.get('enabled',True)),key=lambda p:p['budget_gib'])['mount']
+        h=i.cfg['hosts'][host]
+        from openstack_gpu_prepare import detect
+        detected=detect(i.backend,i.path,h)
         self.helper={'version':1,**{k:self.identity[k] for k in ('machine_sha256','compute_uuid')},
             'launch_mode':h['launch_mode'],'allow_debug':i.options.get('allow_debug',False),
             'tools':'/opt/spvm-launcher/'+i.cfg['deployment_id']+'-add-'+digest(str(self.output))[:12],
-            'registered_release_cache_root':str(Path(mount)/('spvm-registered-releases-'+i.cfg['deployment_id'])),
-            'pools':[{k:p[k] for k in ('id','mount','budget_gib','reserve_gib')}|{'root':p['path']}|({'allow_root':True} if p.get('allow_root') else {}) for p in h['storage_pools'] if p.get('enabled',True)],
-            'gpu_inventory':h['gpu_inventory'],'gpus':sorted(a for unit in catalog(h['gpu_inventory'])['assignments'] for a in unit['members'])}
+            'registered_release_cache_root':'/var/lib/spvm/registered-releases',
+            'pools':[],'gpu_inventory':detected,'gpus':[]}
         helper.request(self.helper);request=self.output/'helper-request.json';write(request,self.helper)
         from basic_preflight import check
         report=check(i.cfg,i.audits)

@@ -37,10 +37,11 @@ def stage(backend,args):
     trusted(web_python.resolve())
     probe=subprocess.run([str(web_python),'-c',
         'import json; from pathlib import Path; import openstack_spvm.web_nodes as w; '
-        'import openstack_spvm.host_budgets; import openstack_spvm.host_gpus; '
+        'import openstack_spvm.host_budgets; import openstack_spvm.host_gpus; import openstack_spvm.host_lifecycle; '
+        'from nova_spvm.host_resources import CAPABILITY; assert CAPABILITY == "manual-host-resource-lifecycle-v1"; '
         'from nova_spvm.gpu_profiles import desired, validate_settings, profile_names, PCI_IDENTITY_API; '
         'assert PCI_IDENTITY_API == 1; '
-        'assert all(callable(getattr(w.NodeService,n,None)) for n in ("budgets","budget_submit","budget_status","pool_catalog","pool_submit","pool_status","gpu_catalog","gpu_submit","gpu_status")); '
+        'assert all(callable(getattr(w.NodeService,n,None)) for n in ("lifecycle","budgets","budget_submit","budget_status","pool_catalog","pool_submit","pool_status","gpu_catalog","gpu_submit","gpu_status")); '
         'print(json.dumps(str(Path(w.__file__).parent)))'],capture_output=True,text=True,timeout=30)
     if probe.returncode:raise ValueError('web backend lacks budget support; deploy matching client before activation')
     web_modules=trusted(json.loads(probe.stdout))

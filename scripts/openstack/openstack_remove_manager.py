@@ -249,7 +249,7 @@ else:
   if host not in cfg['hosts'] or cfg['hosts'][host]['roles']!=['compute']:raise ValueError('compute-only target required')
   directory=claim.parent/('retirement-'+request['operation']);directory.mkdir(mode=0o700)
   write(directory/'configuration-before.json',{'config':cfg,'policy':v})
-  del cfg['hosts'][host];del v['automatic'][host];del v['executors'][host]
+  del cfg['hosts'][host];del v['executors'][host]
   write(claim,{**record,'configuration_inflight':True})
   write(policy_path,v);write(config_path,cfg)
   record.update(policy_sha256=file_hash(policy_path),config_sha256=file_hash(config_path),configuration_inflight=False)
@@ -288,11 +288,11 @@ config=policy('/etc/spvm/host-budget-policy.json');module=backend(BACKEND)
 c=openstack.connect(verify='/etc/ssl/certs/ca-certificates.crt',api_timeout=30)
 try:
  worker=Worker(config,BACKEND,module,c,policy_path=Path('/etc/spvm/host-budget-policy.json'))
- worker.sync();worker.sync_pools();worker.sync_gpus()
+ worker.sync_catalogs()
 finally:c.close()
 p=subprocess.run(['systemctl','start','spvm-web-capacity.service'],capture_output=True,timeout=120)
 if p.returncode:raise ValueError('capacity refresh failed')
-print(json.dumps({'status':'REMAINING_HOST_CATALOGS_REFRESHED','hosts':sorted(config['automatic'])}))
+print(json.dumps({'status':'REMAINING_HOST_CATALOGS_REFRESHED','hosts':sorted(config['executors'])}))
 '''
         return self.runner.remote(self.controller,lock_guard(self.lock)+code,controller=True,auth=True)
 

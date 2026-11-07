@@ -143,8 +143,8 @@ def probe(old_root,source_root,*,activation=None,activated=False,channel=None):
                 if failed:
                     if service.status!='disabled' or service.state not in ('up','down'):
                         raise ValueError('failed compute must remain quarantined')
-                elif service.state!='up' or service.status!='enabled':
-                    raise ValueError('other/reconciled compute is not up and enabled')
+                elif service.state!='up' or service.status!='disabled':
+                    raise ValueError('other/reconciled unconfigured compute must be up and disabled')
         platform.verify_operator_auth('/etc/spvm/auth',cloud['auth'],0,region,ca)
         spec=platform.specification(data/'platform.json')
         if Path(spec['runtime_dir']).exists() or Path(spec['state_dir']).exists():

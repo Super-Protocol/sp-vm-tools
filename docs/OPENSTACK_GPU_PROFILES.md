@@ -4,45 +4,19 @@ This work is not yet a completed or deployed release. Use matching installer,
 driver, helper and Skyline sources. No migration/adoption of former inventories
 or existing helper installations is implemented.
 
-## Initial preparation
+## Initial detection and later configuration
 
-Complete CC/libvirt bootstrap separately and resolve state storage. Before host
-audit and helper/compute staging, explicitly prepare empty compute hosts:
+Installation only detects hardware and leaves every GPU disabled. It does not
+write resource inventory into deployment YAML. After installation, use the host
+resource page or `openstack spvm host gpu` commands to discover metadata and
+explicitly configure selected devices on an empty host. Then separately Enable
+the host; technical GPU changes leave it disabled. CPU-only hosts are supported.
+See [manual resources](OPENSTACK_HOST_RESOURCES.md).
 
-```bash
-sudo scripts/install-openstack.sh --driver-dir /opt/swarm-cloud -- \
-  prepare-gpus --config /etc/spvm/deployment.yaml \
-  --known-hosts /etc/spvm/known_hosts --output /var/lib/spvm/gpu-preparation-001
-```
-
-Use the resulting `deployment.resolved.yaml` for subsequent steps. Source YAML is
-not overwritten. The output directory must be new; failed journals are retained,
-never replayed automatically. This step currently remains an explicit prerequisite
-instead of being silently inserted into an existing installation workflow.
-
-The command uses pinned SSH host trust, independently refuses existing domains
-and running QEMU processes, installs reviewed gpu-admin-tools commit
-`94b22ff51cfa13137264c75cee7d8cb8aa47ac34` under
-`/opt/nvidia/gpu-admin-tools`, then queries exact BDFs. No `nvidia-smi` is needed.
-The query can access MMIO: it is not a live monitoring probe. It never resets a
-GPU, binds a driver or changes CC/PPCIe mode. Initial checkout requires GitHub
-access; existing dirty, differently pinned or unprotected checkouts are rejected.
-
-Unknown model/memory/architecture/variant does not prevent standalone GPU
-advertisement. Incomplete PCI identity, missing VFIO/IOMMU readiness or disabled
-devices still block allocation. A zero/invalid memory reading is recorded as
-unknown, never as a real capacity or a reason to invent one. Detected facts are kept
-separate from administrator `overrides` (`model`, `memory_bytes`, `variant`,
-`architecture`). Memory is in bytes. Initial corrections can be made in the
-resolved inventory before enrollment. Rediscovery preserves labels/overrides
-only for an unchanged PCI identity, not a replacement at the same BDF.
-
-The helper template uses `gpus: "from-deployment"` and
-`gpu_inventory: "from-deployment"`; identity staging resolves them. Direct helper
-provisioning requires the complete resolved inventory and exact eligible BDF list.
-CPU-only intent is explicit, never an instruction to attach every host GPU.
-Native PCI Placement reporting and scheduling must both be enabled; do not treat
-enabling them on an old occupied compute as an automatic compatibility migration.
+Metadata probing is a separate explicit empty-host operation. The pinned query
+tool may access MMIO; it is not a live monitoring probe and never resets devices,
+changes bindings or switches CC/PPCIe mode. Unknown descriptive metadata does
+not block a standalone whole GPU with valid PCI identity, VFIO and IOMMU.
 
 ## Names and later changes
 
@@ -123,15 +97,15 @@ propagation. Matching native PCI Placement modes must already be enabled. It
 preflights every destination, proves emptiness across all projects/reservations,
 disables target scheduling and stops only its compute/helper services. It backs
 up and updates inventory, helper registrations, device specs, aliases and canonical
-Kolla/deployment intent. Unrelated exact-BDF PCI specifications/aliases survive;
+Kolla overrides and protected host state, not deployment YAML. Unrelated exact-BDF PCI specifications/aliases survive;
 ambiguous masks or overlapping non-SPVM registrations are refused before writes.
 
 Changed aliases cause controlled Nova API/scheduler/conductor restarts. This can
 briefly interrupt API access cluster-wide, but never restarts running VM processes
 or another host's compute. Semantically unchanged settings do not restart services.
-Before scheduling is restored, the worker verifies exact BDF identity/availability,
+Before reporting success, the worker verifies exact BDF identity/availability,
 complete Placement resource-class totals and repeated all-project empty-host proofs.
-A previously disabled host remains disabled. Existing flavors are not rewritten:
+Every technical change leaves the host disabled until a separate Enable. Existing flavors are not rewritten:
 descriptive corrections do not change technical identity, aliases or Placement
 resource classes and do not require a new flavor. The empty-host restriction
 still applies to characteristic edits. A physical PCI identity change needs a

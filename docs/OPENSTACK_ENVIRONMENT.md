@@ -82,7 +82,7 @@ The private output directory contains:
 
 | Path | Purpose |
 | --- | --- |
-| `installer-venv/` | Python with `PyYAML==6.0.3` for `install-openstack.sh`. |
+| `installer-venv/` | Python with `PyYAML==6.0.3` for `spvm-openstack.sh`. |
 | `kolla-venv/` | Non-editable selected Kolla installation and its Python dependencies, including Ansible. |
 | `collections/` | Collections installed from Kolla's `requirements.yml` and `requirements-core.yml`. |
 | `kolla-source/` | Local source copy used for builds and later Kolla operations. |
@@ -116,7 +116,7 @@ Copy the printed exports (no shell profile is modified):
 ```bash
 export SPVM_INSTALLER_PYTHON=/srv/operator/openstack-environment/installer-venv/bin/python
 export ANSIBLE_COLLECTIONS_PATH=/srv/operator/openstack-environment/collections
-bash scripts/install-openstack.sh --help
+bash scripts/spvm-openstack.sh --help
 ```
 
 Use the printed `kolla-source` and `kolla-venv/bin/python` paths for phases taking

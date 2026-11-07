@@ -25,7 +25,7 @@ Utilities for bootstrapping a Confidential Computing host (Intel **TDX** or AMD 
 | `scripts/start_super_protocol.sh` | Start a confidential VM (TDX / SEV-SNP / untrusted) from a Super Protocol release image. |
 | `scripts/start_super_protocol_libvirt.sh` | Start the same VM as a transient `qemu:///system` domain through libvirt-python (Ubuntu 24.04 or 26.04). |
 | `scripts/swarm-cluster.sh` | Bring up a 3-node Swarm cluster on a single host. |
-| `scripts/install-openstack.sh` | OpenStack preflight/render, Kolla Docker preparation, isolated passwords/TLS inputs, task parsing and root-local fresh SPVM helper provisioning; full fresh deploy remains gated. |
+| `scripts/spvm-openstack.sh` | OpenStack preflight/render, Kolla Docker preparation, isolated passwords/TLS inputs, task parsing and root-local fresh SPVM helper provisioning; full fresh deploy remains gated. |
 | `scripts/check_configuration.sh`, `get_super_running_vms.sh` | Auxiliary tooling. |
 
 ---

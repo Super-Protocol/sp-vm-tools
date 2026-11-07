@@ -48,35 +48,26 @@ def policy(filename):
         raise ValueError('bounded, single-link worker policy file required')
     value=json.loads(path.read_text())
     fields={'schema_version','config','controller','controller_machine_sha256','openrc',
-            'project_id','admin_user_ids','reader_user_ids','automatic','executors','dispatcher_credentials'}
+            'project_id','admin_user_ids','reader_user_ids','executors','dispatcher_credentials'}
     if type(value) is not dict or set(value)!=fields or type(value['schema_version']) is not int or value['schema_version']!=1:
         raise ValueError('exact budget worker delegation required')
     for key in ('config','openrc','dispatcher_credentials'):
         workflow.literal_path(value[key],canonical=False)
-    if type(value['automatic']) is not dict or not 1<=len(value['automatic'])<=256:
-        raise ValueError('explicit per-host automatic baselines required')
     from openstack_spvm.host_control import binding
-    if (type(value['executors']) is not dict or set(value['executors'])!=set(value['automatic'])
+    if (type(value['executors']) is not dict or not 1<=len(value['executors'])<=256
             or value['controller_machine_sha256']!=hashlib.sha256(Path('/etc/machine-id').read_bytes().strip()).hexdigest()):
         raise ValueError('local controller and exact per-host executors required; no SSH worker policy accepted')
     for target in value['executors'].values():binding(target)
     from nova_spvm.authority import user_ids
     user_ids(value['admin_user_ids']);user_ids(value['reader_user_ids'])
-    for defaults in value['automatic'].values():
-        if type(defaults) is not dict or set(defaults)!={'reserved_cpus','reserved_memory_mb','pools'}:
-            raise ValueError('exact automatic host defaults required')
-        if any(type(defaults[k]) is not int or defaults[k]<1 for k in ('reserved_cpus','reserved_memory_mb')):
-            raise ValueError('positive host reserves required')
-        from openstack_spvm.host_budgets import normalize
-        normalize({'request_id':'11111111-1111-4111-8111-111111111111','host':'baseline',
-            'generation':'0'*64,'budget':{'mode':'manual','vcpus':1,'memory_mb':1,'pools':defaults['pools']}})
     return value
 
 
 from openstack_host_gpus import GpuWorker
+from openstack_host_lifecycle import LifecycleWorker
 
 
-class Worker(PoolWorker,GpuWorker):
+class Worker(PoolWorker,GpuWorker,LifecycleWorker):
     def __init__(self,config,path,module,connection,root=Path('/var/lib/spvm-host-budget-worker'),policy_path=None):
         from openstack_spvm import host_budgets
         self.model=host_budgets;self.config=config;self.path=Path(path);self.module=module;self.c=connection
@@ -100,8 +91,8 @@ class Worker(PoolWorker,GpuWorker):
         self.publisher=self.dispatcher.get_user_id()
         if self.publisher not in config['reader_user_ids'] or self.publisher in config['admin_user_ids']:
             raise ValueError('separate enrolled dispatcher/publisher identity required')
-        if not set(config['automatic'])<=set(self.cfg['hosts']):raise ValueError('unknown delegated host')
-        if set(config['executors'])!=set(config['automatic']):raise ValueError('exact executor fleet required')
+        if set(config['executors'])!={n for n,h in self.cfg['hosts'].items() if 'compute' in h['roles']}:
+            raise ValueError('exact current compute executor fleet required')
         for name,target in config['executors'].items():
             if 'compute' not in self.cfg['hosts'][name]['roles']:raise ValueError('only compute hosts may have resource executors')
             if target['host']!=self.cfg['hosts'][name].get('inventory_name',name):raise ValueError('executor host binding differs')
@@ -109,7 +100,24 @@ class Worker(PoolWorker,GpuWorker):
         self.channel=Channel(connection,config['executors'],self.dispatcher)
 
     def local(self,name,action,**data):
+        if action=='observe':return self.observation(name,'budget','budget-observe')
         return self.channel.call(name,'budget-'+action,**data)
+
+    def observation(self,name,key,action,**data):
+        cache=getattr(self,'_observations',None)
+        if cache is not None and name in cache:return cache[name][key]
+        return self.channel.call(name,action,**data)
+
+    def sync_catalogs(self):
+        # One bounded, typed read per host. Never cache mutation preflight or
+        # stretch a stale observation by timestamping it at publication time.
+        self._observations={}
+        try:
+            for name in self.config['executors']:
+                self._observations[name]=self.channel.call(name,'host-observe')
+            self.sync();self.sync_pools();self.sync_gpus();self.sync_lifecycle()
+        finally:
+            del self._observations
 
     def controller_pci(self,hostname):
         # Fixed read-only Nova object query, local to the enrolled controller.
@@ -157,16 +165,8 @@ class Worker(PoolWorker,GpuWorker):
 
     def catalog(self,name,*,request_id=None):
         before=self.local(name,'observe');extra,service=self.cloud_empty(name,before)
-        defaults=self.config['automatic'][name];hardware=before['hardware']
-        automatic={'mode':'auto','vcpus':hardware['logical_cpus']-defaults['reserved_cpus'],
-            'memory_mb':hardware['memory_mb']-defaults['reserved_memory_mb'],'pools':[]}
-        baseline={p['id']:p for p in defaults['pools']}
-        for current in before['current']['pools']:
-            p=baseline[current['id']]
-            actual=next(v for v in hardware['pools'] if v['id']==p['id'])
-            automatic['pools'].append({**p,'budget_gib':min(p['budget_gib'],max(0,actual['available_gib']-p['reserve_gib']))})
+        hardware=before['hardware']
         current=before['current']
-        if {**current,'mode':'auto'}==automatic:current={**current,'mode':'auto'}
         host=self.cfg['hosts'][name].get('inventory_name',name)
         generation=self.model.digest({'host':host,'compute_uuid':before['compute_uuid'],
             'machine':before['machine_sha256'],'current':current,'config_files':before['files']})
@@ -177,7 +177,7 @@ class Worker(PoolWorker,GpuWorker):
             if transaction.get('host') in (None,host) and transaction.get('status') not in ('SUCCEEDED','REFUSED'):
                 unresolved.append('BUDGET_TRANSACTION_REVIEW_REQUIRED')
         return {'schema_version':1,'project_id':self.config['project_id'],'host':host,'generation':generation,
-            'current':current,'automatic':automatic,'hardware':hardware,
+            'current':current,'hardware':hardware,
             'blockers':sorted(set(before['blockers']+extra+unresolved))},before,service
 
     def publish(self,name,payload):
@@ -189,29 +189,9 @@ class Worker(PoolWorker,GpuWorker):
             list(set(self.config['admin_user_ids']+self.config['reader_user_ids']+[self.publisher])))
 
     def sync(self):
-        for name in self.config['automatic']:
+        for name in self.config['executors']:
             catalog,before,_=self.catalog(name)
             self.publish(self.model.PREFIX+before['compute_uuid']+'-catalog',catalog)
-
-    def persist(self,name,wanted,before):
-        # Canonical intent changes as well. Old bound workspaces now fail their
-        # digest check instead of silently overwriting budgets on reconfigure.
-        filename=Path(self.config['config']);old=filename.read_bytes()
-        (self.active/'deployment.before.yaml').write_bytes(old)
-        cfg=yaml.safe_load(old)
-        cfg['hosts'][name]['compute_resources']={'reserved_cpus':before['hardware']['logical_cpus']-wanted['vcpus'],
-            'reserved_memory_mb':before['hardware']['memory_mb']-wanted['memory_mb']}
-        by_id={p['id']:p for p in wanted['pools']}
-        for p in cfg['hosts'][name]['storage_pools']:
-            if not p.get('enabled',True):continue
-            p.update({k:by_id[p['id']][k] for k in ('budget_gib','reserve_gib')})
-        # Validate the complete candidate before replacing canonical intent.
-        candidate=self.active/'deployment.after.yaml'
-        candidate.write_text(yaml.safe_dump(cfg,sort_keys=False))
-        self.module.deployment_config(candidate,transport=False)
-        if filename.read_bytes()!=old:raise ValueError('canonical deployment changed during budget application')
-        from runtime_maintenance import atomic
-        atomic(filename,yaml.safe_dump(cfg,sort_keys=False).encode(),filename.stat().st_mode&0o777)
 
     def verify(self,before,wanted):
         from nova_spvm.storage import pool_uuid,RESOURCE
@@ -220,7 +200,7 @@ class Worker(PoolWorker,GpuWorker):
             response=self.c.placement.get('/resource_providers/'+root+'/inventories',microversion='1.39');response.raise_for_status()
             inv=response.json()['inventories']
             matched=all(k in inv and inv[k]['total']-inv[k].get('reserved',0)==wanted[field] and inv[k]['allocation_ratio']==1.0
-                for k,field in (('VCPU','vcpus'),('MEMORY_MB','memory_mb')))
+                for k,field in (('VCPU','vcpus'),('MEMORY_MB','memory_mb')) if wanted[field] is not None)
             for pool in wanted['pools']:
                 response=self.c.placement.get('/resource_providers/'+pool_uuid(root,pool['id'])+'/inventories',microversion='1.39')
                 # A restarted compute publishes newly configured child providers
@@ -261,7 +241,7 @@ class Worker(PoolWorker,GpuWorker):
         journal=self.active/'transaction.json';write(journal,record)
         disabled=False
         try:
-            matches=[n for n in self.config['automatic'] if self.cfg['hosts'][n].get('inventory_name',n)==body['host']]
+            matches=[n for n in self.config['executors'] if self.cfg['hosts'][n].get('inventory_name',n)==body['host']]
             if len(matches)!=1:raise ValueError('host not delegated')
             host=matches[0];catalog,before,service=self.catalog(host,request_id=request_id)
             wanted=self.model.resolve({k:body[k] for k in ('request_id','host','generation','budget')},catalog)
@@ -280,16 +260,14 @@ class Worker(PoolWorker,GpuWorker):
             self.local(host,'apply',request_id=request_id,wanted=wanted,before=before)
             record['phase']='VERIFYING';write(journal,record)
             self.verify(before,wanted)
-            self.persist(host,wanted,before)
-            record['phase']='RESTORING_SCHEDULING';write(journal,record)
+            record['phase']='VERIFYING_DISABLED_STATE';write(journal,record)
             final=self.local(host,'observe');blockers,current_service=self.cloud_empty(host,final)
             if blockers or current_service is None or current_service.status!='disabled':
                 raise ValueError('Host changed before scheduling restore')
-            if final['current']!={**wanted,'mode':'manual'}:
+            if final['current']!=wanted:
                 raise ValueError('host configuration does not match verified budget')
-            if was_enabled:self.c.compute.enable_service(current_service)
             result={'request_id':request_id,'project_id':self.config['project_id'],'status':'SUCCEEDED',
-                'message':'Budget applied and inventories verified. No VM lifecycle action. Rebind installer workspace before maintenance.'}
+                'message':'Budget applied and inventories verified. Host remains disabled until explicit Enable.'}
         except Exception:
             result={'request_id':request_id,'project_id':self.config['project_id'],
                 'status':'REVIEW_REQUIRED' if disabled else 'REFUSED',
@@ -332,9 +310,10 @@ def main(path,argv):
                     from openstack_spvm import host_gpus
                     for entry in cluster_cleanup.listing(connection.key_manager,host_gpus.PREFIX+'request-'):
                         worker.process_gpu(entry)
-                worker.sync()
-                worker.sync_pools()
-                worker.sync_gpus()
+                    from openstack_spvm import host_lifecycle
+                    for entry in cluster_cleanup.listing(connection.key_manager,host_lifecycle.PREFIX+'request-'):
+                        worker.process_lifecycle(entry)
+                worker.sync_catalogs()
             finally:os.close(fd)
         finally:connection.close()
     print(json.dumps({'status':'HOST_BUDGET_WORKER_COMPLETE'}));return 0

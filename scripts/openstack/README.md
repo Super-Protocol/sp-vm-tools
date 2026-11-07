@@ -6,12 +6,12 @@ create separate installer/Kolla venvs and local collections, and do not contact
 deployment hosts. See `../../docs/OPENSTACK_ENVIRONMENT.md` for commands, repeat
 semantics and the distinction between environment readiness and deployment.
 
-Public entry point: `../install-openstack.sh`. All Python installer modules live
+Public entry point: `../spvm-openstack.sh`. All Python installer modules live
 here; hardware bootstrap and VM launcher scripts remain separate in `scripts/`.
 Keep these modules together: they use sibling imports and source-hash bindings.
 No compatibility copies are maintained in the parent directory.
 
-`install-openstack.sh add-compute --environment ... --config ...
+`spvm-openstack.sh add-compute --environment ... --config ...
 --installation ... --output ...` accepts a host-only YAML and checks all selected
 computes before adding them sequentially. Optional `--host` selects one entry.
 Cloud/kit settings come from completed installation receipts, not this YAML.
@@ -22,7 +22,7 @@ read-only NOOP. Use `--check` for inspection and `--yes` for explicit apply.
 See `../../docs/OPENSTACK_COMPUTE_ADDITION.md` for version pins, workload refusal,
 credential boundaries and the verified acceptance scope.
 
-`install-openstack.sh remove-compute --environment ... --config ...
+`spvm-openstack.sh remove-compute --environment ... --config ...
 --installation ... --host ... --output ...` retires a reachable empty compute-only
 host from the original management machine. Use `--check` for planning only and
 explicit host confirmation or `--yes` for apply. The bound workspace stays local;
@@ -31,7 +31,7 @@ copying keys/credentials or installing a remote listener. See
 `../../docs/OPENSTACK_COMPUTE_REMOVAL.md` for the complete safety/retained-state
 contract. Do not use fresh `install` or Nova service-disable as retirement.
 
-`install-openstack.sh install` is the integrated fresh-install entry point.
+`spvm-openstack.sh install` is the integrated fresh-install entry point.
 `openstack_install_entry.py` selects the explicit READY Python environment;
 `openstack_install.py` owns the durable transaction/approval; fixed phases live
 in `openstack_install_phases.py`, with artifact and controller-completion helpers.

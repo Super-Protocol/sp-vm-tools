@@ -105,8 +105,8 @@ def inputs(args,backend_path,backend):
             if {d['address'] for d in devices}!=set(spec['gpus']):raise ValueError('Nova and helper GPU selections differ')
             wanted.update(helper_request=spec,bootstrap_runtime=binding['bootstrap_runtime'],
                 gpu_devices=devices,
-                reserved_cpus=host['compute_resources']['reserved_cpus'],
-                reserved_memory_mb=host['compute_resources']['reserved_memory_mb'],
+                reserved_cpus=nova.getint('DEFAULT','reserved_host_cpus'),
+                reserved_memory_mb=nova.getint('DEFAULT','reserved_host_memory_mb'),
                 host_source_sha256={**source_hashes,**{str(Path(spec['tools'])/'scripts'/n):h
                     for n,h in launcher['result_sha256'].items()}},launcher_sha256=launcher['result_sha256'],
                 image_reference=binding['image_reference'],image_id=binding['image_id'],

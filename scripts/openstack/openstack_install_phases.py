@@ -78,6 +78,13 @@ class Installation:
         self.raw = yaml.safe_load(source.read_bytes())
         if not isinstance(self.raw, dict):
             raise InstallerError('Infrastructure deployment YAML must be a mapping.')
+        hosts=self.raw.get('hosts',{})
+        if isinstance(hosts,dict):
+            for name,host in hosts.items():
+                forbidden=set(host)&{'compute_resources','storage_pools','storage_discovery','gpu_inventory'} if isinstance(host,dict) else set()
+                if forbidden:
+                    raise InstallerError('Host '+str(name)+': installation resource fields are not accepted: '+', '.join(sorted(forbidden))+
+                        '. Configure resources after installation through GUI or CLI/API, then explicitly Enable the host.')
         self.options = self.raw.pop('installation', {})
         allowed = {'guest_cidr', 'region', 'allow_debug', 'compute_base_image', 'console_base_image'}
         if not isinstance(self.options, dict) or set(self.options) - allowed:
@@ -164,7 +171,6 @@ class Installation:
                 'Explicitly supply --use-test-images for an approved test installation. '
                 '--yes and --allow-experimental-ubuntu26 do not imply this acknowledgement. No host preparation was started.')
         from basic_preflight import check
-        import openstack_storage_prepare as storage
         self.verify_environment()
         from openstack_install_artifacts import console_builder
         console_builder(self, ['--check-base-image', self.options.get('console_base_image', BASES['console'])])
@@ -178,30 +184,15 @@ class Installation:
         if self.cfg['network']['mode'] != 'host-nat':
             raise InstallerError('The built-in fresh profile currently requires network.mode: host-nat.')
         self.controller = controls[0]
-        # Resolve automatic storage READ-ONLY before the ordinary audit. The
-        # source config remains bound to prepare-storage; no directory exists
-        # merely because a resolved candidate was written on this machine.
-        self.storage_args = self.phase_args(action='plan-storage', output=str(self.output / 'storage'),
-                                            host=None, replace_existing_state=False)
-        planned = storage.execute(self.path, self.storage_args)
-        self.storage_plan = json.loads((self.output / 'storage/storage-plan.json').read_bytes())
-        self.storage_hash = planned['plan_sha256']
-        self.cfg=self.backend.deployment_config(planned['resolved_config'])
         self.audits=self.backend.host_audits(self.cfg)
-        blockers = [b for b in check(self.cfg, self.audits)['blockers'] if b != 'PHYSICAL_RESOURCE_AUDIT_REJECTED']
+        blockers = list(check(self.cfg, self.audits)['blockers'])
         for name, h in self.cfg['hosts'].items():
             fact = self.audits[name]
             if fact['os_version'] == '26.04' and not self.args.allow_experimental_ubuntu26:
                 blockers.append(name + ': explicitly approve experimental Ubuntu26 with --allow-experimental-ubuntu26')
             if 'compute' in h['roles']:
-                limits = h['compute_resources']
-                if fact['logical_cpus'] <= limits['reserved_cpus'] or fact['memory_total_bytes'] // (1024 ** 2) <= limits['reserved_memory_mb']:
-                    blockers.append(name + ': host reserve leaves no guest capacity')
                 if h['launch_mode'] == 'untrusted' and self.options.get('allow_debug') is not True:
                     blockers.append(name + ': untrusted compute requires installation.allow_debug: true')
-        for name,pools in planned['hosts'].items():
-            if not any(p.get('enabled',True) for p in pools):
-                blockers.append(name+': at least one enabled state pool is required for the fresh compute profile')
         self.network_documents()
         from openstack_install_completion import neutron_request
         validator=load_module(self.path.with_name('spvm_network.py'),'install_network_schema')
@@ -250,7 +241,8 @@ print(json.dumps({'status':'FRESH_HOST_CHECKED','haproxy':ha}))
                 'hosts': {n: {'roles': h['roles'], 'address': h['address'],
                               'machine_sha256': self.audits[n]['host_identity_sha256']}
                           for n, h in self.cfg['hosts'].items()},
-                'storage': planned['hosts'], 'blockers': blockers,
+                'hardware': {n:{k:f[k] for k in ('logical_cpus','memory_total_bytes','gpus','filesystems')} for n,f in self.audits.items()},
+                'resources': 'UNCONFIGURED', 'blockers': blockers,
                 'management_mode': self.cfg['network'].get('management_mode'),
                 'guest_cidr': str(self.guest), 'provider_credentials_required': False,
                 'phases': list(self.phases()), 'guests_created': False}
@@ -312,22 +304,6 @@ print(json.dumps({'status':'FRESH_HOST_CHECKED','haproxy':ha}))
             return getattr(self,'install_'+name.replace('-','_'))()
         return {name:lambda n=name:phase(n) for name in PHASES}
 
-    def install_storage(self):
-        import openstack_storage_prepare as storage
-        self.storage_args.action = 'prepare-storage'
-        self.storage_args.plan_sha256 = self.storage_hash
-        result = storage.execute(self.path, self.storage_args)
-        self.config = result['resolved_config']
-        self.refresh()
-        return result
-
-    def install_gpu(self):
-        import openstack_gpu_prepare as gpu
-        result = gpu.execute(self.path, self.phase_args(output=str(self.output / 'gpu')))
-        self.config = result['resolved_config']
-        self.refresh()
-        return result
-
     def install_artifacts(self):
         from openstack_install_artifacts import prepare
         return prepare(self)
@@ -356,17 +332,14 @@ print(json.dumps({'status':'FRESH_HOST_CHECKED','haproxy':ha}))
         requests = {}
         for name, identity in identities(self.cfg, self.audits).items():
             h = self.cfg['hosts'][name]
-            cache_mount = max((p for p in h['storage_pools'] if p.get('enabled', True)), key=lambda p: p['budget_gib'])['mount']
+            from openstack_gpu_prepare import detect
+            detected=detect(self.backend,self.path,h)
             request = {'version': 1, 'machine_sha256': self.audits[name]['host_identity_sha256'],
                 'compute_uuid': identity['compute_uuid'], 'launch_mode': h['launch_mode'],
                 'allow_debug': self.options.get('allow_debug', False),
                 'tools': '/opt/spvm-launcher/' + self.run_id,
-                'registered_release_cache_root': str(Path(cache_mount) / ('spvm-registered-releases-' + self.cfg['deployment_id'])),
-                'pools': [{k: p[k] for k in ('id', 'mount', 'budget_gib', 'reserve_gib')} | {'root': p['path']}
-                          | ({'allow_root': True} if p.get('allow_root') else {})
-                          for p in h['storage_pools'] if p.get('enabled', True)],
-                'gpu_inventory': h['gpu_inventory'],
-                'gpus': sorted(a for unit in catalog(h['gpu_inventory'])['assignments'] for a in unit['members'])}
+                'registered_release_cache_root': '/var/lib/spvm/registered-releases',
+                'pools': [], 'gpu_inventory': detected, 'gpus': []}
             helper.request(request)
             filename = self.output / ('helper-' + name + '.json')
             write(filename, request)

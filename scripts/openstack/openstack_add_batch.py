@@ -56,6 +56,8 @@ def host_file(path,selected=None):
     for name,host in value['hosts'].items():
         if not re.fullmatch('[a-z][a-z0-9-]{0,39}',name) or not isinstance(host,dict):
             raise InstallerError('Each host needs a DNS-safe alias and a mapping of compute settings.')
+        forbidden=set(host)&{'compute_resources','storage_pools','storage_discovery','gpu_inventory'}
+        if forbidden:raise InstallerError(name+': resource fields are not accepted: '+', '.join(sorted(forbidden))+'. Configure resources after add-compute, then explicitly Enable the host.')
         if host.get('roles',['compute'])!=['compute']:raise InstallerError(name+': add-compute accepts compute-only hosts.')
         if 'allow_debug' in host and type(host['allow_debug']) is not bool:raise InstallerError(name+': allow_debug must be boolean.')
         if host.get('launch_mode')=='untrusted' and host.get('allow_debug') is not True:

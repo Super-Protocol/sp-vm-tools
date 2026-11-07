@@ -5,7 +5,7 @@ import sys
 
 
 def parser():
-    p=argparse.ArgumentParser(description='Add configured new or retired computes sequentially to an existing OpenStack cloud.')
+    p=argparse.ArgumentParser(prog='spvm-openstack.sh add-compute',description='Add new or retired computes sequentially. Hosts start UNCONFIGURED and disabled; assign resources and Enable separately.')
     for name in ('config','environment','installation','output'):
         help_text={'config':'Host-only YAML (hosts mapping); no cloud configuration',
                    'installation':'Original completed installation; supplies cloud and pinned kit settings',

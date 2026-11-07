@@ -10,11 +10,12 @@ from openstack_container_engine import write
 
 class PoolWorker:
     def pool_local(self,name,action,**data):
+        if action=='observe':return self.observation(name,'pools','pool-observe',**data)
         return self.channel.call(name,'pool-'+action,**data)
 
     def pool_catalog(self,name,*,request_id=None):
         from openstack_spvm import host_pools as model
-        before=self.pool_local(name,'observe',managed=self.cfg['hosts'][name]['storage_pools'])
+        before=self.pool_local(name,'observe',managed=[])
         blockers,service=self.cloud_empty(name,before['state'])
         host=self.cfg['hosts'][name].get('inventory_name',name)
         for journal in self.root.glob('*/transaction.json'):
@@ -33,7 +34,7 @@ class PoolWorker:
 
     def sync_pools(self):
         from openstack_spvm import host_pools as model
-        for name in self.config['automatic']:
+        for name in self.config['executors']:
             catalog,before,_=self.pool_catalog(name)
             self.publish(model.PREFIX+before['state']['compute_uuid']+'-catalog',catalog)
 
@@ -53,25 +54,6 @@ class PoolWorker:
             allocations=self.c.placement.get(base+'/allocations',microversion='1.39');allocations.raise_for_status()
             if allocations.json()['allocations']:raise ValueError('pool provider acquired allocations')
             response=self.c.placement.delete(base,microversion='1.39');response.raise_for_status()
-
-    def persist_pools(self,name,wanted):
-        import yaml
-        from runtime_maintenance import atomic
-        if self.policy_path is None:raise ValueError('canonical worker policy file required to persist storage baseline')
-        filename=Path(self.config['config']);old=filename.read_bytes();cfg=yaml.safe_load(old)
-        if cfg['hosts'][name]['storage_pools']!=self.cfg['hosts'][name]['storage_pools']:
-            raise ValueError('canonical storage changed during transaction')
-        old_policy=self.policy_path.read_bytes();policy=json.loads(old_policy)
-        cfg['hosts'][name]['storage_pools']=wanted
-        policy['automatic'][name]['pools']=[{k:p[k] for k in ('id','budget_gib','reserve_gib')} for p in wanted if p['enabled']]
-        (self.active/'deployment.before.yaml').write_bytes(old)
-        (self.active/'policy.before.json').write_bytes(old_policy)
-        candidate=self.active/'deployment.after.yaml';candidate.write_text(yaml.safe_dump(cfg,sort_keys=False))
-        validated=self.module.deployment_config(candidate,transport=False)
-        if filename.read_bytes()!=old or self.policy_path.read_bytes()!=old_policy:raise ValueError('canonical intent drift')
-        atomic(filename,candidate.read_bytes(),filename.stat().st_mode&0o777)
-        atomic(self.policy_path,json.dumps(policy,indent=2).encode(),self.policy_path.stat().st_mode&0o777)
-        self.cfg=validated;self.config['automatic']=policy['automatic']
 
     def process_pool(self,entry):
         from openstack_spvm import host_pools as model,cluster_flow,secret_reader
@@ -94,7 +76,7 @@ class PoolWorker:
         record={'request_id':request_id,'host':body['host'],'kind':'pools','status':'PROCESSING','phase':'PREFLIGHT'}
         journal=self.active/'transaction.json';write(journal,record);quarantine=False
         try:
-            matches=[n for n in self.config['automatic'] if self.cfg['hosts'][n].get('inventory_name',n)==body['host']]
+            matches=[n for n in self.config['executors'] if self.cfg['hosts'][n].get('inventory_name',n)==body['host']]
             if len(matches)!=1:raise ValueError('pool host not delegated')
             host=matches[0];catalog,before,service=self.pool_catalog(host,request_id=request_id)
             if catalog['blockers']:raise ValueError('host not empty/compatible')
@@ -102,7 +84,7 @@ class PoolWorker:
             record['was_enabled']=was_enabled
             record['phase']='DISABLING_SCHEDULING';write(journal,record);quarantine=True
             if was_enabled:self.c.compute.disable_service(service,disabled_reason='SPVM host pools '+request_id)
-            again=self.pool_local(host,'observe',managed=self.cfg['hosts'][host]['storage_pools'])
+            again=self.pool_local(host,'observe',managed=[])
             blockers,current=self.cloud_empty(host,again['state'])
             if again!=before or blockers or current is None or current.status!='disabled':raise ValueError('host changed after quarantine')
             record['phase']='PREPARING_POOLS';write(journal,record)
@@ -115,16 +97,14 @@ class PoolWorker:
             record['phase']='VERIFYING_INVENTORIES';write(journal,record)
             desired={**before['state']['current'],'pools':[{k:p[k] for k in ('id','budget_gib','reserve_gib')} for p in wanted if p['enabled']]}
             self.verify(before['state'],desired)
-            self.persist_pools(host,wanted)
             deadline=time.monotonic()+180
             while True:
                 final=self.pool_local(host,'observe',managed=wanted);blockers,current=self.cloud_empty(host,final['state'])
                 if not final['blockers'] and not blockers and current is not None and current.status=='disabled':break
                 if time.monotonic()>deadline:raise ValueError('final pool state did not converge')
                 time.sleep(5)
-            if was_enabled:self.c.compute.enable_service(current)
             result={'request_id':request_id,'project_id':self.config['project_id'],'status':'SUCCEEDED',
-                'message':'Pools and inventories verified. Directories/data were retained; no guest lifecycle action. Rebind installer workspace.'}
+                'message':'Pools and inventories verified. Host remains disabled until explicit Enable. Directories and data were retained.'}
         except Exception as error:
             record['error_type']=type(error).__name__
             response=getattr(error,'response',None)

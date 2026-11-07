@@ -119,8 +119,8 @@ def probe(request,root=Path('/'),runner=subprocess.run):
         spec=request['helper_request']
         memory=next(int(line.split()[1])//1024 for line in path('/proc/meminfo').read_text().splitlines()
                     if line.startswith('MemTotal:'))
-        if (os.cpu_count()<=request['reserved_cpus'] or memory<=request['reserved_memory_mb']):
-            blockers.append('HOST_RESERVES_LEAVE_NO_VM_CAPACITY')
+        if (os.cpu_count()!=request['reserved_cpus'] or memory!=request['reserved_memory_mb']):
+            blockers.append('INITIAL_HOST_MUST_RESERVE_ALL_CPU_RAM')
         if not path('/dev/kvm').exists():blockers.append('KVM_NOT_PREPARED')
         tdx=path('/sys/module/kvm_intel/parameters/tdx')
         mode=spec['launch_mode']

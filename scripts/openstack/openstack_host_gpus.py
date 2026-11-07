@@ -9,6 +9,7 @@ PUBLIC=Path('/var/lib/spvm/gpu-catalog.json')
 
 class GpuWorker:
     def gpu_local(self,name,action,**data):
+        if action=='observe':return self.observation(name,'gpu','gpu-observe')
         if action in ('plan-controller','apply-controller'):
             if name!=self.config['controller']:raise ValueError('GPU controller operation must be root-local')
             from host_gpu_native import Native
@@ -42,7 +43,7 @@ class GpuWorker:
         from openstack_spvm import host_gpus as model
         from nova_spvm import gpu_profiles as gpu
         entries={};profiles={};names=self.gpu_names()
-        observations=[self.gpu_catalog(name) for name in sorted(self.config['automatic'])]
+        observations=[self.gpu_catalog(name) for name in sorted(self.config['executors'])]
         # Automatic names are recomputed across all hosts, not saved as manual
         # overrides or chosen from whichever host happens to be visited first.
         shared=gpu.profile_names([c['inventory'] for c,_,_,_ in observations],names)
@@ -50,10 +51,12 @@ class GpuWorker:
             catalog['inventory']=gpu.catalog(observed['inventory'],shared)
             catalog['generation']=gpu.digest({'host':catalog['host'],'inventory':observed,'files':state['files'],'names':names})
             self.publish(model.PREFIX+state['compute_uuid']+'-catalog',catalog)
-            inventory_name=next(n for n in self.config['automatic']
+            inventory_name=next(n for n in self.config['executors']
                 if self.cfg['hosts'][n].get('inventory_name',n)==catalog['host'])
-            launch=self.channel.call(inventory_name,'launch-report')
+            launch=self.observation(inventory_name,'launch','launch-report')
+            lifecycle=self.observation(inventory_name,'lifecycle','lifecycle-observe')
             entries[catalog['host']]={'inventory':observed['inventory'],'assignments':catalog['inventory']['assignments'],'launch':launch,
+                'resource_status':lifecycle['status'],
                 'blockers':sorted(set(observed['blockers']+[v for v in catalog['blockers'] if 'TRANSACTION_REVIEW' in v]))}
             for key,p in catalog['inventory']['profiles'].items():
                 if key in profiles and profiles[key]['identity']!=p['identity']:raise ValueError('GPU profile identity collision')
@@ -92,7 +95,7 @@ class GpuWorker:
         record={'request_id':request_id,'project_id':self.config['project_id'],'intent_digest':gpu.digest(intent),
                 'host':body['host'],'kind':'gpu','status':'PROCESSING'};write(journal,record)
         try:
-            matches=[n for n in self.config['automatic'] if self.cfg['hosts'][n].get('inventory_name',n)==body['host']]
+            matches=[n for n in self.config['executors'] if self.cfg['hosts'][n].get('inventory_name',n)==body['host']]
             if len(matches)!=1:raise ValueError('GPU host not delegated')
             host=matches[0];current,observed,state,service=self.gpu_catalog(host,request_id=request_id)
             if current['generation']!=body['generation']:raise ValueError('GPU catalog changed')
@@ -108,7 +111,7 @@ class GpuWorker:
                 again=self.local(host,'observe');blockers,selected=self.cloud_empty(host,again)
                 if blockers or again!=state or selected is None or selected.status!='disabled':raise ValueError('host changed after quarantine')
                 if change['kind']=='discover':
-                    after=self.gpu_local(host,'change',before=observed,change=change,idle=True)
+                    after=self.gpu_local(host,'change',request_id=request_id,before=observed,change=change,idle=True)
                     if gpu.nova_configuration(after['inventory'])!=gpu.nova_configuration(observed['inventory']):
                         raise ValueError('technical GPU identity changed; native PCI configuration must be reviewed before scheduling')
                 else:
@@ -118,9 +121,8 @@ class GpuWorker:
                     self.verify_gpus(host,wanted)
                 final=self.local(host,'observe');blockers,selected=self.cloud_empty(host,final)
                 if blockers or selected is None or selected.status!='disabled':raise ValueError('host changed during discovery')
-                if was_enabled:self.c.compute.enable_service(selected)
             elif change['kind']=='device-label':
-                self.gpu_local(host,'change',before=observed,change=change,idle=False)
+                self.gpu_local(host,'change',request_id=request_id,before=observed,change=change,idle=False)
             else:
                 if change['profile'] not in current['inventory']['profiles']:raise ValueError('unknown shared profile')
                 names=self.gpu_names();names[change['profile']]=gpu.label(change['label'])
@@ -148,48 +150,36 @@ class GpuWorker:
     def prepare_gpu_configuration(self,host,observed,state,wanted,folder):
         """Render and validate every destination before disabling scheduling."""
         from nova_spvm import gpu_profiles as gpu
-        import yaml
         controls=[n for n,h in self.cfg['hosts'].items() if 'control' in h['roles']]
         if controls!=[self.config['controller']]:raise ValueError('GPU reconfiguration currently supports one delegated controller')
-        filename=Path(self.config['config']);old=filename.read_bytes();resolved=yaml.safe_load(old)
-        resolved['hosts'][host]['gpu_inventory']=wanted
-        candidate=folder/'deployment.after.yaml';candidate.write_text(yaml.safe_dump(resolved,sort_keys=False))
-        (folder/'deployment.before.yaml').write_bytes(old)
-        self.module.deployment_config(candidate,transport=False)
         all_aliases={}
-        for h in resolved['hosts'].values():
-            if 'compute' not in h['roles']:continue
-            for a in gpu.nova_configuration(h['gpu_inventory'])['aliases']:
+        for name in self.config['executors']:
+            inventory=wanted if name==host else self.gpu_local(name,'observe')['inventory']
+            for a in gpu.nova_configuration(inventory)['aliases']:
                 if a['name'] in all_aliases and all_aliases[a['name']]!=a:raise ValueError('conflicting native GPU aliases')
                 all_aliases[a['name']]=a
         profile_aliases=sorted(all_aliases.values(),key=lambda a:a['name'])
-        before={'gpu':observed,'host':state};target=resolved['hosts'][host].get('inventory_name',host)
+        before={'gpu':observed,'host':state};target=self.cfg['hosts'][host].get('inventory_name',host)
         selected=gpu.nova_configuration(wanted)
         compute_plan=self.gpu_local(host,'plan-compute',before=before,wanted=wanted,aliases=profile_aliases)
         plan=self.gpu_local(self.config['controller'],'plan-controller',target=target,selected=selected,aliases=profile_aliases)
         noop=(compute_plan['before']==compute_plan['after'] and plan['before']==plan['after']
-            and self.cfg['hosts'][host]['gpu_inventory']==wanted)
+            and observed['inventory']==wanted)
         prepared={'before':before,'wanted':wanted,'aliases':profile_aliases,'target':target,
                   'selected':selected,'controller_plan':plan,'compute_plan':compute_plan,'noop':noop}
         write(folder/'native-plan.json',prepared)
         return prepared
 
     def apply_gpu_configuration(self,host,request_id,prepared,folder):
-        from nova_spvm import gpu_profiles as gpu
-        from runtime_maintenance import atomic
-        filename=Path(self.config['config']);old=(folder/'deployment.before.yaml').read_bytes()
-        if filename.read_bytes()!=old:raise ValueError('canonical deployment changed since GPU preflight')
-        if prepared['noop']:return
+        if prepared['noop']:
+            before=self.channel.call(host,'lifecycle-observe')
+            self.channel.call(host,'lifecycle-disable',request_id=request_id,before=before)
+            return
         staged=self.gpu_local(host,'stage-compute',request_id=request_id,before=prepared['before'],
             wanted=prepared['wanted'],aliases=prepared['aliases']);write(folder/'compute-staged.json',staged)
         self.confirm_gpu_quarantine(host)
         self.gpu_local(self.config['controller'],'apply-controller',request_id=request_id,target=prepared['target'],
             selected=prepared['selected'],aliases=prepared['aliases'],plan=prepared['controller_plan'])
-        if filename.read_bytes()!=old:raise ValueError('canonical deployment changed during GPU transaction')
-        candidate=folder/'deployment.after.yaml';resolved=self.module.deployment_config(candidate,transport=False)
-        if gpu.digest(resolved['hosts'][host]['gpu_inventory'])!=gpu.digest(prepared['wanted']):raise ValueError('staged GPU intent changed')
-        atomic(filename,candidate.read_bytes(),filename.stat().st_mode&0o777)
-        self.cfg=resolved
         self.confirm_gpu_quarantine(host)
         self.gpu_local(host,'start-compute',request_id=request_id,staged=staged)
 
@@ -202,7 +192,7 @@ class GpuWorker:
         hostname=self.cfg['hosts'][host].get('inventory_name',host)
         return self.controller_pci(hostname)
 
-    def verify_gpus(self,host,wanted):
+    def verify_gpus(self,host,wanted,*,require_empty=True):
         from nova_spvm import gpu_profiles as gpu
         native=gpu.nova_configuration(wanted);desired={};by_address={d['address']:d for d in wanted['devices']}
         for d in native['device_spec']:
@@ -223,10 +213,23 @@ class GpuWorker:
                     if total:totals[rc]=totals.get(rc,0)+total
             pci=self.gpu_pci(host);devices=[d for d in pci['devices'] if d['status']!='deleted' and d['address'] in by_address]
             matches=(pci['compute_uuid']==root and {d['address'] for d in devices}==expected
-                and len(devices)==len(expected) and all(d['status']=='available' and not d.get('instance_uuid')
+                and len(devices)==len(expected) and all((d['status']=='available' and not d.get('instance_uuid')
+                    or not require_empty and d['status']=='allocated' and bool(d.get('instance_uuid')))
                     and all(d[k]==by_address[d['address']]['pci'][k] for k in ('vendor_id','product_id'))
                     and d['dev_type']==by_address[d['address']]['pci']['device_type'] for d in devices))
-            blockers,service=self.cloud_empty(host,self.local(host,'observe'))
+            if require_empty:
+                blockers,service=self.cloud_empty(host,self.local(host,'observe'))
+            else:
+                from openstack_spvm.cluster_flow import bounded
+                hostname=self.cfg['hosts'][host].get('inventory_name',host)
+                services=[s for s in bounded(self.c.compute.services(binary='nova-compute')) if s.host==hostname]
+                service=services[0] if len(services)==1 else None
+                servers={s.id:s for s in bounded(self.c.compute.servers(all_projects=True,details=True))}
+                blockers=[]
+                for d in devices:
+                    owner=d.get('instance_uuid')
+                    if owner and (owner not in servers or getattr(servers[owner],'compute_host',None)!=hostname):
+                        blockers.append('GPU_OWNER_HOST_MISMATCH')
             if totals==desired and matches and not blockers and service is not None and service.status=='disabled':return
             if time.monotonic()>deadline:raise ValueError('native GPU ownership/inventory did not converge; scheduling stays disabled')
             time.sleep(5)

@@ -21,10 +21,10 @@ from openstack_container_engine import digest, file_hash, write
 from openstack_errors import InstallerError
 
 SCHEMA = 1
-PHASES = ('storage', 'gpu', 'artifacts', 'workspace', 'compute-binding', 'docker',
+PHASES = ('artifacts', 'workspace', 'compute-binding', 'docker',
           'network', 'helpers', 'images', 'dependencies', 'kolla', 'platform')
 RESULTS = dict(zip(PHASES, (
-    'STORAGE_PREPARED','GPU_INVENTORY_PREPARED_NOT_ENROLLED','MATCHED_ARTIFACTS_BUILT',
+    'MATCHED_ARTIFACTS_BUILT',
     'KOLLA_INPUTS_INITIALIZED_NOT_DEPLOYED','COMPUTE_INTENT_BOUND_NOT_DEPLOYABLE','ALL_HOST_DOCKER_READY',
     'ALL_HOST_NETWORK_READY','ALL_HOST_HELPERS_READY_DENY_ALL','ALL_HOST_IMAGES_DELIVERED_NOT_STARTED',
     'ALL_HOST_DEPENDENCIES_READY','KOLLA_DEPLOYED_NOT_SPVM_ENROLLED','PLATFORM_READY_NO_SWARM_CREATED')))
@@ -166,11 +166,8 @@ def approve(deployment, plan, *, yes=False, stream=None, continuation=None):
     print('Disks are not formatted; existing state is never removed automatically. No Swarm or guest is created.')
     for name, host in plan['hosts'].items():
         print('  ' + name + ': ' + ', '.join(host['roles']))
-        for pool in plan.get('storage',{}).get(name,[]):
-            print('    Pool '+pool['id']+': '+pool['path']+'; budget '+str(pool['budget_gib'])
-                  +' GiB, host reserve '+str(pool['reserve_gib'])+' GiB')
-            if pool['mount']=='/':
-                print('    WARNING: this pool shares the root filesystem with the OS; the reserve is not a disk partition.')
+        if 'compute' in host['roles']:
+            print('    No resources assigned: UNCONFIGURED; new VM admissions remain disabled.')
     if plan.get('management_mode')=='shared-interface':
         print('WARNING: shared-interface management is not an encrypted inter-host network. Review exposure before approval.')
     if yes:
@@ -188,7 +185,7 @@ def approve(deployment, plan, *, yes=False, stream=None, continuation=None):
 
 
 def parser():
-    p = argparse.ArgumentParser(description=__doc__)
+    p = argparse.ArgumentParser(prog='spvm-openstack.sh install',description=__doc__)
     p.add_argument('--config', required=True, help='Infrastructure-only deployment YAML; no provider config or guest build')
     p.add_argument('--environment', required=True, help='READY prepare-environment directory')
     p.add_argument('--output', required=True, help='Root-private installation directory; an existing installation is checked for safe continuation')
@@ -283,6 +280,7 @@ def main(argv=None):
             print(result['status'])
             print('OpenStack UI: https://' + installation.cfg['network']['api_vip'] + ':9999')
             print('No images, flavors, provider templates or Swarm clusters were created.')
+            print('New computes are enrolled UNCONFIGURED/disabled. Set CPU/RAM, add an enabled state pool and optional GPUs in Host resource budgets or CLI, then explicitly Enable each host.')
             return 0
     except InstallerError as error:
         print('ERROR: ' + str(error), file=sys.stderr)

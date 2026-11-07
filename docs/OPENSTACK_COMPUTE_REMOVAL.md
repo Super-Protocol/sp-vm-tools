@@ -52,7 +52,7 @@ remain on the controller; management needs only its prepared installer Python.
 For example, from the `sp-vm-tools` checkout on the management host:
 
 ```bash
-sudo bash scripts/install-openstack.sh remove-compute \
+sudo bash scripts/spvm-openstack.sh remove-compute \
   --config /srv/private/deployment.yaml \
   --environment /srv/private/environment-01 \
   --installation /var/lib/spvm/install-01 \
@@ -60,7 +60,7 @@ sudo bash scripts/install-openstack.sh remove-compute \
   --output /var/lib/spvm/remove-compute03-01 --check
 
 # Review remove-compute-plan.json, then explicitly approve the same operation.
-sudo bash scripts/install-openstack.sh remove-compute \
+sudo bash scripts/spvm-openstack.sh remove-compute \
   --config /srv/private/deployment.yaml \
   --environment /srv/private/environment-01 \
   --installation /var/lib/spvm/install-01 \

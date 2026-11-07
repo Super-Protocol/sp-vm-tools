@@ -253,7 +253,7 @@ Repositories have separate responsibilities:
 
 | Repository | Responsibility |
 | --- | --- |
-| `sp-vm-tools` | Hardware bootstrap, launchers, public `scripts/install-openstack.sh`, implementation in `scripts/openstack/`, this guide |
+| `sp-vm-tools` | Hardware bootstrap, launchers, public `scripts/spvm-openstack.sh`, implementation in `scripts/openstack/`, this guide |
 | `swarm-cloud` | Nova driver, OpenStackClient plugin, versioned deployment backend and driver bundles |
 
 **The generic fresh-install executor is not complete.** The wrapper does not turn
@@ -353,7 +353,7 @@ the minimal **manual alternative** for the installer frontend, not Kolla or SDK 
 python3 -m venv /srv/spvm-installer-venv
 /srv/spvm-installer-venv/bin/pip install 'PyYAML==6.0.3'
 export SPVM_INSTALLER_PYTHON=/srv/spvm-installer-venv/bin/python
-bash /srv/sp-vm-tools/scripts/install-openstack.sh --help
+bash /srv/sp-vm-tools/scripts/spvm-openstack.sh --help
 ```
 
 Create `/srv` subdirectories with appropriate ownership first; these paths are
@@ -454,7 +454,7 @@ contents, not an independently authenticated upstream signature.
 Create a plan for exactly one configured compute host:
 
 ```bash
-bash /srv/sp-vm-tools/scripts/install-openstack.sh \
+bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
   --driver-dir /srv/swarm-cloud -- plan-container-engine \
   --config /srv/deployment/deployment.yaml --host compute-02 \
   --workspace /srv/deployment/new-cloud \
@@ -773,373 +773,28 @@ keys in the controller's trusted known-hosts file; a local operator's trust does
 not automatically become controller trust. Copy only independently verified
 public host keys, never disable StrictHostKeyChecking or use unverified TOFU.
 
-## 7. Administrator-selected resource budgets
+## 7. Manual resource assignment after installation
 
-Do not automatically donate all physical resources to OpenStack. Current schema
-expresses CPU/RAM budgets through explicit host reservations:
+Install and add-compute accept infrastructure only. Hosts start healthy but
+**UNCONFIGURED and disabled**, with no CPU/RAM workload budget, pool or enabled
+GPU. Configure resources through GUI or typed CLI/API and explicitly Enable
+the host. Resource changes require an empty host and always leave it disabled.
+Ordinary Nova VMs and SPVM VMs share the protected driver admission boundary;
+manual Nova service enable and tenant metadata cannot bypass it.
 
-```yaml
-compute_resources:
-  reserved_cpus: 8
-  reserved_memory_mb: 65536
-storage_pools:
-  - id: data
-    path: /data/spvm-state
-    mount: /data
-    reserve_gib: 200
-    # Optional persistent logical admission ceiling (not a disk size).
-    budget_gib: 2700
-```
-
-On a 64-logical-CPU machine this makes at most 56 vCPUs available at ratio 1.0.
-Memory capacity is measured `MemTotal` minus 65536 MiB, not the marketing DIMM
-capacity. To donate a desired amount, subtract it from the audited totals to
-choose reservations. Current schema does **not** accept a `donated_vcpus` field.
-Preflight requires an explicit CPU/RAM choice rather than accepting renderer
-fallbacks. Leave headroom for OS, control-plane containers, QEMU and ingress.
-
-Nova reservations limit scheduler capacity; they are not CPU affinity or a host
-cgroup guarantee. CPU isolation/pinning requires an additional explicit design.
-Project quotas are a separate aggregate limit, not a per-host placement guarantee.
-Every VM must fit on one eligible host; forcing a host does not bypass capacity.
-
-For state storage use existing, persistently mounted local ext4/XFS filesystems.
-The audit rejects symlinks, remote filesystems and counting the same filesystem
-twice. Root-backed storage requires explicit `allow_root: true` with `mount: /`.
-It never partitions, formats or mounts disks.
-Multiple physical filesystems may be separate pools; two directories on one
-filesystem are not two independent capacity sources. One state disk must fit in
-one pool; the installer does not concatenate disks automatically.
-
-`reserve_gib` is a safety reserve, not the configured state budget. The helper's
-explicit pool budget must remain below physical capacity minus reserve, with
-headroom for existing data. It is reconciled with Placement inventories, claims
-and actual filesystem pressure. Do not equate sparse qcow2 allocated bytes with
-logical state reservations: four 300 GiB reservations must not fit a 900 GiB
-budget merely because the files have not grown yet. External consumers can still
-exhaust a filesystem, so ongoing free-space checks remain necessary.
-
-### 7.0 Discover and prepare mounted state storage
-
-Compute hosts default to `storage_pools: auto`. Existing explicit pool lists are
-preserved; discovery does not overwrite administrator settings. Before resource
-audit, rendering or Kolla initialization, resolve automatic storage on fresh,
-hardware-prepared compute hosts:
-
-```bash
-sudo scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
-  plan-storage --config /srv/operator/deployment.yaml \
-  --known-hosts /srv/operator/known_hosts --output /srv/storage-plan-01
-# Inspect storage-plan.json and deployment.resolved.yaml, including root use.
-sudo scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
-  prepare-storage --config /srv/operator/deployment.yaml \
-  --known-hosts /srv/operator/known_hosts --output /srv/storage-plan-01 \
-  --plan-sha256 <approved-plan-sha256>
-# Use /srv/storage-plan-01/deployment.resolved.yaml for subsequent installation.
-```
-
-The coordinator uses verified SSH, inspects all compute hosts before mutation,
-and refuses enrolled hosts or any existing domain/guest. Planning is read-only
-on hosts. Preparation creates only empty `spvm-state` directories (root-owned,
-Nova group traversal); it does not format, repartition, mount, delete or move
-anything. Existing nonempty targets are refused by default with a host/path
-diagnostic and an explicit replacement suggestion. The original YAML is unchanged.
-The plan is bound to source/config/known-host hashes and current observations;
-an attempted transaction is never automatically replayed after interruption.
-
-#### Existing state directories during fresh installation
-
-The installer distinguishes driver-selection failures from failures of an actual
-command. Storage validation errors identify the affected host/path and suggest
-an action; arbitrary remote stderr, tracebacks and credentials are not printed.
-The selected bundle must advertise `storage-replacement-diagnostics-v1`. Do not
-edit an extracted verified bundle to bypass that gate: select a matching build.
-
-A directory containing only `.spvm-claims.json` or `.spvm-state.lock` is still
-nonempty. Neither their presence nor their apparent size is permission to erase
-them. To request replacement, repeat **planning** with `--replace-existing-state`
-and a new output directory:
-
-```bash
-sudo scripts/install-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
-  plan-storage --config /srv/operator/deployment.yaml \
-  --known-hosts /srv/operator/known_hosts --replace-existing-state \
-  --output /srv/storage-replacement-plan-01
-```
-
-This remains read-only on the hosts. Review `storage-plan.json`: each replacement
-records the original path, a bounded tree-metadata fingerprint and an exact
-sibling backup path such as `/data/spvm-state.spvm-backup-<transaction-id>`.
-Then invoke `prepare-storage` with that plan directory and its approved
-`--plan-sha256` (without `--replace-existing-state`). The approved preparation
-renames each old directory to the recorded backup and creates a fresh empty
-directory at its original path. It does **not** merge/adopt old claims, delete
-backups, format storage or reclaim the disk space occupied by backups.
-
-Replacement never overrides the empty/unenrolled-host requirement. All hosts are
-validated before the first mutation; host safety is checked again under the
-host preparation lock. Changed trees, backup collisions, symlinks, mounted
-subtrees and special files are refused. Inspection is bounded to 10,000 entries
-and compares metadata, not guest-disk content hashes. Stop other administrative
-writers while preparing storage. This is not an atomic multi-host transaction:
-on partial failure, preserve the plan, backups and `storage-transaction.json`;
-review them manually. Never replay a previously attempted preparation or
-automatically remove/restore backups. A backup already renamed before a later
-failure remains recoverable at the exact path recorded in the plan.
-
-Discovery accepts mounted local block-backed ext4/XFS. It excludes system,
-network, temporary, loop, read-only, symlink and subtree/bind presentations, and
-deduplicates filesystem identities. Two directories on one filesystem cannot
-provide two active capacities. Distinct filesystems on the same physical drive
-remain distinct pools; this is not hardware fault isolation. Btrfs/ZFS, network
-storage, automatic mounting/formatting and filesystem aggregation are not
-supported by this discovery phase.
-
-Suitable non-root filesystems are selected first. Root is used only as fallback,
-or by explicit opt-in. Default reserve suggestions are max(16 GiB, 10% of observed
-available space) for data filesystems and max(64 GiB, 20%) for root. The remaining
-space is the initial logical pool budget. A reserve is a safety margin checked
-against free space, not a partition or OS quota: external writes can still fill
-the filesystem and block new allocations. Existing reservations are not evicted.
-Root capacity therefore needs particular operational monitoring.
-
-Optional per-host discovery policy:
-
-```yaml
-storage_pools: auto
-storage_discovery:
-  include_root: true         # explicit root inclusion even with data disks
-  exclude_mounts: [/backup]  # exclude / too if root must never be used
-  reserve_gib: 100           # override for each selected non-root filesystem
-  root_reserve_gib: 200      # root-specific override
-```
-
-Do not both include and exclude root. A manually specified root pool instead
-uses `mount: /`, `path: /spvm-state`, `allow_root: true` plus explicit positive
-`budget_gib` and `reserve_gib`. Protected system directories cannot be pool roots.
-Use `enabled: false` to retain an inactive manual definition. An explicit empty
-list disables all SPVM state capacity; it is not a request to rediscover disks.
-For identity staging, the helper template may use `"pools": "from-deployment"`;
-this expands only enabled entries from the resolved configuration. Do not reuse
-an old manually hardcoded helper pool list after changing canonical definitions.
-
-### 7.1 Changing budgets after installation
-
-Automatic resource detection remains the default. The administrator can submit a
-custom budget or restore the separately approved automatic baseline through the
-SPVM CLI or **Swarm Clusters → Host resource budgets**. Both increases and
-decreases require an **empty host**. Stopped/ERROR instances in any project,
-Placement allocations, native PCI claims, libvirt domains, guest processes and
-local state/launch reservations block changes. Quotas are not changed.
-
-The web process never receives root or SSH authority. It submits a private
-Barbican intent using the administrator's own project/token. An explicitly
-delegated root-local controller coordinator checks all projects and current admin
-role membership, disables Nova scheduling, and sends typed private Barbican jobs
-to each compute's separately enrolled local root executor. There is **no runtime
-SSH, personal-key copy, agent forwarding or arbitrary Python/shell command RPC**
-in this resource-management path. Local actors check emptiness again and may
-restart only Nova compute and the SPVM helper
-on that empty host. No guest, libvirt daemon, controller or unrelated service is
-restarted by budget application. Successful results require verified native
-CPU/RAM and state-pool Placement inventories. A previously disabled compute
-remains disabled.
-
-Installing GUI assets alone does not activate root request processing. The fresh
-platform installer provisions this `host-control-api-v1` contract before publishing
-host catalogs. It creates one dedicated dispatcher **Keystone member identity**
-and one distinct executor identity per compute. Their application credentials
-permit only the required Barbican GET/POST/PUT operations: no compute, identity
-or DELETE APIs. These are not Unix/SSH accounts. Passwords used for provisioning
-exist only in memory; no SSH key or sudo rule is created. Actual token scope,
-private-secret isolation and forbidden API writes are checked with disposable
-canaries before activation. A failed or ambiguous installation is retained for
-review, never adopted or retried automatically.
-
-The root-private `/etc/spvm/host-budget-policy.json` is generated, not assembled
-from guessed user/machine IDs. It binds `controller_machine_sha256`, the canonical
-`config`, `openrc`, project/admin IDs, the separate publisher in `reader_user_ids`,
-`dispatcher_credentials`, per-host `automatic` baselines and exact `executors`.
-Each executor binding contains `host`, `compute_uuid`, `machine_sha256`, `user_id`.
-The `automatic`/`executors` inventory-key sets must match. Old SSH policies with
-`known_hosts`/`controller_python` are rejected; no migration is provided.
-
-The coordinator still needs a protected administrator API context for all-project
-Nova/Placement checks and scheduling quarantine. It reads native PCI claims
-through a fixed **local** conductor query, not SSH. Commands, catalogs and results
-are published under the distinct dispatcher identity, never the operator's user
-ID reused by ingress/retirement/readiness credentials. Keep operator auth and
-`/etc/spvm/host-control-dispatcher-credentials.json` root-private. Each compute
-receives only its own `/etc/spvm/host-control-credentials.json` and exact binding
-in `/etc/spvm/host-control-policy.json` (all credential/policy JSON files `0600`).
-
-Each compute, including a combined controller/compute, runs
-`spvm-host-control.service`. It uses a root-owned, stdlib-only installed module
-set under `/usr/local/libexec/spvm-host-control`, not the controller SDK venv.
-It polls every five seconds and reuses/renews its scoped token. API endpoints must
-use trusted HTTPS; service units hide `/home` and `/root/.ssh` and unset SSH-agent
-variables. Put runtime sources/interpreters/configuration outside `/home`.
-Operator SSH remains necessary for **explicit installation/retirement**, not
-resource administration. Other installer workflows are not claimed to be SSH-free.
-
-For an operator-controlled one-shot run, use a trusted SDK environment containing
-the matching client dependencies, and root-protected installer/backend sources:
-
-```bash
-sudo -i
-set -a
-. /etc/spvm/auth/admin-openrc.sh
-set +a
-/opt/spvm/client-venv/bin/python /opt/sp-vm-tools/scripts/openstack/openstack_installer.py \
-  --driver-dir /opt/nova-spvm -- sync-host-budgets \
-  --policy /etc/spvm/host-budget-policy.json
-# After an administrator has explicitly submitted a request:
-/opt/spvm/client-venv/bin/python /opt/sp-vm-tools/scripts/openstack/openstack_installer.py \
-  --driver-dir /opt/nova-spvm -- process-host-budgets \
-  --policy /etc/spvm/host-budget-policy.json
-```
-
-For regular processing, run the following **on the controller**, after deploying
-the matching web backend. Staging refuses an older backend without budget
-routes. Replace example paths with actual protected installation paths. The
-`--web-python` interpreter must be the one used by `spvm-web-nodes.service`:
-
-```bash
-sudo /opt/spvm/client-venv/bin/python /opt/sp-vm-tools/scripts/openstack/openstack_installer.py \
-  --driver-dir /opt/nova-spvm -- stage-host-budget-worker \
-  --policy /etc/spvm/host-budget-policy.json \
-  --python /opt/spvm/client-venv/bin/python \
-  --web-python /srv/spvm-web/venv/bin/python \
-  --web-config /srv/spvm-web/config.json \
-  --worker-user-id REPLACE_WORKER_USER_ID \
-  --output /var/lib/spvm-budget-activation-01
-
-# Review staged policy, runner, web-config diff and units, then explicitly approve:
-sudo /opt/spvm/client-venv/bin/python /opt/sp-vm-tools/scripts/openstack/openstack_installer.py \
-  --driver-dir /opt/nova-spvm -- install-host-budget-worker \
-  --output /var/lib/spvm-budget-activation-01 \
-  --activation-sha256 REPLACE_STAGING_RESULT
-```
-
-Activation is fresh-only and checksum/machine-bound. It backs up the web config,
-adds only explicit project/admin/publisher/worker delegation, restarts the web
-bridge, and enables `spvm-host-budgets.timer` (30 seconds after each completed
-run, initially 60 seconds after timer activation). The worker is serialized and runs as a
-root oneshot service; there is no VM recovery or unsolicited budget adjustment.
-An activation failure preserves its journal and is not replayed automatically.
-To suspend dispatch, stop the timer and any active coordinator service; stop
-`spvm-host-control.service` on a compute to suspend its local consumption. An
-already admitted job is not cancelled by stopping the timer. Inspect pending
-requests and private phases before maintenance or re-enabling processing.
-
-Jobs bind the project, trusted Barbican creator, exact compute/machine/executor,
-request UUID and command digest. Admission expires after at most 120 seconds
-(five seconds of clock-skew tolerance); a running operation may finish later.
-Messages are bounded to 64 KiB and scans are bounded. A mutation is journaled
-under `/var/lib/spvm/host-control/<command-uuid>` before execution. A duplicate
-can republish its durable outcome but cannot replay a mutation. Interrupted or
-failed mutations block further mutations until explicit review; read probes can
-continue. Successfully verified transient queue records are deleted by the
-controller, not the executor. Ambiguous records and mutation evidence are retained.
-
-This remains privileged administration: a compromised controller/dispatcher can
-request the allowlisted changes, and compute root can control that compute.
-Barbican policy/availability, trusted TLS and protected actor sources remain
-dependencies; ACL access alone is never an administrator grant. Revocation needs
-stopping dispatch/consumption and revoking the dedicated application credentials
-and user as appropriate; existing tokens are subject to middleware caches.
-Explicit compute retirement stops its executor, revokes its credentials, disables
-its dedicated Keystone account and drops its fleet binding. No existing SSH-managed
-cloud is automatically converted. A separately added compute must enroll an
-executor before entering resource delegation; Nova registration alone is not
-resource-management enrollment. Serial fleet coordination/polling performance
-needs separate large-fleet acceptance.
-
-See the matching bundle's `deployment/HOST_CONTROL.md` for the complete trust
-boundary and failure/revocation rules. Local synthetic tests do not establish
-live Barbican policy enforcement, systemd activation or Placement convergence.
-
-The CLI supports `openstack spvm host budget list`, `set` and `status`; see the
-driver bundle's `deployment/HOST_BUDGETS.md` for full request examples. A request
-without `--apply` is preview-only. A pending GUI request remains pending if no
-worker is running; do not submit another ID to bypass it.
-
-On success the worker persists CPU/RAM reserves **and pool `budget_gib` /
-`reserve_gib`** in the canonical deployment YAML. Regeneration honors that state
-ceiling; it must not silently donate the whole disk again. Bound installer
-workspaces and helper requests become stale and require explicit regeneration /
-rebinding before maintenance. They are not rewritten behind the operator's back.
-
-An interrupted/post-quarantine failure leaves scheduling disabled for review and
-blocks further budget requests on that host. Inspect root-private evidence in
-`/var/lib/spvm-host-budget-worker/<request-id>` and host backups under
-`/var/backups/spvm-host-budgets/<request-id>`. There is no automatic rollback,
-replay, allocation reclamation or removal of the review gate. Preserve evidence
-when performing an explicitly reviewed manual recovery.
-
-GPU discovery reports BDF, vendor/product, driver and IOMMU isolation. A detected
-card is not automatically free or approved for OpenStack. Administrator approval,
-host-helper registered devices, Nova PCI `device_spec` and aliases must agree.
-GPU selection is currently reviewed in the prepared runtime, **not a completed
-interactive GPU picker in this wrapper**. Native Nova PCI claims determine
-occupancy; SPVM checks must agree with domain assignments. PCI-in-Placement
-reporting remains disabled in the tested profile.
-
-### 7.2 Add, edit, disable or unregister storage pools
-
-Open **Administrator → Compute → Hypervisors → Host resource budgets**, then
-expand **Manage storage pools** for the chosen host. Detected filesystem identity,
-capacity, free space and eligibility are separate from the saved registrations.
-You may add a registration, change its directory/budget/reserve, toggle enabled,
-or remove it. Root use requires an explicit checkbox. **Suggest defaults** only
-replaces a confirmed local draft; discovery never reapplies it automatically.
-
-The CLI equivalent uses the current admin authentication context:
-
-```bash
-openstack spvm host pool list --publisher-user-id "$PUBLISHER_ID" -f json
-# Write the COMPLETE desired list to pools.json, using filesystem_id from
-# that host's catalog (24 hexadecimal characters), not a guessed device name:
-# [{"id":"data","filesystem_id":"<24-hex-id>","path":"/data/spvm-state",
-#   "budget_gib":900,"reserve_gib":100,"enabled":true,"allow_root":false}]
-openstack spvm host pool set compute1 --file pools.json \
-  --generation "$GENERATION" --publisher-user-id "$PUBLISHER_ID" \
-  --worker-user-id "$WORKER_ID"
-# Review; repeat with --apply to submit. Then inspect:
-openstack spvm host pool status "$REQUEST_ID" --publisher-user-id "$PUBLISHER_ID"
-```
-
-The same explicitly delegated root budget worker handles pool requests. Every
-change requires a fully empty host across all projects, even an increase or a
-disable operation. Stale generations, existing claims/data, untrusted paths or
-ambiguous mounts are refused. Unavailable existing mounts require manual recovery.
-There is no automatic data migration or adoption of nonempty target directories.
-Disabled definitions remain in canonical configuration; removal drops only the
-registration. Old directories and their data are never removed. `[]` unregisters
-all pools and removes SPVM state capacity without disabling ordinary Nova VMs.
-
-While scheduling is quarantined, the worker stops only Nova compute/helper,
-updates their registrations, retires only owned empty Placement pool providers,
-then restarts those services and checks inventories. It never restarts libvirt or
-guests. Approved definitions become explicit manual configuration and update the
-automatic state baseline; CPU/RAM baselines are unchanged. Existing bound installer
-workspaces must be explicitly rebound and helper inputs regenerated. Errors after
-quarantine leave scheduling disabled and evidence under
-`/var/lib/spvm-host-budget-worker/<request-id>` and
-`/var/backups/spvm-host-pools/<request-id>` for review, with no automatic replay.
-
-This requires matching web backend, installer worker, Nova compute image and host
-helper with managed-pool API v1. Older compute/helper installations are blocked;
-deploying new HTML alone does not enable the feature. Worker staging also checks
-the required pool web methods. Fixture coverage is not live pool-change or clean
-installation acceptance: those require rollout of the matching new artifacts.
+See [Manual host resources](OPENSTACK_HOST_RESOURCES.md) for the exact states,
+first assignment, explicit CLI commands, root storage/reserves, executor trust
+boundary, transaction failure handling and unsupported operations. There is no
+Automatic mode, installation baseline or migration of old resource-bearing YAML.
+Current settings live on the protected host, not in the installation workspace.
+Project quotas are separate and are not changed by installation/resource editing.
 
 ## 8. Select the driver backend
 
 For development use an explicitly trusted swarm-cloud checkout:
 
 ```bash
-bash /srv/sp-vm-tools/scripts/install-openstack.sh \
+bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
   --driver-dir /srv/swarm-cloud -- --help
 ```
 
@@ -1150,7 +805,7 @@ can be dirty for development, but that is not release provenance.
 For an archive, obtain its SHA256 through a trusted release channel first:
 
 ```bash
-bash /srv/sp-vm-tools/scripts/install-openstack.sh \
+bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
   --driver-archive /srv/releases/nova-spvm-VERSION.tar.gz \
   --sha256 REPLACE_WITH_64_LOWERCASE_HEX_DIGITS \
   --staging-dir /srv/staging/driver-01 -- --help
@@ -1183,7 +838,7 @@ paths. Keep provider files private. Do not copy lab machine identities or UUIDs.
 Use an unused output directory for each generation:
 
 ```bash
-bash /srv/sp-vm-tools/scripts/install-openstack.sh \
+bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
   --driver-dir /srv/swarm-cloud -- preflight \
   --config /srv/deployment/deployment.yaml --output /srv/deployment/check-01
 ```
@@ -1204,7 +859,7 @@ do not constitute a clean-OS deployment acceptance.
 Render using a checkout containing the pinned Kolla commit:
 
 ```bash
-bash /srv/sp-vm-tools/scripts/install-openstack.sh \
+bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
   --driver-dir /srv/swarm-cloud -- render \
   --config /srv/deployment/deployment.yaml \
   --audit /srv/deployment/check-01/audit.json \
@@ -1235,7 +890,7 @@ workspace creation is not a substitute for refreshing host observations before
 an actual deployment.
 
 ```bash
-bash /srv/sp-vm-tools/scripts/install-openstack.sh \
+bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
   --driver-dir /srv/swarm-cloud -- init-kolla \
   --config /srv/deployment/deployment.yaml \
   --rendered /srv/deployment/rendered-01 \
@@ -1339,7 +994,7 @@ guest-generated CA keys/certificates, and does not restart bootstrap or join VMs
 Verify the materialized inputs without printing credentials:
 
 ```bash
-bash /srv/sp-vm-tools/scripts/install-openstack.sh \
+bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
   --driver-dir /srv/swarm-cloud -- check-kolla-workspace \
   --output /srv/deployment/new-cloud
 ```
@@ -1352,7 +1007,7 @@ are operator-private review artifacts, not an independent trust authority.
 ### 10.2. Parse the pinned Kolla task graph without running it
 
 ```bash
-bash /srv/sp-vm-tools/scripts/install-openstack.sh \
+bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
   --driver-dir /srv/swarm-cloud -- list-kolla-tasks \
   --output /srv/deployment/new-cloud
 ```
@@ -1455,7 +1110,7 @@ and cross-host execution are still future orchestration work.
 Plan on the **target compute** using a trusted selected backend:
 
 ```bash
-sudo bash /srv/sp-vm-tools/scripts/install-openstack.sh \
+sudo bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
   --driver-dir /srv/reviewed-driver-bundle -- plan-host-helper \
   --request /root/helper-request.json --output /var/lib/spvm-helper-install-01
 ```
@@ -1470,7 +1125,7 @@ checksum-verified release when available and review directory-mode development c
 Apply with the same arguments, changing the action and providing the approved hash:
 
 ```bash
-sudo bash /srv/sp-vm-tools/scripts/install-openstack.sh \
+sudo bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
   --driver-dir /srv/reviewed-driver-bundle -- prepare-host-helper \
   --request /root/helper-request.json --output /var/lib/spvm-helper-install-01 \
   --plan-sha256 REPLACE_WITH_APPROVED_PLAN_SHA256
@@ -1531,12 +1186,12 @@ there is no implicit clone, pull or tools-source download.
 Create a new private staging directory (its parent must already exist):
 
 ```bash
-./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   stage-launcher --tools-source /srv/sp-vm-tools \
   --tools-revision 22f4113f44e1718c901b419f933b0d779510fbd2 \
   --output /srv/launcher-stage-01
 
-./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   check-launcher --output /srv/launcher-stage-01 \
   --receipt-sha256 '<receipt_sha256 returned by stage-launcher>'
 ```
@@ -1555,13 +1210,13 @@ It must not exist, including an empty directory. Place the reviewed staging and
 driver sources on that compute, then pass both flags to **both** helper phases:
 
 ```bash
-sudo ./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   plan-host-helper --request /root/helper-request.json \
   --launcher-stage /srv/launcher-stage-01 \
   --launcher-sha256 '<approved launcher receipt_sha256>' \
   --output /var/lib/spvm-helper-install-01
 
-sudo ./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   prepare-host-helper --request /root/helper-request.json \
   --launcher-stage /srv/launcher-stage-01 \
   --launcher-sha256 '<same approved launcher receipt_sha256>' \
@@ -1613,14 +1268,14 @@ additional modules or a stale wheel under the same version are refused. A bundle
 declared wheel checksum is checked as well.
 
 ```bash
-./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   stage-compute-image \
   --base-image 'registry.example/kolla/nova-compute@sha256:<64-hex-digest>' \
   --wheel /srv/reviewed-driver-bundle/wheels/nova_spvm-0.2.21-py3-none-any.whl \
   --wheel-sha256 '<trusted wheel SHA256>' \
   --output /srv/compute-context-01
 
-sudo ./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   build-compute-image --output /srv/compute-context-01 \
   --context-sha256 '<approved context_sha256 returned by staging>' \
   --tag spvm/nova-compute:reviewed-install-01 \
@@ -1686,7 +1341,7 @@ On the build host, independently review the successful `image-build.json`, its
 SHA256 and the immutable image ID. Export into a new private directory:
 
 ```bash
-sudo ./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   export-compute-image \
   --build-receipt /var/lib/spvm-image-build-01/image-build.json \
   --build-sha256 '<approved SHA256 of that build receipt file>' \
@@ -1709,7 +1364,7 @@ to that OS installation, not cryptographic hardware attestation. SSH host-key
 verification remains mandatory.
 
 ```bash
-sudo ./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   deliver-compute-image --package /srv/compute-image-package-01 \
   --package-sha256 '<approved package_sha256>' \
   --host deploy@compute.example.net --ssh-port 22 \
@@ -1751,7 +1406,7 @@ For offline/manual transport, copy the package to a private directory on the
 target, review ownership, then invoke the same root-local importer:
 
 ```bash
-sudo ./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   import-compute-image --package /srv/received-image-package-01 \
   --package-sha256 '<approved package_sha256>' \
   --machine-sha256 '<approved local machine fingerprint>' \
@@ -1810,7 +1465,7 @@ request JSON files described in section 10.3. No default GPU selection, new comp
 UUID or disk budget is silently invented.
 
 ```bash
-./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   stage-kolla-computes --config /srv/deployment.yaml \
   --rendered /srv/reviewed-render --workspace /srv/initial-kolla-workspace \
   --requests /root/compute-requests.json \
@@ -1818,7 +1473,7 @@ UUID or disk budget is silently invented.
   --image-context-sha256 '<approved image context_sha256>' \
   --region RegionOne --output /srv/bound-kolla-workspace
 
-./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   check-kolla-workspace --output /srv/bound-kolla-workspace
 ```
 
@@ -1843,12 +1498,12 @@ On each fresh compute, use that generated request and the binding's bootstrap
 endpoint/region in **both** helper phases, in addition to any launcher flags:
 
 ```bash
-sudo ./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   plan-host-helper --request /root/compute01-helper-request.json \
   --bootstrap-auth-url https://192.0.2.10:5000/v3 --bootstrap-region RegionOne \
   --output /var/lib/spvm-helper-install-01
 
-sudo ./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   prepare-host-helper --request /root/compute01-helper-request.json \
   --bootstrap-auth-url https://192.0.2.10:5000/v3 --bootstrap-region RegionOne \
   --output /var/lib/spvm-helper-install-01 --plan-sha256 '<approved helper plan>'
@@ -1911,13 +1566,13 @@ the `machines` map must be re-staged from its original unbound workspace. Do not
 hand-edit a receipt or invent a fingerprint to pass this check.
 
 ```bash
-./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   plan-kolla-prechecks --config /srv/deployment.yaml \
   --workspace /srv/bound-kolla-workspace \
   --known-hosts /root/.ssh/openstack_known_hosts \
   --allow-experimental-ubuntu26 --output /srv/initial-prechecks-01
 
-./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   run-kolla-prechecks --config /srv/deployment.yaml \
   --workspace /srv/bound-kolla-workspace \
   --known-hosts /root/.ssh/openstack_known_hosts \
@@ -1990,13 +1645,13 @@ scoped preparation step: Docker, helper, approved image and network interfaces
 must already exist. It is not a first-boot provisioning command.
 
 ```bash
-./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   plan-base-packages --config /srv/deployment.yaml \
   --workspace /srv/bound-kolla-workspace \
   --known-hosts /root/.ssh/openstack_known_hosts \
   --allow-experimental-ubuntu26 --output /srv/base-packages-01
 
-./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   prepare-base-packages --config /srv/deployment.yaml \
   --workspace /srv/bound-kolla-workspace \
   --known-hosts /root/.ssh/openstack_known_hosts \
@@ -2063,13 +1718,13 @@ or silently rely on Ansible interpreter discovery.
 `python3-docker`, `python3-dbus`, and `python3-requests`.
 
 ```bash
-./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   plan-host-sdk --config /srv/deployment.yaml \
   --workspace /srv/bound-kolla-workspace \
   --known-hosts /root/.ssh/openstack_known_hosts \
   --allow-experimental-ubuntu26 --output /srv/host-sdk-01
 
-./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   prepare-host-sdk --config /srv/deployment.yaml \
   --workspace /srv/bound-kolla-workspace \
   --known-hosts /root/.ssh/openstack_known_hosts \
@@ -2120,13 +1775,13 @@ This step registers the already-generated API CA from the bound workspace;
 it does not generate/rotate a CA, transfer a private key or enroll a Swarm node.
 
 ```bash
-./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   plan-api-trust --config /srv/deployment.yaml \
   --workspace /srv/bound-kolla-workspace \
   --known-hosts /root/.ssh/openstack_known_hosts \
   --allow-experimental-ubuntu26 --output /srv/api-trust-01
 
-./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   prepare-api-trust --config /srv/deployment.yaml \
   --workspace /srv/bound-kolla-workspace \
   --known-hosts /root/.ssh/openstack_known_hosts \
@@ -2201,7 +1856,7 @@ that recommendation, reuse an old approval or automatically advance through
 mutating steps.
 
 ```bash
-./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   initial-host-status --config /srv/deployment.yaml \
   --workspace /srv/bound-kolla-workspace \
   --known-hosts /root/.ssh/openstack_known_hosts \
@@ -2305,12 +1960,12 @@ review rather than guessing which address Kolla/OVN will select. The initial
 profile supports at most 256 participating hosts and IPv4 peers only.
 
 ```bash
-sudo ./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   plan-geneve-guard --config /srv/deployment.yaml \
   --network-request /srv/network-request.json --host super7 \
   --allow-experimental-ubuntu26 --output /var/tmp/geneve-super7-01
 
-sudo ./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   prepare-geneve-guard --config /srv/deployment.yaml \
   --network-request /srv/network-request.json --host super7 \
   --allow-experimental-ubuntu26 --output /var/tmp/geneve-super7-01 \
@@ -2401,7 +2056,7 @@ unknown status, partial observations and residual UFW rules remain blockers.
 This read-only distinction is shared by management/NAT and Geneve preparation.
 
 Installer implementation modules now live together in `scripts/openstack/`.
-`scripts/install-openstack.sh` remains the public entry point. Do not copy only
+`scripts/spvm-openstack.sh` remains the public entry point. Do not copy only
 the shell wrapper when staging tools, and do not restore old Python-module copies
 at the `scripts/` root. Hardware bootstrap and measured launchers were not moved.
 
@@ -2440,12 +2095,12 @@ Management, guest and transit networks must not overlap. Guest CIDRs are restric
 to private /16../30. Neither public NIC addressing nor a default route is changed.
 
 ```bash
-sudo ./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   plan-management --config /srv/deployment.yaml \
   --network-request /srv/host-network.json --host super7 \
   --allow-experimental-ubuntu26 --output /var/tmp/management-super7-01
 
-sudo ./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   prepare-management --config /srv/deployment.yaml \
   --network-request /srv/host-network.json --host super7 \
   --allow-experimental-ubuntu26 --output /var/tmp/management-super7-01 \
@@ -2492,12 +2147,12 @@ matching management phase is installed/enabled/active. They use the same host
 network request, not hard-coded lab addresses or a physical bridge attachment.
 
 ```bash
-sudo ./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   plan-nat --config /srv/deployment.yaml \
   --network-request /srv/host-network.json --host super7 \
   --allow-experimental-ubuntu26 --output /var/tmp/nat-super7-01
 
-sudo ./scripts/install-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
   prepare-nat --config /srv/deployment.yaml \
   --network-request /srv/host-network.json --host super7 \
   --allow-experimental-ubuntu26 --output /var/tmp/nat-super7-01 \
@@ -2657,7 +2312,7 @@ past the testing-image guard. A failed precheck transaction remains evidence;
 after review, use a new output directory, not a blind retry of its journal.
 
 ```bash
-./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   plan-kolla-install --config /srv/operator/deployment.yaml \
   --workspace /srv/operator/compute-bound --known-hosts /srv/operator/known_hosts \
   --output /srv/operator/install-01 --allow-experimental-ubuntu26
@@ -2666,7 +2321,7 @@ after review, use a new output directory, not a blind retry of its journal.
 Inspect the private `install-plan.json` and approve its exact `plan_sha256`:
 
 ```bash
-./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   run-kolla-install --config /srv/operator/deployment.yaml \
   --workspace /srv/operator/compute-bound --known-hosts /srv/operator/known_hosts \
   --output /srv/operator/install-01 --allow-experimental-ubuntu26 \
@@ -2724,7 +2379,7 @@ keys. The request does not accept secret fields. Several Swarm clusters may use
 the same enrolled project/network; never generate one Neutron network per Swarm.
 
 ```bash
-./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   stage-spvm-enrollment --workspace /srv/operator/compute-bound \
   --request /srv/operator/enrollment.json \
   --profiles /srv/operator/resource-profiles.json \
@@ -2774,13 +2429,13 @@ assignments and manage private Nova flavors/Glance images. Missing permissions
 fail closed; there is no fallback to another administrator's credentials.
 
 ```bash
-./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   plan-spvm-resources --enrollment-plan /srv/operator/enrollment-01/enrollment-plan.json \
   --project-id REPLACE_WITH_PROJECT_ID --cloud spvm-operator \
   --ca-file /srv/operator/api-ca.crt --output /srv/operator/resources-01
 
 # Inspect resources-plan.json and approve its exact plan_sha256 (900s validity).
-./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   apply-spvm-resources --enrollment-plan /srv/operator/enrollment-01/enrollment-plan.json \
   --project-id REPLACE_WITH_PROJECT_ID --cloud spvm-operator \
   --ca-file /srv/operator/api-ca.crt --output /srv/operator/resources-01 \
@@ -2813,7 +2468,7 @@ Create a new plan after a successful run; its actions should all be `REUSE`.
 Explicitly test Barbican with a disposable **non-secret** marker:
 
 ```bash
-./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   check-spvm-barbican --enrollment-plan /srv/operator/enrollment-01/enrollment-plan.json \
   --project-id REPLACE_WITH_PROJECT_ID --cloud spvm-operator \
   --ca-file /srv/operator/api-ca.crt --output /srv/operator/barbican-01
@@ -2873,13 +2528,13 @@ Neutron `is_shared=true` granting every project access. Per-cluster security
 groups remain managed by cluster preparation, not widened by these commands.
 
 ```bash
-./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   plan-spvm-network --request /srv/operator/neutron-network.json \
   --cloud spvm-operator --ca-file /srv/operator/api-ca.crt \
   --output /srv/operator/network-01
 
 # Review network-plan.json and approve its exact plan_sha256 within 900 seconds.
-./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   apply-spvm-network --request /srv/operator/neutron-network.json \
   --cloud spvm-operator --ca-file /srv/operator/api-ca.crt \
   --output /srv/operator/network-01 --plan-sha256 REPLACE_WITH_APPROVED_SHA256
@@ -2966,7 +2621,7 @@ Generate host requests from the matching immutable compute-bound workspace and
 staged project enrollment:
 
 ```bash
-./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   stage-runtime-enrollment --workspace /srv/operator/compute-bound \
   --enrollment-plan /srv/operator/enrollment-01/enrollment-plan.json \
   --output /srv/operator/runtime-requests-01
@@ -2991,7 +2646,7 @@ sudo install -d -m 0700 /var/lib/spvm-enrollment
 An optional image-schema check can run even while the compute has guests:
 
 ```bash
-sudo ./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   check-runtime-enrollment --request /root/operator/compute.json \
   --output /var/lib/spvm-enrollment/image-check-01
 ```
@@ -3018,12 +2673,12 @@ Swarm bootstrap guest as a way to satisfy this prerequisite.
 Then, on that stopped compute as root:
 
 ```bash
-sudo ./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   plan-runtime-enrollment --request /root/operator/compute.json \
   --output /var/lib/spvm-enrollment/install-01
 
 # Inspect runtime-plan.json, approve exact plan_sha256 within 900 seconds.
-sudo ./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   install-runtime-enrollment --request /root/operator/compute.json \
   --output /var/lib/spvm-enrollment/install-01 \
   --plan-sha256 REPLACE_WITH_APPROVED_SHA256 --ack-compute-quarantined
@@ -3106,7 +2761,7 @@ its newline. Publisher fields contain paths/identity only, never credentials.
 The guest CIDR must be canonical RFC1918 /16../30.
 
 ```bash
-./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   stage-ingress --request /srv/operator/ingress.json \
   --base-config /srv/operator/reviewed-empty-haproxy.cfg \
   --output /srv/operator/ingress-package-01
@@ -3130,7 +2785,7 @@ An optional check validates a private candidate with `haproxy -c`, without
 reloading, binding listeners or writing the live configuration:
 
 ```bash
-sudo ./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   check-ingress --package /root/operator/ingress-package-01 \
   --package-sha256 REPLACE_WITH_APPROVED_PACKAGE_SHA256 \
   --output /var/lib/spvm-ingress-install/check-01
@@ -3141,13 +2796,13 @@ replacement. Initial install refuses active/enabled host HAProxy before reading
 private publication state. For an actually fresh inactive host:
 
 ```bash
-sudo ./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   plan-ingress --package /root/operator/ingress-package-01 \
   --package-sha256 REPLACE_WITH_APPROVED_PACKAGE_SHA256 \
   --output /var/lib/spvm-ingress-install/install-01
 
 # Review ingress-plan.json and approve its exact SHA within 900 seconds.
-sudo ./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   install-ingress --package /root/operator/ingress-package-01 \
   --package-sha256 REPLACE_WITH_APPROVED_PACKAGE_SHA256 \
   --output /var/lib/spvm-ingress-install/install-01 \
@@ -3210,12 +2865,12 @@ Installation and activation are separate approvals. After §10.22 returns
 SHA. On the ingress host, as root, run:
 
 ```bash
-sudo scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+sudo scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   plan-ingress-activation \
   --package /srv/spvm-ingress-package --package-sha256 <PACKAGE_SHA> \
   --output /var/lib/spvm-ingress-activation/initial
 
-sudo scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+sudo scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   activate-ingress \
   --package /srv/spvm-ingress-package --package-sha256 <PACKAGE_SHA> \
   --output /var/lib/spvm-ingress-activation/initial --plan-sha256 <PLAN_SHA>
@@ -3277,11 +2932,11 @@ authorization, not proof that the gateway is already ready.
 On the ingress host:
 
 ```bash
-sudo scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+sudo scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   plan-spvm-publication --request /etc/spvm/ingress-request-my-cluster.json \
   --timeout 1800 --output /var/lib/spvm-publication/my-cluster-01
 
-sudo scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+sudo scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   publish-spvm-ui --request /etc/spvm/ingress-request-my-cluster.json \
   --timeout 1800 --output /var/lib/spvm-publication/my-cluster-01 \
   --plan-sha256 <PLAN_SHA>
@@ -3410,14 +3065,14 @@ Run from the trusted operator machine with the required Python dependencies and
 strict SSH known-hosts already configured. Example fresh enrollment:
 
 ```bash
-scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   plan-compute-activation --config /srv/deployment.yaml --host worker1 \
   --controller control1 --controller-python /opt/openstack-client/bin/python \
   --openrc /etc/kolla/admin-openrc.sh \
   --enrollment-request /srv/runtime-enrollment/worker1.json \
   --output /srv/private/worker1-initial-01
 
-scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   activate-compute --config /srv/deployment.yaml --host worker1 \
   --controller control1 --controller-python /opt/openstack-client/bin/python \
   --openrc /etc/kolla/admin-openrc.sh \
@@ -3638,11 +3293,11 @@ separately selects the existing Ansible/Kolla environment. Credentials are not
 request fields and are removed from the environment passed to Ansible.
 
 ```bash
-scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   plan-kolla-compute-container --request /srv/private/compute01-scope.json \
   --output /srv/private/compute01-scope-01
 
-scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   reconcile-kolla-compute-container --request /srv/private/compute01-scope.json \
   --output /srv/private/compute01-scope-01 --plan-sha256 <PLAN_SHA>
 ```
@@ -3730,7 +3385,7 @@ deny-all bootstrap on an occupied cloud to make a verification pass.
 Run from the trusted deployment controller as the private workspace owner:
 
 ```bash
-scripts/install-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
+scripts/spvm-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
   verify-kolla-existing \
   --config /srv/private/deployment.yaml \
   --workspace /srv/private/bound-workspace \
@@ -3834,12 +3489,12 @@ symlinks are supported. Local inputs/workspace must be absolute canonical paths.
 Requests reference protected files, never contain secret payloads or shell code.
 
 ```bash
-scripts/install-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
+scripts/spvm-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
   plan-openstack --request /srv/private/workflow.json \
   --output /srv/private/workflow-01
 
 # Review workflow-plan.json and the private child plans; copy the printed SHA.
-scripts/install-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
+scripts/spvm-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
   apply-openstack --request /srv/private/workflow.json \
   --output /srv/private/workflow-01 --plan-sha256 <REVIEWED_SHA256>
 ```
@@ -3939,7 +3594,7 @@ advisory, not a Nova reservation.
 ## 11. Add a compute to an existing cloud
 
 For the inverse operation, see [Retiring an OpenStack compute host](OPENSTACK_COMPUTE_REMOVAL.md).
-The `install-openstack.sh remove-compute` coordinator runs on the original
+The `spvm-openstack.sh remove-compute` coordinator runs on the original
 management host, discovers its completed installation workspace and performs
 controller actions over operator SSH; no manual controller login/key copy is
 required. Retirement does not erase retained containers, helper configuration,
@@ -3980,7 +3635,7 @@ the operation. Once new VMs exist, do not replay an old empty-host acceptance pl
 ### 11.1. Deploy a new compute into an existing cloud
 
 For the operator-facing command covering both new and previously retired hosts,
-use [`install-openstack.sh add-compute`](OPENSTACK_COMPUTE_ADDITION.md).
+use [`spvm-openstack.sh add-compute`](OPENSTACK_COMPUTE_ADDITION.md).
 Its YAML contains only `hosts`; cloud/kit settings come from `--installation`.
 All selected entries are checked before adding them sequentially. Optional
 `--host` selects one entry; the default is every entry in file order. A failure
@@ -4471,11 +4126,11 @@ publication. The non-root service account, trusted API CA, provider/enrollment
 policy and web config must already exist; they are not guessed defaults.
 
 ```sh
-sudo ./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   plan-skyline-preparation --request /etc/spvm-install/skyline-preparation.json \
   --output /var/lib/spvm-install/skyline-001
 # Review preparation-plan.json; approve its exact plan_sha256 within 15 minutes:
-sudo ./scripts/install-openstack.sh --driver-dir /srv/swarm-cloud -- \
+sudo ./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
   prepare-skyline --request /etc/spvm-install/skyline-preparation.json \
   --output /var/lib/spvm-install/skyline-001 \
   --plan-sha256 '<approved SHA256>' --allow-changes

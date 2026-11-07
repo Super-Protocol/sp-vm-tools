@@ -39,16 +39,13 @@ hosts; determine which target/bootstrap/transport details genuinely need input.
 The current host-only YAML/batch frontend is an intermediate simplification:
 it still requires the original local installation receipts and linked history.
 
-## Planned follow-up: name the management CLI for its full scope (2026-11-06)
+## In progress: management CLI and manual resource allocation (2026-11-07)
 
-Status: **planned, not implemented**. `scripts/install-openstack.sh` now handles
-more than installation (including compute retirement), so its name is misleading.
-Rename the entry point to a general OpenStack management CLI; select the final
-name during implementation. `install` must remain a subcommand, alongside the
-other lifecycle operations, rather than defining the name of the whole tool.
-Update help, examples, documentation and automation references consistently.
-Do not add a legacy-name compatibility wrapper or migration mechanism. This
-backlog entry does not rename the script or change current operator commands.
+The entry point is now `scripts/spvm-openstack.sh`; install, add-compute and
+remove-compute are subcommands. The old filename is removed without a wrapper.
+The manual resource contract is implemented for local verification; publication
+and live acceptance are still pending. Do not treat this note as stand acceptance.
+See [manual host resources](OPENSTACK_HOST_RESOURCES.md).
 
 ## Planned follow-up: native OpenStack control-plane HA (2026-11-06)
 
@@ -77,9 +74,8 @@ conductors, MariaDB/Galera and RabbitMQ with a tested one-controller-loss quorum
 
 ## Planned follow-up: install first, allocate host resources separately (2026-11-06)
 
-Status: **planned, not implemented**. This is the agreed replacement for
-install-time resource allocation; the deployment checkpoints below describe the
-older implemented behavior, not acceptance of this plan.
+Status: **implementation and verification in progress**. The checkpoints below
+describe earlier behavior, not acceptance of the new manual resource contract.
 
 ### Installation and resource lifecycle
 
@@ -149,7 +145,8 @@ allocation policy, and catalog refresh does not autonomously apply that policy.
 - Implement orchestration and English instructions in sp-vm-tools; driver,
   helper, GUI, CLI/API and their English documentation in swarm-cloud. Stage
   production code/documentation only; leave tests unstaged. Commits, push,
-  builds and stand deployment require a separate task.
+  builds and stand deployment are authorized for the current task but remain
+  pending until the new contract passes live acceptance.
 
 ## Planned follow-up: immutable, CI-validated installation kit (2026-11-05)
 

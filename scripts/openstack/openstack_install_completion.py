@@ -248,7 +248,7 @@ def finalize_setup(root,payload):
         'runtime_dir': '/opt/spvm-web/' + root.name, 'state_dir': '/var/lib/spvm-web/' + root.name,
         'origins': ['https://' + payload['config']['network']['api_vip'] + ':9999'],
         'host_sources': payload['host_sources'], 'ingress_address': payload['config']['network']['public_ip'],
-        'base_haproxy_config': str(data / 'base-haproxy.cfg'), 'quota_from_host_budgets': True,
+        'base_haproxy_config': str(data / 'base-haproxy.cfg'), 'preserve_project_quotas': True,
         'console_manifest': str(data / 'console-context.json'), 'release_registration': True}
     write(data / 'platform.json', spec)
     platform.prepare_account(spec, data)
