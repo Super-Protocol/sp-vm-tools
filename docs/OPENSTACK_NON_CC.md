@@ -5,8 +5,10 @@
 Non-CC compute is **debug only** and untrusted. It is not a substitute for TDX or
 SEV-SNP, and failed CC preparation never triggers a non-CC fallback. Use matching
 current installer, driver, helper, launcher recipe and GUI sources. There are no
-old-configuration adapters or migration steps. The existing published driver
-0.2.29 is a baseline only; it does not contain the new launch-policy contract.
+old-configuration adapters or migration steps. Require a matching kit advertising
+both `explicit-host-launch-policy-v1` and `manual-host-resource-lifecycle-v1`.
+Install/add leaves compute UNCONFIGURED and disabled; assign resources and
+explicitly Enable it as described in [manual resources](OPENSTACK_HOST_RESOURCES.md).
 
 As of 2026-10-29, live checks passed for bootstrap/repeated KVM verification on
 Ubuntu 24.04 and 26.04 Azure D8s_v5, fresh OpenStack installation, separate
@@ -97,12 +99,11 @@ In deployment YAML, every compute requires an explicit mode, independent of role
 ```yaml
 hosts:
   debug-compute:
-    # SSH/network/storage fields omitted here; use the full deployment example.
+    # SSH/network fields omitted here; use the full deployment example.
     roles: [compute]
     launch_mode: untrusted
-    compute_resources:
-      reserved_cpus: 2
-      reserved_memory_mb: 8192
+installation:
+  allow_debug: true
 ```
 
 Do not put `launch_mode` on a service-only host. For CC compute select `tdx` or
@@ -113,13 +114,14 @@ registered image and explicit build. For an untrusted host, the matching helper
 request must contain:
 
 ```json
-{"launch_mode": "untrusted", "allow_debug": true, "registered_release_cache_root": "/data/spvm-registered-releases"}
+{"launch_mode": "untrusted", "allow_debug": true, "registered_release_cache_root": "/var/lib/spvm/registered-releases"}
 ```
 
-This is a fragment, not a complete helper request. The full schema also requires
-machine/compute identity, pinned launcher, storage pools and GPU inventory.
-An empty GPU inventory and `gpus: []` are normal. GPU tooling is not installed
-when no GPU/fabric devices are discovered.
+This is an internal fragment, not a user preparation step or a complete helper
+request. The installer supplies machine/compute identity, pinned launcher,
+`pools: []`, disabled detected GPU inventory and `gpus: []`. Do not place resource
+fields in installation YAML. GPU tooling is not installed when no GPU/fabric
+devices are discovered.
 
 The installer writes `/etc/spvm/launch-policy.json` as protected root-owned data
 and binds it read-only into Nova. Its two fields are `mode` and `allow_debug`.
@@ -135,58 +137,40 @@ replaced/registered with the new image traits; there is no automatic migration.
 
 ## Adding a previously unknown compute host
 
-Do not run `init-kolla`, `kolla-genpwd`, certificate generation or a full
-controller deployment to add a host. Preserve the existing deployment YAML and
-bound workspace as immutable inputs. Create a desired YAML adding exactly one
-compute-only host; existing hosts and global settings must remain unchanged.
-Audit and render the desired full inventory with the normal pinned backend,
-then resolve a helper request with the new machine fingerprint and native
-kernel-hostname-derived compute UUID. Use the same driver image and explicit
-build/cache binding as the existing deployment.
-
-Prepare a new private workspace, without any remote mutation:
+Do not run `init-kolla`, generate new cloud passwords/CA, or assemble manual
+helper/enrollment recipes. Use the current host-only add-compute interface:
 
 ```bash
-sudo scripts/spvm-openstack.sh --driver-dir /srv/selected-driver -- \
-  stage-add-compute-workspace \
-  --config /srv/operator/deployment-existing.yaml \
-  --new-config /srv/operator/deployment-three-hosts.yaml \
-  --workspace /srv/operator/kolla-existing-bound \
-  --rendered /srv/operator/rendered-three-hosts \
-  --audit /srv/operator/audit-three-hosts.json \
-  --request /srv/operator/new-compute-helper.json \
-  --host compute03 --output /srv/operator/kolla-three-hosts-bound
+sudo bash scripts/spvm-openstack.sh add-compute \
+  --config /srv/operator/noncc-computes.yaml \
+  --environment /srv/operator/environment \
+  --installation /var/lib/spvm-install/run-01 \
+  --output /var/lib/spvm-install/add-noncc-01 \
+  --check
 ```
 
-The command copies the original passwords and CA byte-for-byte, adds the one
-audited compute identity, and emits `NEW_COMPUTE_WORKSPACE_STAGED_NOT_ENROLLED`.
-It does not contact the cloud, prepare a host, start a container or run Kolla.
-It rejects controller additions, changes to old hosts/budgets/modes, image or
-global setting changes, duplicate identities, non-native UUIDs and mismatched
-helper build/mode/pool intent. Missing descriptions such as GPU VRAM remain
-irrelevant to the PCI identity contract.
+The YAML root contains only `hosts`. Each untrusted host explicitly sets
+`launch_mode: untrusted` and `allow_debug: true`; omit CPU/RAM, pools and GPU
+settings. See [compute addition](OPENSTACK_COMPUTE_ADDITION.md) for the full
+schema, SSH options and batch behavior. `--check` contacts hosts/cloud read-only;
+it does not install or enroll. To apply, use a new output directory, omit
+`--check`, and approve interactively or with `--yes`. Ubuntu 26 also needs
+`--allow-experimental-ubuntu26`.
 
-Existing Nova overrides and controller PCI aliases must remain unchanged. A new
-GPU identity requiring different controller aliases needs a separately reviewed
-controlled update; this input-only command will not silently deploy controllers.
-This is expansion of the current configuration, not migration of an old schema.
-
-Feed the new workspace and desired YAML to the existing `mode: add-compute`
-workflow, with its explicit enrollment request and `new_compute.preparation`
-recipe. That owned workflow installs missing native Docker/dependencies,
-network/helper/launcher and the exact image on the **new** host, then performs a
-compute-only deployment. It does not rerun the original cloud installation.
-Existing controllers/guests are not restarted. Runtime enrollment/verification
-and GUI capacity reconciliation remain required; staging alone is not readiness.
+The command retains the existing cloud credentials/CA, prepares only selected
+computes, deploys them, enrolls their restricted executors and refreshes real
+catalogs. It does not restart existing guests or automatically enable scheduling.
+New and returning computes both finish UNCONFIGURED/disabled.
 
 Each new compute needs management routes to **every** existing compute, not just
 to the controller. A hub-only WireGuard configuration is insufficient unless
 forwarding and peer routes are explicitly configured. Verify this before native
-deployment. Adding the new host to a Kolla workspace does not extend the root
-budget worker's delegation automatically: explicitly bind its desired deployment,
-trusted SSH endpoints and per-host automatic baselines, then refresh real host,
-pool and GPU catalogs. An empty GPU inventory is valid, but a missing catalog is
-not. Never fabricate capabilities to make a new host appear schedulable.
+deployment. The owned add-compute command updates the controller's explicit
+per-host executor delegation. Runtime resource management uses the typed API
+channel, not service SSH keys or installation baselines. Current resource limits
+are protected host state; the workspace is infrastructure/provenance only.
+An empty GPU inventory is valid, but a missing catalog is not. Never fabricate
+capabilities to make a new host appear schedulable.
 
 Use a distinct SSH known-hosts file for the new transaction. Never append a new
 key to a trust file while another approved operation is using its checksum.

@@ -158,7 +158,7 @@ def execute(args,backend_path,backend):
             if any(not ready(f,selected,intent) for f in before.values()):
                 from openstack_ssh import common_args
                 workspace.private_file(output/'ansible.cfg','[defaults]\nhost_key_checking = True\n'
-                    'retry_files_enabled = False\n[ssh_connection]\nusetty = False\nssh_args = '+common_args(args.known_hosts)+'\n')
+                    'retry_files_enabled = False\n[ssh_connection]\nusetty = False\npipelining = True\nssh_args = '+common_args(args.known_hosts)+'\n')
                 inventory={'all':{'hosts':{n:{'ansible_host':h['address'],'ansible_user':h['user'],
                     'ansible_connection':'ssh','ansible_python_interpreter':'/usr/bin/python3',
                     **({'ansible_ssh_private_key_file':h['identity_file']} if h.get('identity_file') else {})} for n,h in cfg['hosts'].items()}}}

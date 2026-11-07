@@ -217,7 +217,7 @@ def execute(args, backend_path, backend):
                     workspace.private_file(target,read(origin/name))
             from openstack_ssh import common_args
             workspace.private_file(output/'ansible.cfg', '[defaults]\nhost_key_checking = True\nretry_files_enabled = False\n'
-                '[ssh_connection]\nusetty = False\nssh_args = '+common_args(args.known_hosts)+'\n')
+                '[ssh_connection]\nusetty = False\npipelining = True\nssh_args = '+common_args(args.known_hosts)+'\n')
         for phase in PHASES[len(record['completed']):]:
             for name, approved in receipt['files'].items():
                 if name.startswith('kolla/') and file_hash(output/'kolla-run'/name.removeprefix('kolla/'))!=approved:

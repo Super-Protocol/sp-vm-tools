@@ -175,7 +175,7 @@ def execute(args,backend_path,backend):
             config=output/'ansible.cfg'
             from openstack_ssh import common_args
             workspace.private_file(config,'[defaults]\nhost_key_checking = True\nretry_files_enabled = False\n'
-                '[ssh_connection]\nusetty = False\nssh_args = '+common_args(args.known_hosts)+'\n')
+                '[ssh_connection]\nusetty = False\npipelining = True\nssh_args = '+common_args(args.known_hosts)+'\n')
             env={k:v for k,v in os.environ.items() if not k.startswith(('ANSIBLE_','KOLLA_','PYTHON','OS_'))}
             env.update(PYTHONDONTWRITEBYTECODE='1',ANSIBLE_CONFIG=str(config),
                 ANSIBLE_COLLECTIONS_PATH=receipt['collections'],KOLLA_ANSIBLE_DATA_FILES_PATH=str(source),

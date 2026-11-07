@@ -15,6 +15,13 @@ repair command. Hardware bootstrap and preparation of the management Python
 environment remain separate. The installer does not format disks, distribute
 SSH keys, launch guests, import a provider configuration or create a Swarm.
 
+Generated Ansible configurations use standard SSH pipelining, as recommended
+by the pinned Kolla `doc/source/user/ansible-tuning.rst`. This reduces extra
+module-transfer connections; it does not create a persistent SSH control master,
+distribute service keys, allow agent forwarding, weaken host-key checking or
+change remote sudo policy. Passwordless non-TTY sudo remains a prerequisite.
+Caller-supplied Ansible environment/hooks are still filtered.
+
 ## Inputs and prerequisites
 
 Use the infrastructure-only deployment YAML described in

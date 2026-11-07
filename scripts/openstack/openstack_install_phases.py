@@ -104,7 +104,8 @@ class Installation:
         try:self.path = backend(Path(driver), verified_bundle=True)
         except (OSError,ValueError):
             raise InstallerError('Selected driver bundle validation failed. Check driver.directory, its manifest and source checksums; '
-                'do not edit the verified archive or reuse partial staging.') from None
+                'A matching manual-host-resource-lifecycle-v1 kit is required; old kits are not migrated. '
+                'Do not edit the verified archive or reuse partial staging.') from None
         sys.path[:0] = [str(self.path.parent), str(self.path.parent.parent / 'nova-spvm')]
         self.backend = load_module(self.path, 'installer')
         sys.modules['installer'] = self.backend
@@ -407,7 +408,7 @@ print(json.dumps({'status':'FRESH_HOST_CHECKED','haproxy':ha}))
         write(target/'packages.json',play)
         from openstack_ssh import common_args
         workspace.private_file(target/'ansible.cfg','[defaults]\nhost_key_checking = True\nretry_files_enabled = False\n'
-            '[ssh_connection]\nusetty = False\nssh_args = '+common_args(self.known_hosts)+'\n')
+            '[ssh_connection]\nusetty = False\npipelining = True\nssh_args = '+common_args(self.known_hosts)+'\n')
         env={k:v for k,v in os.environ.items() if not k.startswith(('ANSIBLE_','KOLLA_','OS_','PYTHON'))}
         env.update(ANSIBLE_CONFIG=str(target/'ansible.cfg'),ANSIBLE_COLLECTIONS_PATH=receipt['collections'],
             PATH=str(self.kolla_python.parent)+':/usr/sbin:/usr/bin:/sbin:/bin')
