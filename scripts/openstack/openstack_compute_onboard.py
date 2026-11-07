@@ -220,6 +220,7 @@ def helper_phase(runner,host,request,assembled,files,output,*,apply=False,before
     sources['gpu_discovery.py']=files['/usr/local/libexec/spvm/gpu_discovery.py'][0].decode()
     sources['nova_spvm/__init__.py']=files['/usr/local/libexec/nova-spvm/nova_spvm/__init__.py'][0].decode()
     sources['nova_spvm/gpu_profiles.py']=files['/usr/local/libexec/nova-spvm/nova_spvm/gpu_profiles.py'][0].decode()
+    sources['nova_spvm/host_resources.py']=files['/usr/local/libexec/nova-spvm/nova_spvm/host_resources.py'][0].decode()
     data={'request':request,'launcher':assembled['result_sha256'],'files':files,
           'output':output,'apply':apply,'before':before}
     source='SOURCES='+repr(sources)+'\nDATA='+repr(data)+'\n'+'''
