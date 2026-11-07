@@ -6,12 +6,12 @@ import time
 from types import SimpleNamespace as R
 
 import yaml
-from openstack_active_deployment import current,portable
+from openstack_active_deployment import portable
 from openstack_container_engine import digest,file_hash,write
 from openstack_errors import InstallerError
 from openstack_install_phases import Installation,document
 from openstack_install_continue import document as read_document
-from openstack_remove_manager import Coordinator,installed_context,configuration_identity,lock_guard,CONTROLLER_RECORD_SOURCE
+from openstack_remove_manager import Coordinator,configuration_identity,lock_guard,CONTROLLER_RECORD_SOURCE
 from openstack_compute_onboard import remote_tools
 import openstack_add_host as target
 
@@ -39,18 +39,13 @@ def desired_configuration(active,requested,name):
     return result
 
 
-def retirement_proof(installation,name,machine,compute):
-    matches=[]
-    for path in Path(installation).parent.glob('*/transaction.json'):
-        try:
-            record=read_document(path)
-            if record.get('status')!='COMPUTE_REMOVED' or record.get('host')!=name:continue
-            plan=read_document(path.parent/'remove-compute-plan.json')
-            if (plan.get('machine')==machine and plan.get('compute_uuid')==compute
-                    and record.get('plan_sha256')==plan.get('plan_sha256')
-                    and digest({k:v for k,v in plan.items() if k!='plan_sha256'})==plan['plan_sha256']):matches.append(plan)
-        except (OSError,ValueError,KeyError):continue
-    return max(matches,key=lambda p:p['created_at']) if matches else None
+def retirement_proof(cloud,name,machine,compute):
+    plan=cloud.metadata['retirements'].get(name)
+    if plan is None:return None
+    if digest({k:v for k,v in plan.items() if k!='plan_sha256'})!=plan.get('plan_sha256'):
+        raise InstallerError('Controller retirement evidence has an invalid plan hash.')
+    if plan.get('machine')!=machine or plan.get('compute_uuid')!=compute:return None
+    return plan
 
 
 def cloud_state(runner,identity):
@@ -97,8 +92,10 @@ result=(h.observe(DATA['identity'],DATA['pools']) if DATA['approved'] is None el
 class Addition:
     def __init__(self,args):
         self.args=args;self.i=Installation(args);self.output=Path(args.output)
-        self.base,self.latest=installed_context(args.installation)
-        self.workspace,self.active_config=current(self.base)
+        self.cloud=args.cloud_context;self.base=self.cloud.base
+        from openstack_cloud_context import bind_controller
+        bind_controller(self.i.backend,self.cloud)
+        self.workspace,self.active_config=self.cloud.workspace,self.cloud.config
         self.old_raw=portable(yaml.safe_load(self.active_config.read_bytes()))
         # Supersession files may contain resolved transport data. It is never
         # persisted as deployment intent in the new workspace/configuration.
@@ -111,8 +108,7 @@ class Addition:
         # The manifest is a verified public artifact, not a root-private
         # transaction/credential record. Installation already checked its hashes.
         manifest=json.loads((self.i.path.parent.parent/'manifest.json').read_bytes())
-        wanted=read_document(self.latest/'plan.json').get('controller_review',{}).get('driver_commit')
-        if wanted and manifest['source_commit']!=wanted:raise InstallerError('Select the verified active-cloud driver kit; add-compute does not upgrade the cloud.')
+        if self.i.path!=self.cloud.backend_path:raise InstallerError('Use the exact controller cloud driver kit; add-compute does not upgrade the cloud.')
         raw=desired_configuration(self.old,self.i.raw,args.host)
         self.i.config=document(self.output/'deployment.desired.yaml',raw)
         self.i.cfg=self.i.backend.deployment_config(self.i.config)
@@ -146,7 +142,7 @@ class Addition:
         if self.identity['compute_uuid'] in {v['compute_uuid'] for n,v in self.binding['hosts'].items() if n!=host}:
             raise InstallerError('Target hostname/compute UUID collides with an existing compute.')
         cloud=cloud_state(self.runner,self.identity)
-        self.proof=retirement_proof(self.args.installation,host,self.identity['machine_sha256'],self.identity['compute_uuid'])
+        self.proof=retirement_proof(self.cloud,host,self.identity['machine_sha256'],self.identity['compute_uuid'])
         if cloud['services']:
             if host not in self.old['hosts']:raise InstallerError('Host is registered but absent from the active installation; reconcile ownership explicitly.')
             plan=self.runner.plan(host)
@@ -352,6 +348,8 @@ finally:c.close()
             write(journal,{**record,'status':'ALREADY_ADDED_VERIFIED'});return {'status':'ALREADY_ADDED_VERIFIED','host':self.args.host,'guests_changed':False}
         if fresh!=plan['observation']:raise InstallerError('Target/cloud changed after planning; no host changes started.')
         try:
+            operation=digest(str(self.output))
+            step('cloud-claim',lambda:self.cloud.begin(self.c,'add-compute',self.args.host,operation,plan['plan_sha256']))
             step('controller-claim',lambda:self.native('claim',plan))
             if plan['classification']=='returning':
                 step('reconcile-owned-metadata',lambda:actor(self.runner,self.args.host,self.identity,self.pools,
@@ -377,8 +375,8 @@ finally:c.close()
             # newly committed native config/policy, never manager-local paths.
             step('catalogs',self.c.refresh)
             step('controller-completion',lambda:self.native('finish',plan))
-            write(self.workspace/'journal.json',{'status':'SUPERSEDED_COMPUTE_ADDED','successor':str(self.new_workspace),
-                'config':self.new_config,'plan_sha256':plan['plan_sha256']})
+            step('cloud-completion',lambda:self.cloud.publish(self.c,self.new_workspace,self.new_config,operation,
+                 network=read_document(self.output/'network.json')))
             record.update(status='COMPUTE_ADDED',workspace=str(self.new_workspace),config=self.new_config,completed_at=int(time.time()))
             write(journal,record);return record
         except BaseException:

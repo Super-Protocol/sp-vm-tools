@@ -7,7 +7,9 @@ boundaries. Repository documentation must remain in English.
 
 ## Planned follow-up: add computes using controller SSH access (2026-11-07)
 
-Status: **design required, not implemented**. Allow an administrator to add one
+Status: **implemented in sources; synthetic acceptance only, live clean-install
+and second-manager acceptance pending**. See
+[controller-owned management](OPENSTACK_CLOUD_MANAGEMENT.md). Allow an administrator to add one
 or several hosts to an existing cloud with controller addresses and an operator
 SSH key, without a large deployment YAML or the original management machine's
 local `--installation` history. Retain only a small description/list of the new
@@ -36,8 +38,11 @@ hosts; determine which target/bootstrap/transport details genuinely need input.
   access and a minimal new-host input, lost local installation history, wrong
   cloud/key/CA, missing evidence, competing operators and controller loss.
 
-The current host-only YAML/batch frontend is an intermediate simplification:
-it still requires the original local installation receipts and linked history.
+The frontend now uses `--controller USER@IP`, a host-only YAML and a matching
+prepared local environment. Original local installation receipts/history are not
+accepted. Removal publishes into the same controller generation. A new kit/fresh
+installation is required; the existing 0.2.36 stand is not migrated or upgraded
+by source changes. SSH to existing computes remains required, by design.
 
 ## Completed: management CLI and manual resource allocation (2026-11-07)
 

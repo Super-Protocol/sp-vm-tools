@@ -6,12 +6,13 @@ import sys
 
 def parser():
     p=argparse.ArgumentParser(prog='spvm-openstack.sh add-compute',description='Add new or retired computes sequentially. Hosts start UNCONFIGURED and disabled; assign resources and Enable separately.')
-    for name in ('config','environment','installation','output'):
+    for name in ('config','environment','controller','output'):
         help_text={'config':'Host-only YAML (hosts mapping); no cloud configuration',
-                   'installation':'Original completed installation; supplies cloud and pinned kit settings',
+                   'controller':'Administrative SSH endpoint USER@IP; supplies the authoritative cloud kit',
                    'output':'New private batch directory; per-host journals are retained',
                    'environment':'Existing READY installer environment'}
         p.add_argument('--'+name,required=True,help=help_text[name])
+    p.add_argument('--cloud-id',help='Expected cloud UUID; mismatch is refused before host changes')
     p.add_argument('--host',help='Select one host from the host-only YAML; otherwise process all in YAML order')
     p.add_argument('--identity-file');p.add_argument('--known-hosts')
     p.add_argument('--allow-experimental-ubuntu26',action='store_true')

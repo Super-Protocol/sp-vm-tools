@@ -104,7 +104,7 @@ class Installation:
         try:self.path = backend(Path(driver), verified_bundle=True)
         except (OSError,ValueError):
             raise InstallerError('Selected driver bundle validation failed. Check driver.directory, its manifest and source checksums; '
-                'A matching manual-host-resource-lifecycle-v1 kit is required; old kits are not migrated. '
+                'A matching manual-host-resource-lifecycle-v1 / controller-cloud-management-v1 kit is required; old kits are not migrated. '
                 'Do not edit the verified archive or reuse partial staging.') from None
         sys.path[:0] = [str(self.path.parent), str(self.path.parent.parent / 'nova-spvm')]
         self.backend = load_module(self.path, 'installer')
@@ -209,6 +209,7 @@ def run(argv):
 if Path('/etc/kolla/globals.yml').exists() or Path('/etc/spvm/host-helper.json').exists():
  raise ValueError('existing cloud/helper: not a fresh installation')
 for path in ('/etc/kolla','/etc/nova','/opt/stack','/run/openvswitch','/etc/spvm/auth',
+             '/var/lib/spvm/cloud-management',
              '/etc/spvm/host-control-dispatcher-credentials.json'):
  p=Path(path)
  if p.is_symlink() or (p.exists() and (not p.is_dir() or any(p.iterdir()))):
@@ -480,12 +481,15 @@ print(json.dumps({'status':'NEW_HAPROXY_DISABLED_UNTIL_INGRESS_APPROVAL'}))
     def install_platform(self):
         if getattr(self.args,'continue_channel_from',None):
             from openstack_install_channel_continue import complete
-            return complete(self)
-        if getattr(self.args,'continue_compute_from',None):
+        elif getattr(self.args,'continue_compute_from',None):
             from openstack_install_compute_continue import complete
-            return complete(self)
-        if getattr(self.args,'continue_platform_from',None):
+        elif getattr(self.args,'continue_platform_from',None):
             from openstack_install_platform_continue import complete
-            return complete(self)
-        from openstack_install_completion import complete
-        return complete(self)
+        else:
+            from openstack_install_completion import complete
+        result=complete(self)
+        if result.get('status')!='PLATFORM_READY_NO_SWARM_CREATED' or result.get('guests_launched') is not False:
+            raise InstallerError('Platform acceptance is incomplete; no cloud-management state is published.')
+        from openstack_cloud_context import publish_initial
+        publish_initial(self)
+        return result

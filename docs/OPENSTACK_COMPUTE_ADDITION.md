@@ -36,8 +36,8 @@ cloud configuration is not accepted as a compatibility input.
 ```bash
 sudo bash scripts/spvm-openstack.sh add-compute \
   --config /srv/private/computes.yaml \
+  --controller operator@192.0.2.10 \
   --environment /srv/private/installer-environment \
-  --installation /var/lib/spvm-install/run-01 \
   --output /var/lib/spvm-install/add-computes-01 \
   --identity-file /srv/private/operator-key \
   --check
@@ -64,12 +64,11 @@ interfaces and launch mode. Resource fields are rejected. The new host is
 UNCONFIGURED and disabled; assign resources and explicitly Enable it afterward.
 See [manual resources](OPENSTACK_HOST_RESOURCES.md).
 
-The original `--installation` supplies cloud/network/Kolla/image settings, API
-CA and password store. The management kit is selected only from manifest hashes
-in the completed installation receipt, matching its recorded controller commit.
-The guest CIDR and API region come from saved network/binding receipts. Missing,
-changed or ambiguous kits are refused; no directory search, latest download or
-driver upgrade is performed. Keep these local installation artifacts available.
+`--controller USER@IP` supplies the authenticated controller-owned kit: cloud,
+network, Kolla/image pins, API CA and unchanged password store. Original local
+installation history is not required or accepted. Optional `--cloud-id UUID`
+pins the expected cloud. See [controller-owned management](OPENSTACK_CLOUD_MANAGEMENT.md)
+for environment matching, secret-bearing local copies, backup and failure rules.
 
 ## Batch transaction and failure behavior
 
@@ -77,7 +76,7 @@ All selected hosts undergo read-only preflight before approval or the first
 mutating host stage. Duplicate physical/native identities are refused even if
 addresses differ. Each target is rechecked under the controller resource lock
 immediately before its apply. The local installation lock serializes the entire
-batch. Cloud lineage may advance only through this batch's completed children;
+batch. Cloud generation may advance only through this batch's completed children;
 unrelated maintenance/configuration drift is refused, not automatically rebased.
 
 Hosts are committed **sequentially**, not atomically. On the first failure, stop:
@@ -86,7 +85,7 @@ There is no rollback or automatic replay. `batch.json` records each result and
 the failing host, with `failure.json` containing sanitized frame locations.
 Per-host evidence is under `hosts/<alias>/scan` and `hosts/<alias>/apply`; the
 latter retains the single-host WAL, backups and workspace. A completed child
-updates the same verified lineage used by subsequent adds/removals. Parent
+publishes the next authoritative controller generation used by adds/removals. Parent
 failure cannot invalidate a successfully committed child.
 
 The preflight summary is `ADD_COMPUTE_BATCH_PLAN_READY`; successful application
@@ -94,23 +93,19 @@ returns `COMPUTES_ADDED`. Child results are `COMPUTE_ADDED` or
 `ALREADY_ADDED_VERIFIED`. A used/partial batch directory is never overwritten,
 resumed or migrated. Review ambiguous mutations before any further operation.
 
-Existing infrastructure and control-plane provenance are taken from the latest
-**completed** workspace. Current budgets and GPU settings remain authoritative
-on each protected host and are not restored from that workspace. The command follows explicit,
-verified successful add/remove supersessions from the original installation;
-unfinished transactions and configuration drift are not silently adopted.
+Existing infrastructure and provenance come from the latest **completed controller
+generation**. Current budgets/GPU settings remain authoritative on protected
+hosts and are not restored from that snapshot. Unfinished controller claims and
+configuration drift are not silently adopted.
 The selected verified driver, Kolla revision and immutable compute image must
 match the installed cloud kit. An old target is prepared with those current
 cloud components, not with whatever it used previously. This is not a cloud
 upgrade or a migration of old configuration formats. Upgrading the cloud kit
 itself remains a separate controlled operation.
 
-The verified management-kit location is separate from the sealed workspace's
-driver intent. Selecting the controller-matched management kit does not rewrite
-that historical field or relax the existing-host/global-intent comparison.
-
-Keep the completed installation artifacts (launcher staging, compute image
-package, bound workspace, certificates/password store and helper requests).
+Back up the complete private controller kit and its referenced controller
+components, alongside ordinary OpenStack backups. It includes launcher staging,
+the compute image package, Kolla inputs, credentials and helper requests.
 Missing or mismatched artifacts are a preflight error, not permission to build
 an unrelated latest driver or regenerate cloud passwords/CA. The CLI does not
 select guest images/releases, create flavors/templates/Swarm clusters or change
@@ -121,7 +116,7 @@ runtime enrollment, filtered by its explicit launch/debug policy.
 
 | Current state | Result |
 | --- | --- |
-| New, bootstrapped, empty, no native registration | Prepare only this compute, deploy, enroll and enable it |
+| New, bootstrapped, empty, no native registration | Prepare only this compute, deploy and enroll; leave UNCONFIGURED/disabled |
 | Previously used, empty, absent from native inventory, proven owned metadata | Archive owned metadata; regenerate current configuration and use the same preparation/deploy/enroll path |
 | Registered and exactly ready for the active configuration | Read-only `ALREADY_ADDED_VERIFIED`, including occupied ready hosts; no restart or cleanup |
 | Domains, guest processes, state disks/claims, allocations or migrations | Refuse without stopping/deleting a VM or releasing its reservations |
@@ -203,6 +198,11 @@ to disable only future scheduling on this target, never stop guests. A lost
 quarantine acknowledgement requires manual review, not a success claim.
 
 ## Verification boundary
+
+The controller-owned contract has synthetic acceptance only. See
+[current scope and limitations](OPENSTACK_CLOUD_MANAGEMENT.md). The results below
+are historical evidence for the previous local-history workflow, **not** live
+acceptance of the new `--controller` contract.
 
 Synthetic tests exercise classification, workload/ownership refusals, metadata
 backup preservation (including retained Kolla configuration and dead OVS socket

@@ -3636,7 +3636,10 @@ the operation. Once new VMs exist, do not replay an old empty-host acceptance pl
 
 For the operator-facing command covering both new and previously retired hosts,
 use [`spvm-openstack.sh add-compute`](OPENSTACK_COMPUTE_ADDITION.md).
-Its YAML contains only `hosts`; cloud/kit settings come from `--installation`.
+Its YAML contains only `hosts`; cloud/kit settings come from administrative
+`--controller USER@IP`, not a local installation directory. See
+[controller-owned management](OPENSTACK_CLOUD_MANAGEMENT.md) for matching
+environments, protected secret-bearing copies and current acceptance limits.
 All selected entries are checked before adding them sequentially. Optional
 `--host` selects one entry; the default is every entry in file order. A failure
 stops the batch without rolling back already completed hosts.

@@ -83,6 +83,8 @@ def backend(directory, *, verified_bundle=False):
         hashes = manifest.get('source_sha256')
         if 'manual-host-resource-lifecycle-v1' not in manifest.get('capabilities',[]):
             raise ValueError('Driver kit lacks manual-host-resource-lifecycle-v1. Use a matching new kit; old configurations and workspaces are not migrated.')
+        if 'controller-cloud-management-v1' not in manifest.get('capabilities',[]):
+            raise ValueError('Driver kit lacks controller-cloud-management-v1. Use the matching new kit; controller state is created only by a fresh installation, without migration.')
         if (manifest.get('schema_version') != 1 or manifest.get('source_tree_dirty') is not False
                 or not re.fullmatch('[a-f0-9]{40}', str(manifest.get('source_commit', '')))
                 or not isinstance(hashes, dict) or 'deployment/installer.py' not in hashes):

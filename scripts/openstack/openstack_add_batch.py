@@ -18,14 +18,13 @@ import traceback
 from types import SimpleNamespace as R
 
 import yaml
-from openstack_active_deployment import current,portable
+from openstack_active_deployment import portable
 from openstack_add_entry import parser
 from openstack_container_engine import digest,file_hash,write
 from openstack_errors import InstallerError
 from openstack_install import deployment_lock,protected_parent
 from openstack_install_continue import document as read_document
-from openstack_installer import backend as verified_backend
-from openstack_remove_manager import installed_context,CONTROLLER_RECORD_SOURCE
+from openstack_remove_manager import CONTROLLER_RECORD_SOURCE
 
 
 class UniqueLoader(yaml.SafeLoader):
@@ -52,7 +51,7 @@ def host_file(path,selected=None):
     try:value=yaml.load(body,Loader=UniqueLoader)
     except yaml.YAMLError:raise InstallerError('Invalid host YAML syntax.') from None
     if not isinstance(value,dict) or set(value)!={'hosts'} or not isinstance(value['hosts'],dict) or not 1<=len(value['hosts'])<=128:
-        raise InstallerError('Use a host-only YAML with one hosts mapping (1..128 entries); cloud settings come from --installation.')
+        raise InstallerError('Use a host-only YAML with one hosts mapping (1..128 entries); cloud settings come from --controller.')
     for name,host in value['hosts'].items():
         if not re.fullmatch('[a-z][a-z0-9-]{0,39}',name) or not isinstance(host,dict):
             raise InstallerError('Each host needs a DNS-safe alias and a mapping of compute settings.')
@@ -66,24 +65,6 @@ def host_file(path,selected=None):
         if selected not in value['hosts']:raise InstallerError('--host is absent from the host YAML.')
         value={'hosts':{selected:value['hosts'][selected]}}
     return path,value['hosts'],hashlib.sha256(body).hexdigest()
-
-
-def kit(latest):
-    """Only a source-hash-bound kit from the completed installation receipt."""
-    receipt=read_document(Path(latest)/'installation.json')
-    expected=read_document(Path(latest)/'plan.json').get('controller_review',{}).get('driver_commit')
-    matches=[]
-    for name,sha in receipt['inputs'].items():
-        p=Path(name)
-        if p.name!='manifest.json' or p.is_symlink() or not p.is_file():continue
-        if file_hash(p)!=sha:continue
-        value=json.loads(p.read_bytes())
-        if expected is not None and value.get('source_commit')!=expected:continue
-        path=verified_backend(p.parent,verified_bundle=True)
-        matches.append((p.parent,path,sha))
-    if len(matches)!=1:
-        raise InstallerError('Completed installation must reference one unchanged verified management kit. No latest selection or automatic repair.')
-    return matches[0]
 
 
 def intent(active,hosts):
@@ -144,9 +125,12 @@ class Batch:
             addition=Addition
         self.addition=addition;self.args=args;self.output=Path(output)
         self.source,self.hosts,self.source_digest=host_file(args.config,args.host)
-        self.base,self.latest=installed_context(args.installation)
-        self.origin,self.active=current(self.base)
-        self.driver,self.backend_path,self.manifest_sha=kit(self.latest)
+        from openstack_cloud_context import Cloud
+        self.cloud=Cloud(args,self.output).receive();args.cloud_context=self.cloud
+        self.base=self.cloud.base
+        self.origin,self.active=self.cloud.workspace,self.cloud.config
+        self.driver,self.backend_path=self.cloud.driver,self.cloud.backend_path
+        self.manifest_sha=file_hash(self.driver/'manifest.json')
         self.expected=self.origin;self.scans={};self.identities={}
         self.binding=read_document(self.origin/'compute-binding.json')
         self.network=read_document(self.base/'network.json')
@@ -169,11 +153,11 @@ class Batch:
 
     def unchanged(self):
         if any(file_hash(p)!=sha for p,sha in self.pins.items()):raise InstallerError('Approved host YAML, kit, environment or installer source changed.')
-        workspace,_=current(self.base)
+        self.cloud.unchanged();workspace=self.cloud.workspace
         if workspace!=self.expected:raise InstallerError('Active cloud lineage changed outside this batch; stop and review.')
 
     def candidate(self,name,phase):
-        self.unchanged();workspace,config=current(self.base)
+        self.unchanged();workspace,config=self.cloud.workspace,self.cloud.config
         active=portable(yaml.safe_load(config.read_bytes()))
         raw=intent(active,{name:self.hosts[name]});raw['driver']={'directory':str(self.driver)}
         raw['installation']={'guest_cidr':self.network['guest_cidr'],
@@ -244,6 +228,7 @@ def main(argv=None):
         output.mkdir(mode=0o700);owned=True
         with deployment_lock():
             batch=Batch(args,output);batch.scan()
+            print('Cloud: '+batch.cloud.pointer['cloud_id']+' · '+batch.initial['deployment_id']+' · '+batch.cloud.identity['api_endpoint'],flush=True)
             print(json.dumps({'status':'ADD_COMPUTE_BATCH_PLAN_READY','hosts':batch.record['hosts'],'plan_sha256':batch.record['plan_sha256']}),flush=True)
             if args.check:batch.record['status']='CHECKED';batch.save();return 0
             print('All selected hosts passed checks. Add sequentially; stop at the first failure. Completed hosts are not rolled back.',flush=True)

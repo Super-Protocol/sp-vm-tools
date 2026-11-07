@@ -35,8 +35,9 @@ def pinned(source, revision):
     source=Path(source)
     if not source.is_absolute() or source.resolve()!=source:
         raise ValueError('absolute resolved Kolla source required')
-    head=subprocess.run(['git','-C',str(source),'rev-parse','HEAD'],check=True,capture_output=True,text=True,timeout=30).stdout.strip()
-    dirty=subprocess.run(['git','-C',str(source),'status','--porcelain'],check=True,capture_output=True,text=True,timeout=30).stdout
+    git=['git','-c','safe.directory='+str(source),'-C',str(source)]
+    head=subprocess.run(git+['rev-parse','HEAD'],check=True,capture_output=True,text=True,timeout=30).stdout.strip()
+    dirty=subprocess.run(git+['status','--porcelain'],check=True,capture_output=True,text=True,timeout=30).stdout
     if head!=revision or dirty:
         raise ValueError('clean pinned Kolla checkout required')
     return source

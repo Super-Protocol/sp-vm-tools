@@ -1,11 +1,12 @@
 # Retiring an OpenStack compute host
 
-Run the installer `remove-compute` operation from the original **management
-host**, using its completed installation history and matching verified driver.
+Run `remove-compute` from a matching prepared **management host**, using
+`--controller USER@IP` and the controller-owned management kit.
 You do not log into the controller manually. Operator SSH from management runs
-the required fixed controller/compute operations; no private key, SSH agent,
-administrator password or controller service credential is copied between
-hosts. No new SSH account, listener or persistent SSH authority is installed.
+the required fixed controller/compute operations; no operator private key or
+SSH agent is distributed to servers. Necessary Kolla secrets are
+downloaded into the management host's private working directory; treat it as
+secret-bearing. No new SSH account, listener or persistent SSH authority is installed.
 
 This is not Nova's service-disable command: it retires native registrations,
 SPVM catalogs and deployment inventory. Temporary `compute service set --disable`
@@ -44,32 +45,29 @@ a new plan. Use a new private output directory for each plan.
 
 ## Commands
 
-Use the local infrastructure config (to select the verified driver), the READY
-prepared environment, the completed installation history and a new private
-output directory. The coordinator discovers the original bound workspace,
-controller and its installed SDK from that history. OpenStack SDK/authentication
-remain on the controller; management needs only its prepared installer Python.
+Use administrative controller SSH, the matching READY prepared environment and
+a new private output directory. The authoritative kit supplies infrastructure,
+component pins and removal provenance; no deployment YAML or local installation
+history is required. See [controller management](OPENSTACK_CLOUD_MANAGEMENT.md).
 For example, from the `sp-vm-tools` checkout on the management host:
 
 ```bash
 sudo bash scripts/spvm-openstack.sh remove-compute \
-  --config /srv/private/deployment.yaml \
+  --controller operator@192.0.2.10 \
   --environment /srv/private/environment-01 \
-  --installation /var/lib/spvm/install-01 \
   --host compute03 \
   --output /var/lib/spvm/remove-compute03-01 --check
 
-# Review remove-compute-plan.json, then explicitly approve the same operation.
+# Review the check, then apply after fresh checks in a new output directory.
 sudo bash scripts/spvm-openstack.sh remove-compute \
-  --config /srv/private/deployment.yaml \
+  --controller operator@192.0.2.10 \
   --environment /srv/private/environment-01 \
-  --installation /var/lib/spvm/install-01 \
   --host compute03 \
-  --output /var/lib/spvm/remove-compute03-01 --yes
+  --output /var/lib/spvm/remove-compute03-02 --yes
 ```
 
-The first command is optional: without an existing plan the second invocation
-plans, validates and applies in one call. Without `--yes`, type the exact host
+The first command is optional: the second invocation plans, validates and applies
+in one call. Without `--yes`, type the exact host
 configuration key to approve; this is never inferred from a previous failed run.
 `--identity-file` and `--known-hosts` have the same management-local meaning and
 invoking-user defaults as installation. Do not forward an agent or copy the key
@@ -77,9 +75,9 @@ to the controller. `--check` does not stop containers or remove registrations;
 it creates private local evidence and holds only temporary runtime locks.
 
 The initial supported scope is a completed single-controller installation whose
-active configuration matches its bound management workspace, except for native
-controller path translations. Configuration/budget/identity drift is refused,
-not silently imported. An incomplete installation, superseded workspace or
+active configuration matches the completed controller generation, except for
+local transport/path binding. Infrastructure/identity drift is refused, not
+silently imported. Current budgets are read from protected host state. An incomplete installation or
 partially removed host requires review. The command never deploys Kolla or
 regenerates passwords/TLS to make removal pass.
 

@@ -7,6 +7,9 @@ import sys
 
 
 def main(argv=None, *, operation='install'):
+    # A caller may already select installer-venv, bypassing the -B re-exec.
+    # Never add bytecode caches to downloaded, hash-pinned controller inputs.
+    sys.dont_write_bytecode=True
     argv=list(sys.argv[1:] if argv is None else argv)
     folder=Path(__file__).resolve().parent
     sys.path.insert(0,str(folder))
@@ -15,7 +18,7 @@ def main(argv=None, *, operation='install'):
         if operation=='add-compute':
             from openstack_add_entry import parser
         elif operation=='remove-compute':
-            from openstack_remove_manager import parser
+            from openstack_remove_entry import parser
         else:
             from openstack_install import parser
         parser().print_help()

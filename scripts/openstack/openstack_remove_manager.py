@@ -1,5 +1,4 @@
-"""Retire an empty compute from the original deployment host, without SSH keys on controllers."""
-import argparse
+"""Retire an empty compute using controller-owned state and operator SSH."""
 from contextlib import contextmanager
 import hashlib
 import json
@@ -16,6 +15,7 @@ from openstack_container_engine import digest,file_hash,write
 from openstack_errors import InstallerError
 from openstack_install_continue import document,private
 import openstack_compute_removal as removal
+from openstack_remove_entry import parser
 
 POLICY='/etc/spvm/host-budget-policy.json'
 LOCK='/var/lib/spvm-host-budget-worker/worker.lock'
@@ -33,52 +33,6 @@ def private(path):
   raise ValueError('bounded single-link private retirement record required')
  return path
 '''
-
-
-def parser():
-    p=argparse.ArgumentParser(description=__doc__)
-    for key in ('config','environment','installation','host','output'):
-        p.add_argument('--'+key,required=True)
-    p.add_argument('--identity-file');p.add_argument('--known-hosts')
-    p.add_argument('--check',action='store_true',help='Plan only: no retirement or persistent controller changes')
-    p.add_argument('--yes',action='store_true',help='Approve the exact host retirement after successful checks')
-    return p
-
-
-def installed_context(root):
-    """Read hash-bound completed lineage; never adopt a failed installation."""
-    from openstack_install import PHASES,protected_parent
-    root=Path(root);protected_parent(root);seen=[];current=root
-    while True:
-        if current in seen or len(seen)>=128:raise InstallerError('Invalid installation lineage.')
-        seen.append(current);record=document(current/'installation.json')
-        marker=current/'continued-by.json'
-        if not marker.exists():break
-        link=document(marker);next_=Path(link['output']);protected_parent(next_)
-        if not (next_.parent==root.parent or next_.is_relative_to(root/'attempts')):
-            raise InstallerError('Installation continuation escapes its history.')
-        plan=document(next_/'plan.json');child=document(next_/'installation.json')
-        if (child.get('continued_from')!=str(current) or digest(plan)!=link.get('plan_sha256')
-                or child.get('plan_sha256')!=link.get('plan_sha256')):
-            raise InstallerError('Installation lineage hash differs.')
-        current=next_
-    if record.get('status')!='OPENSTACK_READY_NO_SWARM_CREATED' or record.get('completed')!=list(PHASES):
-        raise InstallerError('A successfully completed installation is required.')
-    base=current
-    for _ in range(128):
-        if (base/'deployment.artifacts.yaml').is_file() and (base/'kolla-bound/workspace.json').is_file():break
-        parent=Path(document(base/'installation.json').get('continued_from',''));protected_parent(parent)
-        # The first prepared run can precede the user's stable --output.
-        link=document(parent/'continued-by.json');plan=document(base/'plan.json')
-        if (parent==base or link.get('output')!=str(base) or link.get('plan_sha256')!=digest(plan)
-                or document(base/'installation.json').get('plan_sha256')!=digest(plan)):
-            raise InstallerError('Prepared installation ancestry is missing.')
-        base=parent
-    else:raise InstallerError('Prepared workspace was not found.')
-    receipt=document(current/'platform-result.json')
-    if receipt.get('status')!='PLATFORM_READY_NO_SWARM_CREATED' or receipt.get('guests_launched') is not False:
-        raise InstallerError('Authenticated platform completion receipt is required.')
-    return base,current
 
 
 def configuration_identity(cfg):
@@ -130,9 +84,10 @@ class Coordinator:
         controls=[n for n,h in cfg['hosts'].items() if 'control' in h['roles']]
         if len(controls)!=1:raise InstallerError('This workflow currently requires one configured controller.')
         self.controller=controls[0]
-        self.argv=module.ssh_arguments(cfg['hosts'][self.controller])
+        cloud=getattr(args,'cloud_context',None)
+        self.argv=list(cloud.argv) if cloud is not None else module.ssh_arguments(cfg['hosts'][self.controller])
         self.argv[1:1]=['-o','ServerAliveInterval=15','-o','ServerAliveCountMax=12']
-        self.native_root='/opt/spvm-openstack/'+cfg['deployment_id']+'-'+digest(str(base))[:12]
+        self.native_root=cloud.native_root if cloud is not None else args.native_root
         self.python=self.native_root+'/sdk/bin/python'
 
     def alive(self):
@@ -173,6 +128,8 @@ class Coordinator:
         return json.loads(p.stdout)
 
     def snapshot(self):
+        cloud=getattr(self.args,'cloud_context',None)
+        if cloud is not None:cloud.verify(self)
         code='ROOT='+repr(self.native_root)+'\n'+CONTROLLER_RECORD_SOURCE+'''import sys,json,hashlib
 from pathlib import Path
 root=Path(ROOT)
@@ -195,6 +152,9 @@ print(json.dumps({'policy':v,'config':cfg,'policy_sha256':file_hash(p),'config_s
  'native_sources':{str(p):file_hash(p) for p in (root/'tools').glob('*.py')},'backend':str(path)}))
 '''
         self.native=self.remote(code)
+        if cloud is not None and (self.native['policy']['project_id']!=cloud.identity['project_id']
+                or self.lock['machine']!=cloud.identity['controller_machine']):
+            raise InstallerError('Controller project or physical identity differs from the cloud-management identity.')
         if (self.native['policy']['controller']!=self.controller
                 or self.native['policy']['controller_machine_sha256']!=self.lock['machine']
                 or configuration_identity(self.native['config'])!=configuration_identity(self.cfg)):
@@ -209,7 +169,7 @@ print(json.dumps({'policy':v,'config':cfg,'policy_sha256':file_hash(p),'config_s
         return self.native['policy']
 
     def inputs(self):
-        paths=[self.args.config,self.base/'deployment.artifacts.yaml',self.output/'controller-snapshot.json',self.args.known_hosts,
+        paths=[self.args.config,self.output/'controller-snapshot.json',self.args.known_hosts,
                Path(self.args.environment)/'environment.json']
         paths+=self.cfg['hosts'][self.controller].get('ssh_transport',{}).get('identity_files',[])
         paths += list(Path(__file__).parent.glob('*.py'))
@@ -265,13 +225,14 @@ print(json.dumps({'status':record['status'],'host':host,'operation':request['ope
 
     def start(self,plan):
         self.plan=plan
+        cloud=getattr(self.args,'cloud_context',None)
+        if cloud is not None:cloud.begin(self,'remove-compute',self.args.host,digest(str(self.output)),plan['plan_sha256'])
         return self.native_operation('claim',plan)
 
     def configure(self,new,successor,plan):
         self.native_operation('configure',plan)
         write(self.output/'remaining-deployment.yaml',new)
-        write(Path(self.args.workspace)/'journal.json',{'status':'SUPERSEDED_COMPUTE_REMOVED',
-              'successor':str(successor),'plan_sha256':plan['plan_sha256']})
+        self.successor=successor;self.successor_config=self.output/'remaining-deployment.yaml'
         return {'workspace':str(successor),'config':str(self.output/'remaining-deployment.yaml'),'host_removed':self.args.host}
 
     def refresh(self):
@@ -296,47 +257,37 @@ print(json.dumps({'status':'REMAINING_HOST_CATALOGS_REFRESHED','hosts':sorted(co
 '''
         return self.runner.remote(self.controller,lock_guard(self.lock)+code,controller=True,auth=True)
 
-    def finish(self,plan):return self.native_operation('finish',plan)
+    def finish(self,plan):
+        result=self.native_operation('finish',plan)
+        cloud=getattr(self.args,'cloud_context',None)
+        if cloud is not None:
+            network=document(cloud.base/'network.json');network['hosts'].pop(self.args.host,None)
+            cloud.publish(self,self.successor,self.successor_config,digest(str(self.output)),network=network,retirement=plan)
+        return result
 
 
 def main(argv=None):
-    args=parser().parse_args(argv);output=Path(args.output)
+    args=parser().parse_args(argv);output=Path(args.output);owned=False
     try:
         from openstack_install import protected_parent,deployment_lock
         if os.geteuid()!=0:raise InstallerError('Run the management-host coordinator with sudo.')
         protected_parent(output.parent)
         if output.resolve()!=output:raise InstallerError('Canonical private output required.')
-        if not output.exists():output.mkdir(mode=0o700)
+        if output.exists() or output.is_symlink():
+            raise InstallerError('Removal output already exists. Inspect its journal and use a new directory; no automatic replay.')
+        output.mkdir(mode=0o700);owned=True
         protected_parent(output)
         if output.stat().st_mode&0o077:raise InstallerError('Private output required.')
-        if (output/'transaction.json').exists():
-            result=document(output/'transaction.json');plan=document(output/'remove-compute-plan.json')
-            if (result.get('status')=='COMPUTE_REMOVED' and args.yes and result.get('host')==args.host
-                    and result.get('plan_sha256')==plan.get('plan_sha256')
-                    and digest({k:v for k,v in plan.items() if k!='plan_sha256'})==plan.get('plan_sha256')):
-                print(json.dumps({**result,'recorded_completion':True}));return 0
-            raise InstallerError('This retirement has started; inspect its journal. No automatic replay or cleanup.')
         with deployment_lock():
-            base,latest=installed_context(args.installation)
-            from openstack_installer import backend
-            driver=yaml.safe_load(Path(args.config).read_bytes())['driver']['directory']
-            path=backend(driver,verified_bundle=True)
-            sys.path[:0]=[str(path.parent),str(path.parent.parent/'nova-spvm')]
-            from openstack_install_phases import load_module
-            module=load_module(path,'installer');sys.modules['installer']=module
-            transport=load_module(path.with_name('ssh_transport.py'),'remove_ssh')
-            ssh=transport.resolve(args.identity_file,args.known_hosts)
-            os.environ['SPVM_INSTALLER_SSH_POLICY']=json.dumps(ssh)
-            os.environ['SPVM_INSTALLER_SSH_BACKEND']=str(path.parent)
-            args.known_hosts=ssh['known_hosts']
-            from openstack_active_deployment import current,portable
-            active_workspace,active_config=current(base)
+            from openstack_cloud_context import Cloud
+            cloud=Cloud(args,output).receive();args.cloud_context=cloud
+            base=cloud.base;path=cloud.backend_path;module=cloud.module
+            active_workspace,active_config=cloud.workspace,cloud.config
+            from openstack_active_deployment import portable
             from openstack_install_phases import document as yaml_document
             args.workspace=str(active_workspace)
             args.active_config=yaml_document(output/'active-deployment.yaml',portable(yaml.safe_load(active_config.read_bytes())))
-            manifest=json.loads((path.parent.parent/'manifest.json').read_bytes())
-            expected=document(latest/'plan.json').get('controller_review',{}).get('driver_commit')
-            if expected and manifest.get('source_commit')!=expected:raise InstallerError('Use the driver verified by the completed installation.')
+            args.config=args.active_config
             cfg=module.deployment_config(args.active_config)
             if args.host not in cfg['hosts'] or cfg['hosts'][args.host]['roles']!=['compute']:
                 raise InstallerError('Only an explicit compute-only target is supported; controller/network/ingress removal is refused.')
@@ -360,6 +311,7 @@ def main(argv=None):
             args.policy=POLICY
             with coordinator.locked():
                 delegation=coordinator.snapshot()
+                print('Cloud: '+cloud.pointer['cloud_id']+' · '+cfg['deployment_id']+' · '+cloud.identity['api_endpoint'],flush=True)
                 if args.host not in delegation['executors']:raise InstallerError('Target has no enrolled resource executor.')
                 args.action='plan-remove-compute'
                 planfile=output/'remove-compute-plan.json'
@@ -375,7 +327,7 @@ def main(argv=None):
                 args.action='remove-compute';args.confirm_host=args.host;args.plan_sha256=plan['plan_sha256']
                 return removal.execute(args,output,module,delegation,cfg,receipt,binding,runner,coordinator=coordinator)
     except Exception as error:
-        if output.exists() and output.is_dir() and not output.is_symlink() and output.stat().st_uid==0 and not output.stat().st_mode&0o077:
+        if owned and output.exists() and output.is_dir() and not output.is_symlink() and output.stat().st_uid==0 and not output.stat().st_mode&0o077:
             import traceback
             write(output/'failure.json',{'type':type(error).__name__,'sites':[(Path(f.filename).name,f.name,f.lineno) for f in traceback.extract_tb(error.__traceback__)[-6:]]})
         if isinstance(error,InstallerError):print('ERROR: '+str(error),file=sys.stderr)
