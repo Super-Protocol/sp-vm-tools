@@ -88,13 +88,15 @@ before any installation phase. It does not download image layers. Registry
 garbage collection can remove old digests; pinning guarantees identity, not
 availability. A missing or inaccessible manifest blocks installation early.
 The default pins were refreshed from the official `2026.2-ubuntu-noble` images
-on 2026-11-05; source-layout and build smoke checks remain mandatory.
+on 2026-11-07 after upstream removed the previous manifests; source-layout and
+build smoke checks remain mandatory. Archive validated images in an
+operator-controlled registry for durable production delivery.
 
-### Matched Skyline source contract (2026-11-05)
+### Matched Skyline source contract (2026-11-07)
 
 The updated overlay targets reviewed `*.bundle.1791833599.js` assets from
 Noble 2026.2 console digest
-`f2f2c81685e656b2652691251d9dca38b68f67b61cc6ca58df273228209cd91b`.
+`ab9b7c6d361948f6ee01337a00a3304f4d0be8049738e3007d7b2dd2db09fda4`.
 An older already-downloaded bundle does not acquire these source changes.
 The initial scan executes the selected bundle's isolated builder to check its
 imports and explicit base contract before host preparation. Unknown pairs fail
