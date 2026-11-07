@@ -344,8 +344,10 @@ def complete(i):
     argv=i.backend.ssh_arguments(i.cfg['hosts'][i.controller])+['sudo -n '+shlex.quote(i.controller_root+'/sdk/bin/python')+' -I -B -u -c '+shlex.quote(code)]
     operations=Operations(i)
     result=rpc_process(i,argv,{},operations)
-    if operations.activated!=set(i.requests) or operations.installed!=set(i.requests) or not operations.audited:
+    if operations.activated!=set(i.requests) or operations.installed!=set(i.requests):
         raise InstallerError('Controller did not complete all reviewed compute operations.')
+    from openstack_install_completion import final_host_audit
+    final_host_audit(i)
     return result
 
 

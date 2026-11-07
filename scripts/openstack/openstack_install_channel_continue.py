@@ -285,8 +285,10 @@ def complete(i):
     code='import sys;sys.path.insert(0,'+repr(i.platform_target+'/tools')+');from openstack_install_channel_continue import serve;serve('+repr(i.platform_target)+')'
     argv=i.backend.ssh_arguments(i.cfg['hosts'][i.controller])+['sudo -n '+shlex.quote(i.controller_root+'/sdk/bin/python')+' -I -B -u -c '+shlex.quote(code)]
     result=rpc_process(i,argv,{},operations)
-    if operations.installed!=set(i.requests) or not operations.audited:
+    if operations.installed!=set(i.requests):
         raise InstallerError('Remaining platform operations did not complete.')
+    from openstack_install_completion import final_host_audit
+    final_host_audit(i)
     return result
 
 

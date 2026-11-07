@@ -269,7 +269,6 @@ class Operations:
         self.enrollment = None
         self.requests = None
         self.activated = set(); self.probed = set(); self.installed = set()
-        self.audited = False
 
     def __call__(self, operation, data):
         i = self.i
@@ -321,11 +320,6 @@ class Operations:
                     +str(target/'observations')+'. Scheduling remains quarantined when confirmed by the journal; no automatic retry.')
             self.activated.add(name)
             return {'status': result['status'], 'guests_restarted': result['guests_restarted']}
-        if operation == 'host-audits':
-            if data or self.activated != set(i.requests) or self.audited:
-                raise InstallerError('Unexpected final host audit request.')
-            self.audited = True
-            return i.backend.host_audits(i.cfg)
         if operation not in ('executor-probe', 'executor-install') or self.activated != set(i.requests):
             raise InstallerError('Unapproved controller installation operation.')
         name = data.get('host')
@@ -361,6 +355,23 @@ class Operations:
         return result
 
 
+def final_host_audit(i):
+    """Operator-owned final read-only audit; not a controller RPC callback."""
+    if getattr(i,'transaction',None) is not None:i.transaction.unchanged()
+    audits=i.backend.host_audits(i.cfg)
+    if set(audits)!=set(i.cfg['hosts']):raise InstallerError('Final host audit does not cover the configured fleet.')
+    from openstack_compute_identity import native_uuid
+    for name,path in i.requests.items():
+        request=json.loads(Path(path).read_bytes())
+        if (audits[name]['host_identity_sha256']!=request['machine_sha256']
+                or native_uuid(audits[name]['hostname'])!=request['compute_uuid']):
+            raise InstallerError('Final audited compute identity differs from the approved request: '+name)
+    target=i.output/'final-host-audits.json'
+    if target.exists() or target.is_symlink():raise InstallerError('Final host audit receipt already exists; no replay.')
+    write(target,audits)
+    return audits
+
+
 def complete(i):
     import yaml
     payload = {'clouds': yaml.safe_load((i.output / 'core/kolla-run/clouds.yaml').read_bytes())}
@@ -370,9 +381,9 @@ def complete(i):
         'sudo -n ' + shlex.quote(i.controller_root + '/sdk/bin/python') + ' -I -B -u -c ' + shlex.quote(code)]
     operations=Operations(i)
     result=rpc_process(i, argv, payload, operations)
-    if (operations.activated!=set(i.requests) or operations.installed!=set(i.requests)
-            or not operations.audited):
+    if operations.activated!=set(i.requests) or operations.installed!=set(i.requests):
         raise InstallerError('Controller did not complete every approved compute and catalog operation.')
+    final_host_audit(i)
     return result
 
 

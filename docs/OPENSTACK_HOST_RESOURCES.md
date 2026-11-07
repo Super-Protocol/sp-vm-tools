@@ -42,6 +42,9 @@ initial outcomes, not reasons to enable a host or invent a resource budget.
 Acceptance allows a bounded read-only wait for missing host publications during
 catalog replacement. It does not replay configuration operations, accept stale
 or invalid present state, or suppress authentication and Placement failures.
+The final physical-host audit runs explicitly on the operator coordinator after
+controller completion. Runtime catalogs are collected through the restricted
+executors; they do not need to call an operator SSH-audit callback.
 
 ## States and authority
 
