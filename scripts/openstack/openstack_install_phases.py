@@ -18,8 +18,8 @@ from openstack_errors import InstallerError
 
 # The reviewed Noble bases used by this installer profile, not floating tags.
 BASES = {
-    'compute': 'quay.io/openstack.kolla/nova-compute@sha256:e10ae261dc29e538b4543d2ea72f7712d8e93e8c20cbcb2e637693af7e3f7178',
-    'console': 'quay.io/openstack.kolla/skyline-console@sha256:ab9b7c6d361948f6ee01337a00a3304f4d0be8049738e3007d7b2dd2db09fda4',
+    'compute': 'quay.io/openstack.kolla/nova-compute@sha256:f6c91e2c4f51f6b83a320a1000a7f96d8214df070766401206bc957236b40b9d',
+    'console': 'quay.io/openstack.kolla/skyline-console@sha256:28c3fcc9be0785f65f39df2ddd5e0ad0658994db2182104b461b317c385901b4',
 }
 
 

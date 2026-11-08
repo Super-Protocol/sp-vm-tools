@@ -59,3 +59,21 @@ Synthetic tests use fake clocks/processes for the minute interval, nested steps,
 errors/Ctrl+C, audit counts, stream byte preservation and stderr/stdout isolation.
 These do not replace live installation or network acceptance. Dated stand
 reports identify the exact commits, CI archive digest and live cases exercised.
+
+During the 2026-11-08 clean-stand test, the previous Nova/Skyline base digests
+returned registry `404 MANIFEST_UNKNOWN`. The installer correctly refused before
+any installation mutation, even though local copies existed. Reviewed replacements
+remain official Kolla 2026.2 / Ubuntu Noble, Linux/amd64, Kolla version 23.0.1:
+
+```text
+quay.io/openstack.kolla/nova-compute@sha256:f6c91e2c4f51f6b83a320a1000a7f96d8214df070766401206bc957236b40b9d
+quay.io/openstack.kolla/skyline-console@sha256:28c3fcc9be0785f65f39df2ddd5e0ad0658994db2182104b461b317c385901b4
+```
+
+All 46 generated Skyline assets passed the existing exact source/patch checks;
+no JS acceptance hashes or patch semantics were relaxed. Bases are manually
+reviewed pins, never automatically selected from a floating tag. A digest binds
+content but does not guarantee registry retention. For durable production kits,
+retain reviewed artifacts in an operator-controlled registry; local cache alone
+does not bypass the installer's registry check. Dated earlier reports retain
+their historical digests and are not evidence that those digests remain available.
