@@ -84,7 +84,15 @@ class Installation:
         self.backend = load_module(self.path, 'installer')
         sys.modules['installer'] = self.backend
         import openstack_prebuilt as prebuilt
-        prebuilt.verify_installer(prebuilt.selected(self.path))
+        kit = prebuilt.selected(self.path)
+        prebuilt.verify_installer(kit)
+        requested_kolla = self.raw.get('kolla', {})
+        if not isinstance(requested_kolla, dict) or requested_kolla.get('revision') != kit['kolla_revision']:
+            raise InstallerError('kolla.revision must match the exact revision recorded in the selected CI kit.')
+        for component, prefix in (('compute', 'compute'), ('console', 'skyline_console')):
+            for suffix, field in (('_image', 'reference'), ('_image_id', 'config_id')):
+                if prefix+suffix in requested_kolla and requested_kolla[prefix+suffix] != kit['images'][component][field]:
+                    raise InstallerError('Configured '+component+' image differs from the selected coordinated CI kit; image overrides are not supported.')
         transport = load_module(self.path.with_name('ssh_transport.py'), 'installation_ssh')
         self.ssh = transport.resolve(args.identity_file, args.known_hosts)
         os.environ['SPVM_INSTALLER_SSH_POLICY'] = json.dumps(self.ssh, sort_keys=True)

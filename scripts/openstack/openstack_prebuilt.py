@@ -54,6 +54,8 @@ def verify_installer(kit):
     git = ['git', '-c', 'safe.directory=' + str(root), '-C', str(root)]
     try:
         head = subprocess.check_output([*git, 'rev-parse', 'HEAD'], timeout=30).decode().strip()
+        if head != revision:
+            raise ValueError('Installer source revision differs')
         tree = subprocess.check_output([*git, 'ls-tree', '-rz', revision, '--',
                                         'scripts/openstack', 'scripts/spvm-openstack.sh'], timeout=30)
         wanted = {}
