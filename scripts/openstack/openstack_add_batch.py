@@ -137,7 +137,7 @@ class Batch:
         self.network=read_document(self.base/'network.json')
         self.initial=portable(yaml.safe_load(self.active.read_bytes()))
         # Validate the whole proposed set before any host is contacted.
-        combined=intent(self.initial,self.hosts);combined['driver']={'directory':str(self.driver)}
+        combined=intent(self.initial,self.hosts);combined['installation_kit']={'directory':str(self.driver)}
         write(self.output/'validation.yaml',combined)
         from openstack_kolla_existing import backend
         backend(self.backend_path).deployment_config(str(self.output/'validation.yaml'),transport=False)
@@ -160,7 +160,7 @@ class Batch:
     def candidate(self,name,phase):
         self.unchanged();workspace,config=self.cloud.workspace,self.cloud.config
         active=portable(yaml.safe_load(config.read_bytes()))
-        raw=intent(active,{name:self.hosts[name]});raw['driver']={'directory':str(self.driver)}
+        raw=intent(active,{name:self.hosts[name]});raw['installation_kit']={'directory':str(self.driver)}
         raw['installation']={'guest_cidr':self.network['guest_cidr'],
             'region':self.binding['bootstrap_runtime']['region_name'],'allow_debug':self.hosts[name].get('allow_debug',False)}
         directory=self.output/'hosts'/name/phase;directory.mkdir(mode=0o700,parents=True)

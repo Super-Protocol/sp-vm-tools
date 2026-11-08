@@ -33,10 +33,13 @@ store. Never remove unrelated CAs, accept an unverified replacement or use
 ## Inputs and prerequisites
 
 Use the infrastructure-only deployment YAML described in
-[the deployment guide](OPENSTACK_DEPLOYMENT.md). `driver.directory` selects a
+[the deployment guide](OPENSTACK_DEPLOYMENT.md). `installation_kit.directory` selects a
 previously verified, expanded release bundle with source checksums and its
 matching wheel; `manual-host-resource-lifecycle-v1`, `host-control-api-v1` and infrastructure-first
 capabilities are mandatory. No compatibility or workspace migration is offered.
+The kit must also advertise `installation-kit-selection-v1`; the old `driver`
+YAML field/CLI selectors are rejected, not renamed automatically. Choose the kit
+directory, not a Nova container tag; the kit pins the exact image digests.
 
 `--environment` is the READY directory created by `prepare-environment.sh`.
 The entry point chooses its `installer-venv` automatically. Kolla must match the
@@ -379,7 +382,7 @@ The selected clean bundle may differ only in `deployment/spvm_network.py` and
 its documentation; wheel, version, capabilities and all other sources must
 match. The reviewed update must already be staged on the controller under
 `/opt/spvm-openstack/<deployment-id>-update-<source-commit-prefix>`.
-Only `driver.directory` may change in the infrastructure YAML; the prepared
+Only `installation_kit.directory` may change in the infrastructure YAML; the prepared
 region, guest/debug/base-image policies, workspace, SSH trust, identities and
 host state are rechecked. Existing SDK versions and installed driver module
 bytes must still match. `--use-test-images` remains explicit.

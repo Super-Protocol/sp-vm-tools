@@ -292,7 +292,7 @@ def snapshot(directory, *, workspace, config, base, driver, environment, identit
     before = kolla.check(workspace)
     raw = copy.deepcopy(yaml.safe_load(Path(config).read_bytes()))
     for host in raw['hosts'].values(): host.pop('ssh_transport', None); host.pop('identity_file', None)
-    raw['driver'] = {'directory': DRIVER}
+    raw['installation_kit'] = {'directory': DRIVER}
     write(directory / 'deployment.yaml', raw)
     write(directory / 'network.json', network if network is not None else json.loads((Path(base) / 'network.json').read_bytes()))
     environment_record = json.loads((Path(environment) / 'environment.json').read_bytes())

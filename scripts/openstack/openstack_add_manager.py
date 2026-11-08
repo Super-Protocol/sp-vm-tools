@@ -193,7 +193,7 @@ else:
   # Its exact file hash was rechecked above; YAML is not a JSON-only record.
   old=b['config'];v=json.loads(policy.read_bytes());name=r['host'];new=r['config']
   # Translate only the manager driver path; preserve every native existing host.
-  new['driver']=old['driver']
+  new['installation_kit']=old['installation_kit']
   new['kolla']['installation_kit']=old['kolla']['installation_kit']
   if name in old['hosts'] or {k:x for k,x in new.items() if k!='hosts'}!={k:x for k,x in old.items() if k!='hosts'} or any(new['hosts'].get(n)!=h for n,h in old['hosts'].items()):raise ValueError('only an additive compute configuration is allowed')
   if set(new['hosts'])!=set(old['hosts'])|{name} or new['hosts'][name]['roles']!=['compute']:raise ValueError('exact compute addition required')

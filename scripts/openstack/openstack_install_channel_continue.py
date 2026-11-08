@@ -179,7 +179,7 @@ def prepare(i, tx):
     state=reviewed(i.args.continue_channel_from);i.channel_state=state
     if not i.args.use_testing_images:raise InstallerError('Explicit --use-test-images remains required.')
     raw=yaml.safe_load(private(state.base/'deployment.input.yaml').read_bytes());current=json.loads(json.dumps(i.raw))
-    raw['driver'].pop('directory');current['driver'].pop('directory')
+    raw['installation_kit'].pop('directory');current['installation_kit'].pop('directory')
     if raw!=current:raise InstallerError('Infrastructure configuration changed; no channel continuation allowed.')
     manifest=json.loads((i.path.parent.parent/'manifest.json').read_bytes())
     expected={Path(n).name:h for n,h in manifest['source_sha256'].items()

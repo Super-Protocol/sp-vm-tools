@@ -189,8 +189,8 @@ def prepare(i, tx):
     if not i.args.use_testing_images: raise InstallerError('Explicit --use-test-images acknowledgement remains required.')
     raw = yaml.safe_load(private(state.base/'deployment.input.yaml').read_bytes())
     current = json.loads(json.dumps(i.raw))
-    raw['driver'].pop('directory'); current['driver'].pop('directory')
-    if raw != current: raise InstallerError('Only the verified driver.directory may change for this continuation.')
+    raw['installation_kit'].pop('directory'); current['installation_kit'].pop('directory')
+    if raw != current: raise InstallerError('Only the verified installation_kit.directory may change for this continuation.')
     tools = Path(__file__).parent.resolve()
     for filename,wanted in state.parent['inputs'].items():
         path = Path(filename)

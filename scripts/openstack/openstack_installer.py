@@ -76,10 +76,20 @@ def backend(directory, *, verified_bundle=False):
     if len(found) != 1:
         raise ValueError('select a spvm-openstack checkout or bundle containing deployment/installer.py; the old monorepo layout is not supported')
     path = found[0]
+    if not verified_bundle:
+        if (root/'manifest.json').exists() or (root/'manifest.json').is_symlink():
+            return backend(root, verified_bundle=True)
+        source_manifest = root/'nova-spvm/manifest.json'
+        if (source_manifest.is_symlink() or not source_manifest.is_file()
+                or source_manifest.stat().st_size > 4 * 1024 * 1024
+                or 'installation-kit-selection-v1' not in json.loads(source_manifest.read_bytes()).get('capabilities', [])):
+            raise ValueError('Select a new installation-kit-selection-v1 checkout; old source contracts are not converted.')
     if verified_bundle:
         base = path.parent.parent
         manifest = json.loads((base/'manifest.json').read_text())
         hashes = manifest.get('source_sha256')
+        if 'installation-kit-selection-v1' not in manifest.get('capabilities',[]):
+            raise ValueError('Select a new installation-kit-selection-v1 kit. The old driver YAML field/options and old kits are not converted or migrated.')
         if 'prebuilt-openstack-images-v1' not in manifest.get('capabilities',[]):
             raise ValueError('Driver kit lacks prebuilt-openstack-images-v1. Select a new CI kit; no local image build or old workspace migration is supported.')
         if 'manual-host-resource-lifecycle-v1' not in manifest.get('capabilities',[]):
@@ -111,18 +121,18 @@ def backend(directory, *, verified_bundle=False):
 
 
 def select(args):
-    if args.driver_dir:
+    if args.installation_kit_dir:
         if args.sha256 or args.staging_dir:
             raise ValueError('--sha256/--staging-dir apply to archive or release sources only')
-        return backend(args.driver_dir)
+        return backend(args.installation_kit_dir)
     if not re.fullmatch('[a-f0-9]{64}', str(args.sha256)) or not args.staging_dir:
         raise ValueError('archive/release requires --sha256 and a new --staging-dir')
     directory = Path(args.staging_dir).absolute()
     # Refuse existing artifacts, including failed/partial extractions. Never delete evidence.
     directory.mkdir(mode=0o700, parents=False, exist_ok=False)
-    archive = Path(args.driver_archive).resolve(strict=True) if args.driver_archive else directory/'driver.tar.gz'
-    if args.driver_release:
-        with urlopen(release_url(args.driver_release), timeout=30) as response, archive.open('xb') as output:
+    archive = Path(args.installation_kit_archive).resolve(strict=True) if args.installation_kit_archive else directory/'driver.tar.gz'
+    if args.installation_kit_release:
+        with urlopen(release_url(args.installation_kit_release), timeout=30) as response, archive.open('xb') as output:
             os.chmod(archive, 0o600)
             if not response.url.startswith('https://'):
                 raise ValueError('insecure download redirect')
@@ -153,8 +163,8 @@ def select(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__, epilog=(
-        'Pass backend arguments after --. Example: --driver-dir /srv/spvm-openstack -- '
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False, epilog=(
+        'Pass backend arguments after --. Example: --installation-kit-dir /srv/spvm-openstack -- '
         'preflight --config deployment.yaml --output /srv/check-01. '
         'Owned preparation commands: plan-container-engine, prepare-container-engine. '
         'New-cloud inputs: init-kolla, check-kolla-workspace, list-kolla-tasks. '
@@ -187,9 +197,9 @@ def main(argv=None):
         'Matched Nova and Skyline images are retrieved on target hosts by immutable CI-kit digest. '
         'General fresh deploy remains gated; this wrapper does not bypass it.'))
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument('--driver-dir', help='Trusted spvm-openstack checkout or expanded bundle')
-    source.add_argument('--driver-archive', help='Driver bundle archive')
-    source.add_argument('--driver-release', help='Public GitHub owner/repository@tag')
+    source.add_argument('--installation-kit-dir', help='Trusted spvm-openstack checkout or verified expanded installation kit')
+    source.add_argument('--installation-kit-archive', help='Installation kit archive')
+    source.add_argument('--installation-kit-release', help='Public GitHub owner/repository@tag')
     parser.add_argument('--sha256', help='Operator-trusted archive SHA256; mandatory for archive/release')
     parser.add_argument('--staging-dir', help='New private directory; parent must already exist')
     parser.add_argument('--identity-file',help='Optional local SSH private key; otherwise use invoking-user standard keys/agent')
@@ -203,8 +213,9 @@ def main(argv=None):
         parser.error('backend command required after --; use -- --help to list commands')
     try:
         path = select(args)
-    except (OSError, ValueError, tarfile.TarError):
-        print('ERROR: driver source selection failed; check source, checksum, manifest and staging path. '
+    except (OSError, ValueError, tarfile.TarError) as error:
+        reason = str(error) if isinstance(error, ValueError) and str(error).startswith('Select a new installation-kit-selection-v1') else 'check source, checksum, manifest and staging path'
+        print('ERROR: installation kit selection failed: '+reason+'. '
               'Partial staging is preserved; no backend was started.', file=sys.stderr)
         return 2
     try:

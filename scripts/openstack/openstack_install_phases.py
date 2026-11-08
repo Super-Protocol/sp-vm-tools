@@ -50,6 +50,8 @@ class Installation:
         self.raw = yaml.safe_load(source.read_bytes())
         if not isinstance(self.raw, dict):
             raise InstallerError('Infrastructure deployment YAML must be a mapping.')
+        if 'driver' in self.raw:
+            raise InstallerError('The deployment field driver is not supported. Use installation_kit.directory for the verified extracted installation kit; no automatic conversion is performed.')
         hosts=self.raw.get('hosts',{})
         if isinstance(hosts,dict):
             for name,host in hosts.items():
@@ -72,12 +74,12 @@ class Installation:
         if not isinstance(self.region, str) or not re.fullmatch('[A-Za-z0-9_-]{1,64}', self.region):
             raise InstallerError('Invalid region name.')
         try:
-            driver = self.raw['driver']['directory']
+            kit_directory = self.raw['installation_kit']['directory']
         except (KeyError, TypeError):
-            raise InstallerError('Set driver.directory to the verified, extracted driver bundle.') from None
-        try:self.path = backend(Path(driver), verified_bundle=True)
+            raise InstallerError('Set installation_kit.directory to the verified, extracted installation kit.') from None
+        try:self.path = backend(Path(kit_directory), verified_bundle=True)
         except (OSError,ValueError):
-            raise InstallerError('Selected driver bundle validation failed. Check driver.directory, its manifest and source checksums; '
+            raise InstallerError('Selected installation kit validation failed. Check installation_kit.directory, its manifest and source checksums; '
                 'A matching manual-host-resource-lifecycle-v1 / controller-cloud-management-v1 kit is required; old kits are not migrated. '
                 'Do not edit the verified archive or reuse partial staging.') from None
         sys.path[:0] = [str(self.path.parent), str(self.path.parent.parent / 'nova-spvm')]

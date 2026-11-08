@@ -10,7 +10,7 @@ if [[ $# == 0 || "${1:-}" == --help || "${1:-}" == -h ]]; then
         '  remove-compute Retire an empty compute-only host' '' \
         'Use COMMAND --help for its options.' \
         'Resources and Enable/Disable are managed afterward through GUI or openstack spvm host.' \
-        'Diagnostic backend commands: --driver-dir PATH -- COMMAND [options].'
+        'Diagnostic backend commands: --installation-kit-dir PATH -- COMMAND [options].'
     exit 0
 fi
 if [[ "${1:-}" == install ]]; then

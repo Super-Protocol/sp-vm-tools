@@ -9,6 +9,35 @@ The separate commands below remain diagnostic/advanced phase interfaces, not a
 required sequence of manual approvals for the integrated scenario. Its current
 profile and synthetic-versus-live acceptance limits are explicit in that guide.
 
+### Installation kit selection
+
+The deployment YAML selects a complete verified kit, not a standalone Python
+driver or a mutable container tag:
+
+```yaml
+installation_kit:
+  directory: /srv/spvm/installation-kit
+```
+
+The directory is on the management machine and contains the extracted
+`manifest.json`, `installation-kit.json`, source/wheel checksums and matching
+deployment backend. Images are retrieved by the immutable digest references in
+that kit, not guessed from a version string. Fresh `install` uses this verified
+directory; advanced staging supports `installation_kit.archive` or
+`installation_kit.release` with `installation_kit.sha256`.
+
+Diagnostic source-selection flags are `--installation-kit-dir`,
+`--installation-kit-archive` and `--installation-kit-release`. The old `driver`
+YAML field and `--driver-*` selectors are not accepted or converted. Require a
+matching `installation-kit-selection-v1` kit and matching installer sources;
+old bundles and old transaction/workspace YAML are not migrated.
+
+The Nova driver's only editable version is `project.version` in the selected
+source repository's `nova-spvm/pyproject.toml`. Source `nova-spvm/manifest.json`
+contains capabilities without a version. CI resolves the version automatically
+into generated manifests, the wheel and image metadata. Do not modify generated
+version fields or checksums to adapt a published kit.
+
 The three management commands show compact English steps and an observation-based
 WAIT line after 60 seconds without other progress. Human progress uses stderr;
 private logs and machine-result formats remain separate. See
@@ -22,7 +51,7 @@ optional `--identity-file` and `--known-hosts` before the `--` separator:
 
 ```bash
 sudo /srv/environment/installer-venv/bin/python scripts/openstack/openstack_installer.py \
-  --driver-dir /srv/verified-driver-bundle \
+  --installation-kit-dir /srv/verified-driver-bundle \
   --identity-file /home/operator/.ssh/openstack_key \
   --known-hosts /home/operator/.ssh/known_hosts \
   -- plan-storage --config /srv/operator/deployment.yaml --output /srv/storage-plan-01
@@ -173,7 +202,7 @@ Candidate pins (tested on the existing two-host lab; **not** clean-OS acceptance
 The rolling branch release name is a discovery channel, not an immutable pin.
 For a private GitHub repository, obtain its asset using an already authenticated
 `gh` or another approved delivery method and verify the archive checksum before
-using `--driver-archive`. The frontend's `--driver-release` downloader targets
+using `--installation-kit-archive`. The frontend's `--installation-kit-release` downloader targets
 public GitHub releases; do not assume it inherits `gh` authentication. Never put
 tokens into command arguments, git or the bundle.
 
@@ -185,9 +214,9 @@ For current kits the exact tools revision is recorded in `installation-kit.json`
 from `spvm-openstack`; the revisions above are historical evidence only.
 Private lab journals are local evidence, not repository user documentation.
 
-Source staging is exclusive. If planning with `--driver-archive` or
-`--driver-release`, the first invocation creates a new private staging directory.
-For apply/repeat, select the already verified extracted bundle via `--driver-dir`;
+Source staging is exclusive. If planning with `--installation-kit-archive` or
+`--installation-kit-release`, the first invocation creates a new private staging directory.
+For apply/repeat, select the already verified extracted bundle via `--installation-kit-dir`;
 do **not** reuse that staging directory for a second extraction. Preserve its
 source receipt and checksum. The examples in §10.27–10.28 deliberately use an
 existing verified bundle directory for both plan and apply.
@@ -220,7 +249,7 @@ verification. Do not use historical standalone/offline builder commands as a
 substitute for a coordinated kit. See [prebuilt images](OPENSTACK_PREBUILT_IMAGES.md).
 The installer remains in sp-vm-tools and rejects dirty release bundles and old
 source layouts. A trusted development checkout is explicitly selected with
-`--driver-dir /srv/spvm-openstack`; that is not CI or live acceptance.
+`--installation-kit-dir /srv/spvm-openstack`; that is not CI or live acceptance.
 
 Historical evidence below refers to an earlier development candidate, not an
 accepted current tag/input format. The earlier private candidate was
@@ -449,7 +478,7 @@ Create a plan for exactly one configured compute host:
 
 ```bash
 bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
-  --driver-dir /srv/spvm-openstack -- plan-container-engine \
+  --installation-kit-dir /srv/spvm-openstack -- plan-container-engine \
   --config /srv/deployment/deployment.yaml --host compute-02 \
   --workspace /srv/deployment/new-cloud \
   --output /srv/deployment/docker-compute-02
@@ -789,7 +818,7 @@ For development use an explicitly trusted spvm-openstack checkout:
 
 ```bash
 bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
-  --driver-dir /srv/spvm-openstack -- --help
+  --installation-kit-dir /srv/spvm-openstack -- --help
 ```
 
 No implicit sibling checkout, clone, pull or branch change occurs. Directory
@@ -800,13 +829,13 @@ For an archive, obtain its SHA256 through a trusted release channel first:
 
 ```bash
 bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
-  --driver-archive /srv/releases/nova-spvm-VERSION.tar.gz \
+  --installation-kit-archive /srv/releases/nova-spvm-VERSION.tar.gz \
   --sha256 REPLACE_WITH_64_LOWERCASE_HEX_DIGITS \
   --staging-dir /srv/staging/driver-01 -- --help
 ```
 
-For a public GitHub release replace `--driver-archive` with
-`--driver-release OWNER/REPOSITORY@EXACT_TAG`. The release must contain exactly
+For a public GitHub release replace `--installation-kit-archive` with
+`--installation-kit-release OWNER/REPOSITORY@EXACT_TAG`. The release must contain exactly
 one `nova-spvm-*.tar.gz` asset. The same SHA256 and new staging directory are
 required. Private-release authentication is not implemented in this wrapper;
 download privately through your approved tooling, then use archive mode.
@@ -816,7 +845,7 @@ links, special files, bytecode and oversized bundles, and verifies clean-commit
 source manifest checksums before starting the backend. SHA256 proves identity
 against the expected digest, **not publisher authenticity by itself**. Failed
 staging is preserved for inspection and never reused or automatically deleted.
-After successful staging, use `--driver-dir` with the extracted bundle root for
+After successful staging, use `--installation-kit-dir` with the extracted bundle root for
 subsequent commands; do not re-extract into the same directory.
 
 Older driver releases lack this preflight and required Kolla assets. Use an
@@ -833,7 +862,7 @@ Use an unused output directory for each generation:
 
 ```bash
 bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
-  --driver-dir /srv/spvm-openstack -- preflight \
+  --installation-kit-dir /srv/spvm-openstack -- preflight \
   --config /srv/deployment/deployment.yaml --output /srv/deployment/check-01
 ```
 
@@ -854,7 +883,7 @@ Render using a checkout containing the pinned Kolla commit:
 
 ```bash
 bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
-  --driver-dir /srv/spvm-openstack -- render \
+  --installation-kit-dir /srv/spvm-openstack -- render \
   --config /srv/deployment/deployment.yaml \
   --audit /srv/deployment/check-01/audit.json \
   --preflight /srv/deployment/check-01/basic-preflight.json \
@@ -885,7 +914,7 @@ an actual deployment.
 
 ```bash
 bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
-  --driver-dir /srv/spvm-openstack -- init-kolla \
+  --installation-kit-dir /srv/spvm-openstack -- init-kolla \
   --config /srv/deployment/deployment.yaml \
   --rendered /srv/deployment/rendered-01 \
   --kolla-source /srv/kolla-ansible \
@@ -989,7 +1018,7 @@ Verify the materialized inputs without printing credentials:
 
 ```bash
 bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
-  --driver-dir /srv/spvm-openstack -- check-kolla-workspace \
+  --installation-kit-dir /srv/spvm-openstack -- check-kolla-workspace \
   --output /srv/deployment/new-cloud
 ```
 
@@ -1002,7 +1031,7 @@ are operator-private review artifacts, not an independent trust authority.
 
 ```bash
 bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
-  --driver-dir /srv/spvm-openstack -- list-kolla-tasks \
+  --installation-kit-dir /srv/spvm-openstack -- list-kolla-tasks \
   --output /srv/deployment/new-cloud
 ```
 
@@ -1105,7 +1134,7 @@ Plan on the **target compute** using a trusted selected backend:
 
 ```bash
 sudo bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
-  --driver-dir /srv/reviewed-driver-bundle -- plan-host-helper \
+  --installation-kit-dir /srv/reviewed-driver-bundle -- plan-host-helper \
   --request /root/helper-request.json --output /var/lib/spvm-helper-install-01
 ```
 
@@ -1120,7 +1149,7 @@ Apply with the same arguments, changing the action and providing the approved ha
 
 ```bash
 sudo bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \
-  --driver-dir /srv/reviewed-driver-bundle -- prepare-host-helper \
+  --installation-kit-dir /srv/reviewed-driver-bundle -- prepare-host-helper \
   --request /root/helper-request.json --output /var/lib/spvm-helper-install-01 \
   --plan-sha256 REPLACE_WITH_APPROVED_PLAN_SHA256
 ```
@@ -1180,12 +1209,12 @@ there is no implicit clone, pull or tools-source download.
 Create a new private staging directory (its parent must already exist):
 
 ```bash
-./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/reviewed-driver-bundle -- \
   stage-launcher --tools-source /srv/sp-vm-tools \
   --tools-revision 22f4113f44e1718c901b419f933b0d779510fbd2 \
   --output /srv/launcher-stage-01
 
-./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/reviewed-driver-bundle -- \
   check-launcher --output /srv/launcher-stage-01 \
   --receipt-sha256 '<receipt_sha256 returned by stage-launcher>'
 ```
@@ -1204,13 +1233,13 @@ It must not exist, including an empty directory. Place the reviewed staging and
 driver sources on that compute, then pass both flags to **both** helper phases:
 
 ```bash
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --installation-kit-dir /srv/reviewed-driver-bundle -- \
   plan-host-helper --request /root/helper-request.json \
   --launcher-stage /srv/launcher-stage-01 \
   --launcher-sha256 '<approved launcher receipt_sha256>' \
   --output /var/lib/spvm-helper-install-01
 
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --installation-kit-dir /srv/reviewed-driver-bundle -- \
   prepare-host-helper --request /root/helper-request.json \
   --launcher-stage /srv/launcher-stage-01 \
   --launcher-sha256 '<same approved launcher receipt_sha256>' \
@@ -1271,13 +1300,13 @@ scoped preparation step: Docker, helper, approved image and network interfaces
 must already exist. It is not a first-boot provisioning command.
 
 ```bash
-./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/reviewed-driver-bundle -- \
   plan-base-packages --config /srv/deployment.yaml \
   --workspace /srv/bound-kolla-workspace \
   --known-hosts /root/.ssh/openstack_known_hosts \
   --allow-experimental-ubuntu26 --output /srv/base-packages-01
 
-./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/reviewed-driver-bundle -- \
   prepare-base-packages --config /srv/deployment.yaml \
   --workspace /srv/bound-kolla-workspace \
   --known-hosts /root/.ssh/openstack_known_hosts \
@@ -1344,13 +1373,13 @@ or silently rely on Ansible interpreter discovery.
 `python3-docker`, `python3-dbus`, and `python3-requests`.
 
 ```bash
-./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/reviewed-driver-bundle -- \
   plan-host-sdk --config /srv/deployment.yaml \
   --workspace /srv/bound-kolla-workspace \
   --known-hosts /root/.ssh/openstack_known_hosts \
   --allow-experimental-ubuntu26 --output /srv/host-sdk-01
 
-./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/reviewed-driver-bundle -- \
   prepare-host-sdk --config /srv/deployment.yaml \
   --workspace /srv/bound-kolla-workspace \
   --known-hosts /root/.ssh/openstack_known_hosts \
@@ -1401,13 +1430,13 @@ This step registers the already-generated API CA from the bound workspace;
 it does not generate/rotate a CA, transfer a private key or enroll a Swarm node.
 
 ```bash
-./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/reviewed-driver-bundle -- \
   plan-api-trust --config /srv/deployment.yaml \
   --workspace /srv/bound-kolla-workspace \
   --known-hosts /root/.ssh/openstack_known_hosts \
   --allow-experimental-ubuntu26 --output /srv/api-trust-01
 
-./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/reviewed-driver-bundle -- \
   prepare-api-trust --config /srv/deployment.yaml \
   --workspace /srv/bound-kolla-workspace \
   --known-hosts /root/.ssh/openstack_known_hosts \
@@ -1482,7 +1511,7 @@ that recommendation, reuse an old approval or automatically advance through
 mutating steps.
 
 ```bash
-./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/reviewed-driver-bundle -- \
   initial-host-status --config /srv/deployment.yaml \
   --workspace /srv/bound-kolla-workspace \
   --known-hosts /root/.ssh/openstack_known_hosts \
@@ -1586,12 +1615,12 @@ review rather than guessing which address Kolla/OVN will select. The initial
 profile supports at most 256 participating hosts and IPv4 peers only.
 
 ```bash
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --installation-kit-dir /srv/reviewed-driver-bundle -- \
   plan-geneve-guard --config /srv/deployment.yaml \
   --network-request /srv/network-request.json --host super7 \
   --allow-experimental-ubuntu26 --output /var/tmp/geneve-super7-01
 
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --installation-kit-dir /srv/reviewed-driver-bundle -- \
   prepare-geneve-guard --config /srv/deployment.yaml \
   --network-request /srv/network-request.json --host super7 \
   --allow-experimental-ubuntu26 --output /var/tmp/geneve-super7-01 \
@@ -1721,12 +1750,12 @@ Management, guest and transit networks must not overlap. Guest CIDRs are restric
 to private /16../30. Neither public NIC addressing nor a default route is changed.
 
 ```bash
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --installation-kit-dir /srv/reviewed-driver-bundle -- \
   plan-management --config /srv/deployment.yaml \
   --network-request /srv/host-network.json --host super7 \
   --allow-experimental-ubuntu26 --output /var/tmp/management-super7-01
 
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --installation-kit-dir /srv/reviewed-driver-bundle -- \
   prepare-management --config /srv/deployment.yaml \
   --network-request /srv/host-network.json --host super7 \
   --allow-experimental-ubuntu26 --output /var/tmp/management-super7-01 \
@@ -1773,12 +1802,12 @@ matching management phase is installed/enabled/active. They use the same host
 network request, not hard-coded lab addresses or a physical bridge attachment.
 
 ```bash
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --installation-kit-dir /srv/reviewed-driver-bundle -- \
   plan-nat --config /srv/deployment.yaml \
   --network-request /srv/host-network.json --host super7 \
   --allow-experimental-ubuntu26 --output /var/tmp/nat-super7-01
 
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
+sudo ./scripts/spvm-openstack.sh --installation-kit-dir /srv/reviewed-driver-bundle -- \
   prepare-nat --config /srv/deployment.yaml \
   --network-request /srv/host-network.json --host super7 \
   --allow-experimental-ubuntu26 --output /var/tmp/nat-super7-01 \
@@ -1938,7 +1967,7 @@ past the testing-image guard. A failed precheck transaction remains evidence;
 after review, use a new output directory, not a blind retry of its journal.
 
 ```bash
-./scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   plan-kolla-install --config /srv/operator/deployment.yaml \
   --workspace /srv/operator/compute-bound --known-hosts /srv/operator/known_hosts \
   --output /srv/operator/install-01 --allow-experimental-ubuntu26
@@ -1947,7 +1976,7 @@ after review, use a new output directory, not a blind retry of its journal.
 Inspect the private `install-plan.json` and approve its exact `plan_sha256`:
 
 ```bash
-./scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   run-kolla-install --config /srv/operator/deployment.yaml \
   --workspace /srv/operator/compute-bound --known-hosts /srv/operator/known_hosts \
   --output /srv/operator/install-01 --allow-experimental-ubuntu26 \
@@ -2005,7 +2034,7 @@ keys. The request does not accept secret fields. Several Swarm clusters may use
 the same enrolled project/network; never generate one Neutron network per Swarm.
 
 ```bash
-./scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   stage-spvm-enrollment --workspace /srv/operator/compute-bound \
   --request /srv/operator/enrollment.json \
   --profiles /srv/operator/resource-profiles.json \
@@ -2055,13 +2084,13 @@ assignments and manage private Nova flavors/Glance images. Missing permissions
 fail closed; there is no fallback to another administrator's credentials.
 
 ```bash
-./scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   plan-spvm-resources --enrollment-plan /srv/operator/enrollment-01/enrollment-plan.json \
   --project-id REPLACE_WITH_PROJECT_ID --cloud spvm-operator \
   --ca-file /srv/operator/api-ca.crt --output /srv/operator/resources-01
 
 # Inspect resources-plan.json and approve its exact plan_sha256 (900s validity).
-./scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   apply-spvm-resources --enrollment-plan /srv/operator/enrollment-01/enrollment-plan.json \
   --project-id REPLACE_WITH_PROJECT_ID --cloud spvm-operator \
   --ca-file /srv/operator/api-ca.crt --output /srv/operator/resources-01 \
@@ -2094,7 +2123,7 @@ Create a new plan after a successful run; its actions should all be `REUSE`.
 Explicitly test Barbican with a disposable **non-secret** marker:
 
 ```bash
-./scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   check-spvm-barbican --enrollment-plan /srv/operator/enrollment-01/enrollment-plan.json \
   --project-id REPLACE_WITH_PROJECT_ID --cloud spvm-operator \
   --ca-file /srv/operator/api-ca.crt --output /srv/operator/barbican-01
@@ -2117,7 +2146,7 @@ code over trusted SSH in memory; credentials/tokens stay on the controller:
 ```bash
 python3 tests/accept_openstack_resources.py \
   --ssh-target operator@CONTROLLER --identity /secure/operator_key \
-  --known-hosts /secure/known_hosts --driver-dir /srv/spvm-openstack \
+  --known-hosts /secure/known_hosts --installation-kit-dir /srv/spvm-openstack \
   --profiles /srv/operator/resource-profiles.json --apply-existing --barbican-probe
 ```
 
@@ -2154,13 +2183,13 @@ Neutron `is_shared=true` granting every project access. Per-cluster security
 groups remain managed by cluster preparation, not widened by these commands.
 
 ```bash
-./scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   plan-spvm-network --request /srv/operator/neutron-network.json \
   --cloud spvm-operator --ca-file /srv/operator/api-ca.crt \
   --output /srv/operator/network-01
 
 # Review network-plan.json and approve its exact plan_sha256 within 900 seconds.
-./scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   apply-spvm-network --request /srv/operator/neutron-network.json \
   --cloud spvm-operator --ca-file /srv/operator/api-ca.crt \
   --output /srv/operator/network-01 --plan-sha256 REPLACE_WITH_APPROVED_SHA256
@@ -2212,7 +2241,7 @@ The opt-in read-only acceptance helper can exercise the existing topology:
 ```bash
 python3 tests/accept_openstack_network.py \
   --ssh-target operator@CONTROLLER --identity /secure/operator_key \
-  --known-hosts /secure/known_hosts --driver-dir /srv/spvm-openstack \
+  --known-hosts /secure/known_hosts --installation-kit-dir /srv/spvm-openstack \
   --request /srv/operator/neutron-network.json --apply-existing
 ```
 
@@ -2247,7 +2276,7 @@ Generate host requests from the matching immutable compute-bound workspace and
 staged project enrollment:
 
 ```bash
-./scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   stage-runtime-enrollment --workspace /srv/operator/compute-bound \
   --enrollment-plan /srv/operator/enrollment-01/enrollment-plan.json \
   --output /srv/operator/runtime-requests-01
@@ -2272,7 +2301,7 @@ sudo install -d -m 0700 /var/lib/spvm-enrollment
 An optional image-schema check can run even while the compute has guests:
 
 ```bash
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+sudo ./scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   check-runtime-enrollment --request /root/operator/compute.json \
   --output /var/lib/spvm-enrollment/image-check-01
 ```
@@ -2299,12 +2328,12 @@ Swarm bootstrap guest as a way to satisfy this prerequisite.
 Then, on that stopped compute as root:
 
 ```bash
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+sudo ./scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   plan-runtime-enrollment --request /root/operator/compute.json \
   --output /var/lib/spvm-enrollment/install-01
 
 # Inspect runtime-plan.json, approve exact plan_sha256 within 900 seconds.
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+sudo ./scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   install-runtime-enrollment --request /root/operator/compute.json \
   --output /var/lib/spvm-enrollment/install-01 \
   --plan-sha256 REPLACE_WITH_APPROVED_SHA256 --ack-compute-quarantined
@@ -2387,7 +2416,7 @@ its newline. Publisher fields contain paths/identity only, never credentials.
 The guest CIDR must be canonical RFC1918 /16../30.
 
 ```bash
-./scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+./scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   stage-ingress --request /srv/operator/ingress.json \
   --base-config /srv/operator/reviewed-empty-haproxy.cfg \
   --output /srv/operator/ingress-package-01
@@ -2411,7 +2440,7 @@ An optional check validates a private candidate with `haproxy -c`, without
 reloading, binding listeners or writing the live configuration:
 
 ```bash
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+sudo ./scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   check-ingress --package /root/operator/ingress-package-01 \
   --package-sha256 REPLACE_WITH_APPROVED_PACKAGE_SHA256 \
   --output /var/lib/spvm-ingress-install/check-01
@@ -2422,13 +2451,13 @@ replacement. Initial install refuses active/enabled host HAProxy before reading
 private publication state. For an actually fresh inactive host:
 
 ```bash
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+sudo ./scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   plan-ingress --package /root/operator/ingress-package-01 \
   --package-sha256 REPLACE_WITH_APPROVED_PACKAGE_SHA256 \
   --output /var/lib/spvm-ingress-install/install-01
 
 # Review ingress-plan.json and approve its exact SHA within 900 seconds.
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+sudo ./scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   install-ingress --package /root/operator/ingress-package-01 \
   --package-sha256 REPLACE_WITH_APPROVED_PACKAGE_SHA256 \
   --output /var/lib/spvm-ingress-install/install-01 \
@@ -2475,7 +2504,7 @@ Initial file installation remains fixture-tested, not empty-host accepted.
 ```bash
 python3 tests/accept_ingress_namespace.py \
   --ssh-target operator@CONTROLLER --identity /secure/operator_key \
-  --known-hosts /secure/known_hosts --driver-dir /srv/spvm-openstack
+  --known-hosts /secure/known_hosts --installation-kit-dir /srv/spvm-openstack
 ```
 
 The opt-in helper requires the existing lab-style root ingress files for its
@@ -2491,12 +2520,12 @@ Installation and activation are separate approvals. After §10.22 returns
 SHA. On the ingress host, as root, run:
 
 ```bash
-sudo scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+sudo scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   plan-ingress-activation \
   --package /srv/spvm-ingress-package --package-sha256 <PACKAGE_SHA> \
   --output /var/lib/spvm-ingress-activation/initial
 
-sudo scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+sudo scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   activate-ingress \
   --package /srv/spvm-ingress-package --package-sha256 <PACKAGE_SHA> \
   --output /var/lib/spvm-ingress-activation/initial --plan-sha256 <PLAN_SHA>
@@ -2558,11 +2587,11 @@ authorization, not proof that the gateway is already ready.
 On the ingress host:
 
 ```bash
-sudo scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+sudo scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   plan-spvm-publication --request /etc/spvm/ingress-request-my-cluster.json \
   --timeout 1800 --output /var/lib/spvm-publication/my-cluster-01
 
-sudo scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+sudo scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   publish-spvm-ui --request /etc/spvm/ingress-request-my-cluster.json \
   --timeout 1800 --output /var/lib/spvm-publication/my-cluster-01 \
   --plan-sha256 <PLAN_SHA>
@@ -2641,7 +2670,7 @@ After a lost acknowledgement, use the explicit read-only mode, not `--apply`:
 python3 tests/accept_openstack_publication.py \
   --ssh-target deploy@ingress.example.net \
   --identity /private/deploy_ed25519 --known-hosts /private/known_hosts \
-  --driver-dir /srv/spvm-openstack --request /etc/spvm/ingress-request-my-cluster.json \
+  --installation-kit-dir /srv/spvm-openstack --request /etc/spvm/ingress-request-my-cluster.json \
   --timeout 60 \
   --check-report /var/lib/spvm-publication/accept-<32 lowercase hex digits>
 ```
@@ -2691,14 +2720,14 @@ Run from the trusted operator machine with the required Python dependencies and
 strict SSH known-hosts already configured. Example fresh enrollment:
 
 ```bash
-scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   plan-compute-activation --config /srv/deployment.yaml --host worker1 \
   --controller control1 --controller-python /opt/openstack-client/bin/python \
   --openrc /etc/kolla/admin-openrc.sh \
   --enrollment-request /srv/runtime-enrollment/worker1.json \
   --output /srv/private/worker1-initial-01
 
-scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   activate-compute --config /srv/deployment.yaml --host worker1 \
   --controller control1 --controller-python /opt/openstack-client/bin/python \
   --openrc /etc/kolla/admin-openrc.sh \
@@ -2919,11 +2948,11 @@ separately selects the existing Ansible/Kolla environment. Credentials are not
 request fields and are removed from the environment passed to Ansible.
 
 ```bash
-scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   plan-kolla-compute-container --request /srv/private/compute01-scope.json \
   --output /srv/private/compute01-scope-01
 
-scripts/spvm-openstack.sh --driver-dir /srv/spvm-openstack -- \
+scripts/spvm-openstack.sh --installation-kit-dir /srv/spvm-openstack -- \
   reconcile-kolla-compute-container --request /srv/private/compute01-scope.json \
   --output /srv/private/compute01-scope-01 --plan-sha256 <PLAN_SHA>
 ```
@@ -3011,7 +3040,7 @@ deny-all bootstrap on an occupied cloud to make a verification pass.
 Run from the trusted deployment controller as the private workspace owner:
 
 ```bash
-scripts/spvm-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
+scripts/spvm-openstack.sh --installation-kit-dir /srv/verified-driver-bundle -- \
   verify-kolla-existing \
   --config /srv/private/deployment.yaml \
   --workspace /srv/private/bound-workspace \
@@ -3115,12 +3144,12 @@ symlinks are supported. Local inputs/workspace must be absolute canonical paths.
 Requests reference protected files, never contain secret payloads or shell code.
 
 ```bash
-scripts/spvm-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
+scripts/spvm-openstack.sh --installation-kit-dir /srv/verified-driver-bundle -- \
   plan-openstack --request /srv/private/workflow.json \
   --output /srv/private/workflow-01
 
 # Review workflow-plan.json and the private child plans; copy the printed SHA.
-scripts/spvm-openstack.sh --driver-dir /srv/verified-driver-bundle -- \
+scripts/spvm-openstack.sh --installation-kit-dir /srv/verified-driver-bundle -- \
   apply-openstack --request /srv/private/workflow.json \
   --output /srv/private/workflow-01 --plan-sha256 <REVIEWED_SHA256>
 ```

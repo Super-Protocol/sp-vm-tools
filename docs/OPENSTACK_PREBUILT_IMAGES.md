@@ -5,8 +5,12 @@ containers, extract upstream JavaScript, apply frontend patches, or export/load
 Docker archives. **Docker is not required on the management machine.** The
 management prerequisites remain the prepared installer/Kolla Python environment,
 Git, OpenSSH, OpenSSL and outbound HTTPS access to GitHub/GHCR and dependencies.
-The usual `driver.directory` / archive / release selection is unchanged; there
-are no additional mandatory installation flags.
+Select the complete kit through `installation_kit.directory` in deployment YAML.
+Advanced staging also accepts `installation_kit.archive` or `.release` with
+`.sha256`; diagnostic flags use `--installation-kit-dir/archive/release`.
+The old `driver` selector is rejected, not migrated. This naming contract requires
+`installation-kit-selection-v1`; it does not change the pinned-image integrity
+checks or introduce additional installation steps.
 
 ## Trust and identity
 

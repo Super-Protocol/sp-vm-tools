@@ -62,7 +62,7 @@ def stage(backend,args):
     trusted(root.parent);root.mkdir(mode=0o700)
     runner=root/'worker.sh'
     command=[str(interpreter),str(Path(__file__).with_name('openstack_installer.py')),
-        '--driver-dir',str(Path(backend).parent),'--','process-host-budgets','--policy',str(Path(args.policy)),
+        '--installation-kit-dir',str(Path(backend).parent),'--','process-host-budgets','--policy',str(Path(args.policy)),
         '--expected-worker-user-id',args.worker_user_id]
     runner.write_text('#!/bin/bash\nset -euo pipefail\numask 077\nset -a\n. '+shlex.quote(cfg['openrc'])+
         '\nset +a\nexec '+shlex.join(command)+'\n');runner.chmod(0o700)

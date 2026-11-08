@@ -264,7 +264,7 @@ host libvirt/QEMU, QGS/PCCS, VFIO configuration and primary management connectiv
 The release channel and package version alone do not identify immutable bytes.
 Retain the downloaded archive checksum, source commit, wheel/context/build
 receipts and actual container image IDs. Download private GitHub assets with an
-authenticated `gh` followed by `--driver-archive`; the public release downloader
+authenticated `gh` followed by `--installation-kit-archive`; the public release downloader
 does not automatically use `gh` authentication.
 
 The physical hosts were cleared of OpenStack-specific state, containers, volumes

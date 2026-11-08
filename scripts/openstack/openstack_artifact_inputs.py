@@ -5,6 +5,7 @@ import json
 from pathlib import Path, PurePosixPath
 import re
 import zipfile
+import importlib.util
 
 MAX_WHEEL=32*1024*1024
 BASE_RE=re.compile(r'ghcr\.io/super-protocol/[a-z0-9][a-z0-9._-]*@sha256:[a-f0-9]{64}')
@@ -18,6 +19,16 @@ def read(path,limit=4194304):
     return path.read_bytes()
 
 
+def driver_manifest(backend):
+    """Use the selected kit's canonical source/generated metadata reader."""
+    path = Path(backend).with_name('driver_metadata.py')
+    read(path)
+    definition = importlib.util.spec_from_file_location('selected_driver_metadata', path)
+    module = importlib.util.module_from_spec(definition)
+    definition.loader.exec_module(module)
+    return module.manifest(path.parent.parent)
+
+
 def wheel_bytes(backend,wheel,approved):
     body=read(wheel,MAX_WHEEL)
     if not re.fullmatch('[a-f0-9]{64}',str(approved)) or hashlib.sha256(body).hexdigest()!=approved:
@@ -25,7 +36,7 @@ def wheel_bytes(backend,wheel,approved):
     base=Path(backend).parent.parent
     manifest_path=base/'manifest.json'
     if not manifest_path.exists():manifest_path=base/'nova-spvm/manifest.json'
-    manifest=json.loads(read(manifest_path))
+    manifest=driver_manifest(backend)
     version=manifest.get('version','')
     if (manifest.get('schema_version')!=1 or manifest.get('name')!='nova-spvm'
             or not re.fullmatch(r'[0-9]+[.][0-9]+[.][0-9]+',version)):

@@ -152,7 +152,7 @@ def prepare(i):
     import yaml
     i.controller_root = '/opt/spvm-openstack/' + i.run_id
     raw = yaml.safe_load(Path(i.config).read_bytes())
-    raw['driver']['directory'] = i.controller_root + '/driver'
+    raw['installation_kit']['directory'] = i.controller_root + '/driver'
     for host in raw['hosts'].values():
         host.pop('identity_file', None)
     raw['kolla']['installation_kit'] = i.controller_root + '/driver/installation-kit.json'

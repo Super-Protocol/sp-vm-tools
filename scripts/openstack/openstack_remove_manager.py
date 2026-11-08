@@ -37,7 +37,7 @@ def private(path):
 
 
 def configuration_identity(cfg):
-    value=json.loads(json.dumps(cfg));value['driver'].pop('directory',None)
+    value=json.loads(json.dumps(cfg));value['installation_kit'].pop('directory',None)
     for h in value['hosts'].values():h.pop('ssh_transport',None);h.pop('identity_file',None)
     value['kolla'].pop('installation_kit',None)
     return value
