@@ -32,6 +32,8 @@ def selected(backend, *, online=False):
         import openstack_host_helper as helper
         helper.sources(backend)
         helper.source_manifest(backend, {}, bootstrap=True)
+        from openstack_budget_service import worker_command
+        worker_command(backend, '/usr/bin/python3', '/etc/spvm/host-budget-policy.json', '0' * 32)
         if online:
             for component, image in kit['images'].items():
                 with progress.step('verify-image-' + component):

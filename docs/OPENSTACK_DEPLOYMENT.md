@@ -32,6 +32,12 @@ YAML field and `--driver-*` selectors are not accepted or converted. Require a
 matching `installation-kit-selection-v1` kit and matching installer sources;
 old bundles and old transaction/workspace YAML are not migrated.
 
+The installed host-resource worker uses the same selector with the **kit root**,
+not its `deployment` subdirectory. Its generated argv is validated locally during
+kit preflight. CI also starts that exact entrypoint with `--help`, an empty HOME
+and no SSH/Docker commands or policy credentials before publishing the kit.
+This checks selection/import/argument parsing, not live request processing.
+
 The Nova driver's only editable version is `project.version` in the selected
 source repository's `nova-spvm/pyproject.toml`. Source `nova-spvm/manifest.json`
 contains capabilities without a version. CI resolves the version automatically

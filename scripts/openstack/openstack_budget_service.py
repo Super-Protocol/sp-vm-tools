@@ -18,6 +18,22 @@ UNITS=('spvm-host-budgets.service','spvm-host-budgets.timer')
 SYSTEMD_DIRECTORY=Path('/etc/systemd/system')
 
 
+def worker_command(backend, python, policy, worker_user_id):
+    """Render the real runtime entrypoint with the validated kit root.
+
+    The selector accepts the root containing deployment/installer.py, not the
+    deployment directory itself. Reuse its validation without commands or SSH.
+    """
+    from openstack_installer import backend as select_backend
+    selected = Path(backend).resolve(strict=True)
+    kit_root = selected.parent.parent
+    if select_backend(kit_root) != selected:
+        raise ValueError('host worker must select the exact validated installation kit root')
+    return [str(python), str(Path(__file__).with_name('openstack_installer.py')),
+        '--installation-kit-dir', str(kit_root), '--', 'process-host-budgets',
+        '--policy', str(policy), '--expected-worker-user-id', worker_user_id]
+
+
 def stage(backend,args):
     from openstack_kolla_existing import backend as load
     from openstack_host_budgets import policy
@@ -59,11 +75,9 @@ def stage(backend,args):
     # NodeService performs final validation on service restart.
     root=Path(args.output)
     if not root.is_absolute() or root.resolve()!=root:raise ValueError('canonical absolute activation output required')
+    command=worker_command(backend,interpreter,args.policy,args.worker_user_id)
     trusted(root.parent);root.mkdir(mode=0o700)
     runner=root/'worker.sh'
-    command=[str(interpreter),str(Path(__file__).with_name('openstack_installer.py')),
-        '--installation-kit-dir',str(Path(backend).parent),'--','process-host-budgets','--policy',str(Path(args.policy)),
-        '--expected-worker-user-id',args.worker_user_id]
     runner.write_text('#!/bin/bash\nset -euo pipefail\numask 077\nset -a\n. '+shlex.quote(cfg['openrc'])+
         '\nset +a\nexec '+shlex.join(command)+'\n');runner.chmod(0o700)
     service='''[Unit]
