@@ -44,7 +44,7 @@ not enabled. See the main deployment guide's local SSH settings section.
   the actual host address/prefix (`92.223.119.247/28`, `92.223.119.245/28` in this
   lab), set `route_interface: bond0.2907` and `transport_unit: null`. The request's
   machine identities must be audited again after any OS reinstall.
-- Use matching updated installer and swarm-cloud backend components. An older
+- Use matching updated installer and spvm-openstack backend components. An older
   published bundle does not understand `management_mode`; do not edit its
   verified manifest or assume that a frontend update changes an old backend.
 - Complete the updated TDX/SNP/non-CC host bootstrap before helper provisioning.

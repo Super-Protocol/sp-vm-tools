@@ -173,16 +173,22 @@ allocation policy, and catalog refresh did not autonomously apply that policy.
   reboots. No saved value may silently switch to `Automatic` merely because it
   matches a recommendation; recommendations never apply on discovery/refresh.
 - Implement orchestration and English instructions in sp-vm-tools; driver,
-  helper, GUI, CLI/API and their English documentation in swarm-cloud. Stage
+  helper, CLI/API and their English documentation in spvm-openstack; frontend
+  sources and documentation in skyline-console. Stage
   production code/documentation only; leave tests unstaged. Commits, push,
   builds and stand deployment are authorized for the current task but remain
   pending until the new contract passes live acceptance.
 
 ## Planned follow-up: immutable, CI-validated installation kit (2026-11-05)
 
-Status: **planned, not implemented**. Local Skyline adaptation and successful
-artifact assembly do not complete this work. The earlier checkpoints below
-remain historical, not evidence for the new kit.
+Status (updated 2026-11-08): the first-stage online kit is implemented and
+published by `spvm-openstack` CI run `42494533089`, attempt 2, from
+`4f98d0187aaef65b7bad2182099f1b58fd10ce26`. Nova/Skyline images are prebuilt,
+immutable and anonymously downloadable; archive extraction and checksums passed.
+Clean-install/add-remove-add acceptance of that published kit is still pending.
+The full offline-kit scope below remains deferred; the published archive does
+not contain image layers or all OS/Python dependencies. The earlier checkpoints
+below remain historical, not evidence for this new kit.
 
 Motivation: previously pinned upstream manifests became unavailable; replacing
 them with reachable images exposed a different Skyline asset layout. The unified
@@ -190,8 +196,9 @@ installer also had an isolated sibling-import defect. Mock-only checks and
 registry metadata inspection did not exercise the complete real-image path.
 
 - Build matched Nova and Skyline derivative images in CI, not for the first time
-  on the customer's management host. Keep Skyline customization in swarm-cloud;
-  keep installation orchestration in sp-vm-tools.
+  on the customer's management host. Keep Skyline frontend customization in
+  skyline-console and driver/API/kit CI in spvm-openstack; keep installation
+  orchestration in sp-vm-tools.
 - Publish one compatibility manifest binding installer and Kolla revisions,
   driver wheel, launcher, GUI sources, base/derivative image digests and archive
   checksums. Refuse mismatched components; do not add old-workspace migrations.

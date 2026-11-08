@@ -2,7 +2,7 @@
 
 This guide covers OpenStack integration, not services inside Swarm guests.
 Driver implementation and full policy documentation live in the selected
-swarm-cloud bundle: `deployment/SERVICE_DELEGATION.md` and
+spvm-openstack bundle: `deployment/SERVICE_DELEGATION.md` and
 `deployment/SERVICE_IDENTITIES.md`.
 
 ## Fresh installation

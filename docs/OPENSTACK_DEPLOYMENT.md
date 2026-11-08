@@ -181,9 +181,9 @@ Record the installer checkout separately with `git rev-parse HEAD`; this guide
 and its sibling Python modules must be delivered from the same reviewed commit.
 The `sp-vm-tools` base before the new verifier/coordinator is
 `6d50f04` (historical base, **not** the completed candidate revision).
-The corresponding tools revision is pinned in the swarm-cloud deployment README;
-no release/tag/push is implied. Private lab journals are local evidence, not
-repository user documentation.
+For current kits the exact tools revision is recorded in `installation-kit.json`
+from `spvm-openstack`; the revisions above are historical evidence only.
+Private lab journals are local evidence, not repository user documentation.
 
 Source staging is exclusive. If planning with `--driver-archive` or
 `--driver-release`, the first invocation creates a new private staging directory.
@@ -296,7 +296,7 @@ Do not describe a passing basic preflight as a deployed or attested cloud.
 | Three-controller HA, failover/reboot recovery | Not accepted |
 
 Lab-specific `kolla-super6-*`, `kolla-super7-*` and fixed-UUID acceptance helpers in
-swarm-cloud are evidence/recovery tools, **not portable installers**. Do not run
+spvm-openstack are evidence/recovery tools, **not portable installers**. Do not run
 them against a new environment or substitute a different IP into their source.
 
 ## 2. Separate host preparation from OpenStack installation
@@ -339,7 +339,7 @@ channel; do not disable `StrictHostKeyChecking`.
 
 You need compatible Python 3, Bash, OpenSSH, OpenSSL and Git. The backend needs PyYAML; commands that
 query OpenStack additionally need the compatible client/SDK dependencies listed in
-the selected swarm-cloud driver package. Do not install into system Python.
+the selected spvm-openstack driver package. Do not install into system Python.
 Prefer the preparer above for both local environments. The following is only
 the minimal **manual alternative** for the installer frontend, not Kolla or SDK setup:
 
@@ -383,7 +383,7 @@ It contains reviewed local fixes; **it is not a published clean driver release**
 A Docker image ID is not a registry manifest digest. A portable release must pin
 the actual distributed artifact and its appropriate registry digest separately.
 
-Record swarm-cloud and sp-vm-tools commits, dirty status, bundle SHA256, Kolla
+Record spvm-openstack, skyline-console and sp-vm-tools commits, dirty status, bundle SHA256, Kolla
 commit, collection versions, launcher checksums, compute image identity and guest
 release in deployment receipts. An old commit plus uncommitted changes is not
 reproducible provenance. Never put provider credentials in a public lockfile.
@@ -785,7 +785,7 @@ Project quotas are separate and are not changed by installation/resource editing
 
 ## 8. Select the driver backend
 
-For development use an explicitly trusted swarm-cloud checkout:
+For development use an explicitly trusted spvm-openstack checkout:
 
 ```bash
 bash /srv/sp-vm-tools/scripts/spvm-openstack.sh \

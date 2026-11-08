@@ -15,7 +15,8 @@ Ubuntu 24.04 and 26.04 Azure D8s_v5, fresh OpenStack installation, separate
 compute onboarding, mixed CC/non-CC guests, real debug/release Auto scheduling,
 compute-admission negative cases and the separate three-node debug cluster's
 public HTTPS UI. See [the final checks](#final-publication-and-admission-checks-2026-10-29)
-and the matching `swarm-cloud` `deployment/NON_CC.md` evidence. Older dated
+and `deployment/NON_CC.md` in `spvm-openstack`, which preserves the original
+dated evidence and source commits from before extraction. Older dated
 checkpoints are audit history. Dedicated fresh controller-only reinstallation
 was not repeated; role-aware screening without KVM/libvirt and actual service
 containers without KVM were checked instead. Ubuntu 26 remains experimental.
