@@ -5,6 +5,18 @@ claim that installation is unattended or that a fresh operating system was teste
 See [the deployment guide](OPENSTACK_DEPLOYMENT.md) for command schemas and safety
 boundaries. Repository documentation must remain in English.
 
+## Completed: concise installation and maintenance progress (2026-11-08)
+
+Status: **implemented, published as matched driver 0.2.39 and accepted on the
+cleared CC stand**. Install, add-compute and remove-compute share fixed English
+stderr steps, durations and one observation-based WAIT reporter after 60 seconds
+without another progress message. No extra SSH probes, transaction/retry changes
+or new public ports were introduced. See [the progress guide](OPENSTACK_PROGRESS.md)
+and [live acceptance](OPENSTACK_PROGRESS_ACCEPTANCE_20261108.md) for exact commits,
+CI/archive SHA256, 173 focused tests, real install/new-add/remove/return timings,
+reviewed registry/disk-space blockers and preservation/GUI checks. Final state:
+super7 configured and enabled; super6 returned UNCONFIGURED/disabled; no test VMs.
+
 ## Completed: controller-owned compute membership (2026-11-08)
 
 Status: **implemented and accepted for the single-controller profile**. See

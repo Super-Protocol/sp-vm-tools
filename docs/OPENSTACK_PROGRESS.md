@@ -59,6 +59,7 @@ Synthetic tests use fake clocks/processes for the minute interval, nested steps,
 errors/Ctrl+C, audit counts, stream byte preservation and stderr/stdout isolation.
 These do not replace live installation or network acceptance. Dated stand
 reports identify the exact commits, CI archive digest and live cases exercised.
+See the [2026-11-08 cleared-stand acceptance report](OPENSTACK_PROGRESS_ACCEPTANCE_20261108.md).
 
 During the 2026-11-08 clean-stand test, the previous Nova/Skyline base digests
 returned registry `404 MANIFEST_UNKNOWN`. The installer correctly refused before
