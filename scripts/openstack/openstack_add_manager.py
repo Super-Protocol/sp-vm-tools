@@ -188,7 +188,9 @@ else:
  if record.get('status')!='ADDING_COMPUTE' or record.get('operation')!=r['operation'] or record.get('plan_sha256')!=r['plan']:raise ValueError('addition claim differs')
  if r['action']=='configure':
   if file_hash(policy)!=b['policy_sha256'] or file_hash(config)!=b['config_sha256']:raise ValueError('active configuration drift')
-  old=json.loads(config.read_bytes());v=json.loads(policy.read_bytes());name=r['host'];new=r['config']
+  # snapshot() parsed the current deployment with the authoritative backend.
+  # Its exact file hash was rechecked above; YAML is not a JSON-only record.
+  old=b['config'];v=json.loads(policy.read_bytes());name=r['host'];new=r['config']
   # Translate only the manager driver path; preserve every native existing host.
   new['driver']=old['driver']
   for key in ('skyline_console_context','skyline_console_context_sha256'):
