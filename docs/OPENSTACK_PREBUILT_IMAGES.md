@@ -75,6 +75,9 @@ image manifest digest as its runtime ID. Target acceptance checks the exact
 Linux/amd64 RepoDigest and single-platform descriptor, then binds containers to
 that observed runtime ID. It does not accept a floating tag, an image index or
 an arbitrary second ID. No old installation format is converted.
+Readiness uses this same verifier, not direct equality between the runtime ID
+and config ID. A genuine failed activation is reported as ERROR at its enclosing
+progress stage; no intermediate OK is printed for a failed result.
 
 Frontend React changes and standalone SPVM pages are owned by the
 `SuperProtocol/` directory of the `Super-Protocol/skyline-console` fork.

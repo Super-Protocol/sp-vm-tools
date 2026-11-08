@@ -315,12 +315,12 @@ class Operations:
             plan = runner.plan(name); write(target / 'plan.json', plan)
             with progress.step('compute-enroll',host=name):
                 result = execute(plan, plan['plan_sha256'], target / 'transaction', runner)
-            if result['status'] != 'COMPUTE_READY' or result['guests_restarted'] is not False:
-                step=result.get('inflight')
-                if step not in ('quarantine','stop','enroll','start','accept','enable',None):step='unknown'
-                raise InstallerError('Compute activation failed on '+name+' at '+str(step)+'. Inspect '
-                    +str(target/'transaction/transaction.json')+' and private-remote-*.json under '
-                    +str(target/'observations')+'. Scheduling remains quarantined when confirmed by the journal; no automatic retry.')
+                if result['status'] != 'COMPUTE_READY' or result['guests_restarted'] is not False:
+                    step=result.get('inflight')
+                    if step not in ('quarantine','stop','enroll','start','accept','enable',None):step='unknown'
+                    raise InstallerError('Compute activation failed on '+name+' at '+str(step)+'. Inspect '
+                        +str(target/'transaction/transaction.json')+' and private-remote-*.json under '
+                        +str(target/'observations')+'. Scheduling remains quarantined when confirmed by the journal; no automatic retry.')
             self.activated.add(name)
             return {'status': result['status'], 'guests_restarted': result['guests_restarted']}
         if operation not in ('executor-probe', 'executor-install') or self.activated != set(i.requests):
