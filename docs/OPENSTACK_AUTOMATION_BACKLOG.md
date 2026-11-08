@@ -5,11 +5,17 @@ claim that installation is unattended or that a fresh operating system was teste
 See [the deployment guide](OPENSTACK_DEPLOYMENT.md) for command schemas and safety
 boundaries. Repository documentation must remain in English.
 
-## Planned follow-up: add computes using controller SSH access (2026-11-07)
+## Completed: controller-owned compute membership (2026-11-08)
 
-Status: **implemented in sources; synthetic acceptance only, live clean-install
-and second-manager acceptance pending**. See
-[controller-owned management](OPENSTACK_CLOUD_MANAGEMENT.md). Allow an administrator to add one
+Status: **implemented and accepted for the single-controller profile**. See
+[controller-owned management](OPENSTACK_CLOUD_MANAGEMENT.md) and the
+[live acceptance report](OPENSTACK_CLOUD_MANAGEMENT_ACCEPTANCE_20261108.md).
+Real SSH/API/Kolla operations ran from an isolated local manager without original
+installation history; a separate empty manager directory passed final read-only
+preflight. This is not a second physical PC or HA/failover acceptance. The first
+new-host add required a separately recorded reviewed completion after a YAML
+defect; normal removal/return passed with the final frontend. Original scope:
+allow an administrator to add one
 or several hosts to an existing cloud with controller addresses and an operator
 SSH key, without a large deployment YAML or the original management machine's
 local `--installation` history. Retain only a small description/list of the new
@@ -41,8 +47,11 @@ hosts; determine which target/bootstrap/transport details genuinely need input.
 The frontend now uses `--controller USER@IP`, a host-only YAML and a matching
 prepared local environment. Original local installation receipts/history are not
 accepted. Removal publishes into the same controller generation. A new kit/fresh
-installation is required; the existing 0.2.36 stand is not migrated or upgraded
-by source changes. SSH to existing computes remains required, by design.
+installation is required; acceptance used a new 0.2.38 cloud, not a migration of
+the old 0.2.36 stand. SSH to existing computes remains required, by design.
+Multiple-target ordering/concurrency and failure cases have focused synthetic
+coverage; the real stand used one target per operation. Multi-controller
+selection and controller-loss recovery remain in the separate HA workstream.
 
 ## Completed: management CLI and manual resource allocation (2026-11-07)
 

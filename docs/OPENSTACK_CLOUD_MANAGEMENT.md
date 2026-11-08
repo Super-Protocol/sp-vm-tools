@@ -100,9 +100,18 @@ connections require review. No replay, failover, host/VM recovery or repair thro
 private kit and inspects read-only, without persistent controller changes,
 enrollment, package installation or credential rotation.
 
-Current acceptance is **synthetic only**: archive/permissions, generations,
+The focused synthetic checks cover archive/permissions, generations,
 concurrency/interruption, batch ordering and portability after old paths disappear.
-SSH, dependency execution and TLS checks are substituted in the portability
-fixture. A matched new kit and clean stand install are still required for real
-another-management-PC remove/add acceptance. Existing clouds without this
-capability are deliberately refused, not migrated.
+The portability fixture substitutes SSH, dependency execution and TLS; it is not
+itself proof of a live fleet operation. Existing clouds without this capability
+are deliberately refused, not migrated. Keep live-acceptance results separate
+from synthetic coverage and identify the exact source and artifact used.
+
+[Live acceptance, 2026-11-08](OPENSTACK_CLOUD_MANAGEMENT_ACCEPTANCE_20261108.md)
+used a cleared two-host CC stand and an isolated manager without original
+installation history. Normal controller-based removal and return preserved a
+running peer and its resource settings. A separate initially empty manager
+directory passed read-only preflight. The first new-host add needed the explicit
+reviewed completion described in that report after a YAML defect was fixed;
+it was not an uninterrupted final-revision fresh-install/new-add run. The test
+was a local container with real SSH/API/Kolla execution, not another physical PC.
