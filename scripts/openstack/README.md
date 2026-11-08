@@ -163,12 +163,12 @@ still a separate, unfinished integration step.
 
 `openstack_spvm_resources.py` exposes approved project-scoped flavor/Glance marker
 plan/apply and an opt-in disposable private-ACL Barbican smoke test. The portable
-API logic remains in swarm-cloud's `deployment/spvm_resources.py`. Neither command
+API logic remains in spvm-openstack's `deployment/spvm_resources.py`. Neither command
 creates networks, changes runtime enrollment, restarts services or launches VMs.
 
 `openstack_spvm_network.py` adds explicit `plan-spvm-network` /
 `apply-spvm-network` for the single shared guest network, transit subnet and fixed
-router address. API implementation lives in swarm-cloud `deployment/spvm_network.py`.
+router address. API implementation lives in spvm-openstack `deployment/spvm_network.py`.
 It never edits host routes/firewall, widens cluster security groups or replaces
 conflicting Neutron objects. API readiness is not host-routing acceptance.
 
@@ -176,11 +176,11 @@ conflicting Neutron objects. API readiness is not host-routing acceptance.
 the pinned image schema in an isolated validator, and plans/installs only the
 initial deny-all-to-enrolled runtime transition. Installation requires an already
 stopped empty compute and explicit operator quarantine acknowledgement. It never
-stops/starts Nova or VMs. Backend host logic is in swarm-cloud
+stops/starts Nova or VMs. Backend host logic is in spvm-openstack
 `deployment/runtime_enrollment.py`; activation remains a separate operation.
 
 `openstack_ingress.py` stages/checks/plans/installs an empty initial host HAProxy
-scaffold plus reviewed publication helpers, using swarm-cloud `ingress_setup.py`.
+scaffold plus reviewed publication helpers, using spvm-openstack `ingress_setup.py`.
 The host proxy must already be inactive/disabled with a reviewed route-free base;
 no start/reload, DNS write, cluster enrollment or Kolla proxy mutation occurs.
 Existing generic TLS/HTTP renderers and root-authorized exporters remain reused.
@@ -198,7 +198,7 @@ exports CA keys or edits DNS. English guide §10.23–10.24 describes recovery a
 the remaining fresh-compute activation boundary.
 
 `openstack_compute_activation.py` now coordinates the prepared empty-host
-quarantine/stop/enroll/start/accept/enable path using swarm-cloud
+quarantine/stop/enroll/start/accept/enable path using spvm-openstack
 `initial_compute.py` and the durable compute transaction engine. Fresh requests
 and explicit preserve-enrollment mode are separate. No image/Kolla/hardware/guest
 changes are implicit. See guide §10.25 for API/host guards and ambiguous-action

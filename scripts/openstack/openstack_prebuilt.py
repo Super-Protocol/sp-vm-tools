@@ -30,7 +30,7 @@ def selected(backend, *, online=False):
         if online:
             for component, image in kit['images'].items():
                 with progress.step('verify-image-' + component):
-                    labels = ({'io.spvm.source-commit': kit['sources']['swarm-cloud'],
+                    labels = ({'io.spvm.source-commit': kit['sources']['spvm-openstack'],
                                'io.spvm.wheel-sha256': kit['driver']['wheel_sha256']}
                               if component == 'compute' else
                               {'org.opencontainers.image.revision': kit['sources']['skyline-console']})

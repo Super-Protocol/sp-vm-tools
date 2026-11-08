@@ -181,7 +181,7 @@ public port, runtime SSH credential or CC downgrade is introduced.
 The root coordinator verifies current administrator authority and serializes
 host operations. The compute's distinct executor independently verifies command
 creator, scope, binding, expiry and durable request journal. See
-[Host control security](https://github.com/Super-Protocol/swarm-cloud/blob/feature/spvm-bare-metal-cloud/examples/test-cluster/bare-metal-spvm/deployment/HOST_CONTROL.md). Installing GUI assets alone does not
+[Host control security](https://github.com/Super-Protocol/spvm-openstack/blob/feature/sync-with-swarm-cloud/deployment/HOST_CONTROL.md). Installing GUI assets alone does not
 activate this management channel or the new host contract.
 
 On an uncertain mutation, keep scheduling disabled and inspect

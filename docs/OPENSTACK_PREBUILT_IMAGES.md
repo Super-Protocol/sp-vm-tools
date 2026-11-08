@@ -15,7 +15,7 @@ SHA256. Inside it, `manifest.json` binds source files, the exact driver wheel an
 the four CI artifacts: `installation-kit.json`, `console-component.json`,
 `console-manifest.json`, and `nginx.conf.j2`.
 
-`installation-kit.json` records exact commits of `swarm-cloud`, `sp-vm-tools`
+`installation-kit.json` records exact commits of `spvm-openstack`, `sp-vm-tools`
 and `skyline-console`, the Kolla revision, launcher recipe, driver/wheel hashes,
 and immutable Linux/amd64 image references with their **distinct** registry
 manifest digests and Docker config/image IDs. Before changing servers the
@@ -52,6 +52,14 @@ host restrictions are unchanged.
 
 ## UI ownership and publication
 
+The coordinated Nova/driver kit is now owned and built by
+`Super-Protocol/spvm-openstack`, not swarm-cloud. The operator installer stays
+in this repository. Select a standalone spvm-openstack checkout or its verified
+release archive; the former monorepo backend path and source key are rejected,
+not migrated. The source map pins spvm-openstack, this installer and Skyline
+independently. See the new repository's `REPOSITORY.md` for extraction provenance
+and the package Actions access required by its publishing workflow.
+
 OCI config identity and Docker runtime identity are distinct. The kit and the
 verified registry manifest always pin the config SHA256. With the classic image
 store Docker uses that config ID; with the containerd image store Docker uses the
@@ -63,7 +71,7 @@ an arbitrary second ID. No old installation format is converted.
 Frontend React changes and standalone SPVM pages are owned by the
 `SuperProtocol/` directory of the `Super-Protocol/skyline-console` fork.
 Authenticated APIs, workers, authorization and privileged operations remain in
-`swarm-cloud`. Existing public URLs and the `/spvm-api/` loopback proxy remain.
+`spvm-openstack`. Existing public URLs and the `/spvm-api/` loopback proxy remain.
 The installer neither changes JavaScript nor requires a local console checkout.
 
 Trusted feature-branch CI first mirrors the reviewed Nova/Skyline bases into

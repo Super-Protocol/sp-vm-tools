@@ -1,4 +1,4 @@
-"""Select a trusted swarm-cloud installer backend; never bootstrap hardware here."""
+"""Select a trusted spvm-openstack installer backend; never bootstrap hardware here."""
 import argparse
 import hashlib
 import json
@@ -71,11 +71,10 @@ def unpack(archive, destination):
 
 def backend(directory, *, verified_bundle=False):
     root = Path(directory).resolve(strict=True)
-    candidates = [root/'examples/test-cluster/bare-metal-spvm/deployment/installer.py',
-                  root/'deployment/installer.py', root/'installer.py']
+    candidates = [root/'deployment/installer.py']
     found = [p for p in candidates if p.is_file()]
     if len(found) != 1:
-        raise ValueError('select a swarm-cloud checkout or a bundle containing one deployment/installer.py')
+        raise ValueError('select a spvm-openstack checkout or bundle containing deployment/installer.py; the old monorepo layout is not supported')
     path = found[0]
     if verified_bundle:
         base = path.parent.parent
@@ -88,6 +87,7 @@ def backend(directory, *, verified_bundle=False):
         if 'controller-cloud-management-v1' not in manifest.get('capabilities',[]):
             raise ValueError('Driver kit lacks controller-cloud-management-v1. Use the matching new kit; controller state is created only by a fresh installation, without migration.')
         if (manifest.get('schema_version') != 1 or manifest.get('source_tree_dirty') is not False
+                or manifest.get('source_repository') != 'Super-Protocol/spvm-openstack'
                 or not re.fullmatch('[a-f0-9]{40}', str(manifest.get('source_commit', '')))
                 or not isinstance(hashes, dict) or 'deployment/installer.py' not in hashes):
             raise ValueError('clean commit bundle with source checksums required')
@@ -154,7 +154,7 @@ def select(args):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, epilog=(
-        'Pass backend arguments after --. Example: --driver-dir /srv/swarm-cloud -- '
+        'Pass backend arguments after --. Example: --driver-dir /srv/spvm-openstack -- '
         'preflight --config deployment.yaml --output /srv/check-01. '
         'Owned preparation commands: plan-container-engine, prepare-container-engine. '
         'New-cloud inputs: init-kolla, check-kolla-workspace, list-kolla-tasks. '
@@ -187,7 +187,7 @@ def main(argv=None):
         'Matched Nova and Skyline images are retrieved on target hosts by immutable CI-kit digest. '
         'General fresh deploy remains gated; this wrapper does not bypass it.'))
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument('--driver-dir', help='Trusted swarm-cloud checkout or expanded bundle')
+    source.add_argument('--driver-dir', help='Trusted spvm-openstack checkout or expanded bundle')
     source.add_argument('--driver-archive', help='Driver bundle archive')
     source.add_argument('--driver-release', help='Public GitHub owner/repository@tag')
     parser.add_argument('--sha256', help='Operator-trusted archive SHA256; mandatory for archive/release')
