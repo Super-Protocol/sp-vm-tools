@@ -12,6 +12,7 @@ import time
 import traceback
 
 import yaml
+import openstack_progress as progress
 from openstack_compute_image import read
 from openstack_container_engine import digest, file_hash, write
 import openstack_kolla_workspace as workspace
@@ -302,8 +303,10 @@ def execute(args,output,module,delegation,cfg,receipt,binding,runner,*,coordinat
             'inflight':None,'guests_changed':False}
     def step(name,fn):
         record['inflight']=name;write(journal,record)
-        result=fn();write(output/(name+'-result.json'),result or {})
-        record['done'].append(name);record['inflight']=None;write(journal,record)
+        with progress.step(name,host=args.host):
+            result=fn()
+            write(output/(name+'-result.json'),result or {})
+            record['done'].append(name);record['inflight']=None;write(journal,record)
         return result
     try:
         # Build and validate successor inputs before the first remote mutation.

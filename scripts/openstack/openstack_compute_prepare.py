@@ -5,6 +5,7 @@ owned prerequisite phases. Never invoke a control-plane deploy or post-deploy.
 """
 import argparse
 import json
+import openstack_progress as progress
 import os
 from pathlib import Path
 import re
@@ -223,6 +224,8 @@ def plan_prepared(value,path,module,output,runner):
     return {'kind':'new-compute','changes':True,'plan_sha256':result['plan_sha256']}
 
 
+@progress.phase('compute-deploy', host=lambda value,*a,**k:value['host'],
+                log=lambda value,receipt,spec,alias,output:output/'private-deploy.log')
 def deploy(value,receipt,spec,alias,output):
     # No post-deploy/password generation, bootstrap-servers or controller targets.
     # Hardware/Docker/helper preparation must already have passed their owned phases.
@@ -293,6 +296,7 @@ def apply(value,path,module,output,runner):
     return apply_prepared(value,path,module,output,runner)
 
 
+@progress.phase('compute-enroll',host=lambda value,*a,**k:value['host'])
 def apply_prepared(value,path,module,output,runner):
     cfg,receipt,wanted,spec,alias=inputs(value,module)
     approved=json.loads(read(output/'new-compute-plan.json'))

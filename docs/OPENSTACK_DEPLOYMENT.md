@@ -9,6 +9,11 @@ The separate commands below remain diagnostic/advanced phase interfaces, not a
 required sequence of manual approvals for the integrated scenario. Its current
 profile and synthetic-versus-live acceptance limits are explicit in that guide.
 
+The three management commands show compact English steps and an observation-based
+WAIT line after 60 seconds without other progress. Human progress uses stderr;
+private logs and machine-result formats remain separate. See
+[progress and long operations](OPENSTACK_PROGRESS.md) for interpretation and limits.
+
 ### Local SSH settings: optional CLI overrides
 
 SSH key/trust paths belong to the **management machine**, not the target hosts.

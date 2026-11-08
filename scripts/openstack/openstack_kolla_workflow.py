@@ -11,6 +11,7 @@ import select
 import subprocess
 import sys
 import time
+import openstack_progress as progress
 
 from openstack_compute_image import read
 from openstack_container_engine import digest, file_hash, write
@@ -128,6 +129,8 @@ def guard(args, backend, cfg, intent, hosts):
             for name, host in cfg['hosts'].items()}
 
 
+@progress.phase(lambda args,receipt,source,output,phase: 'kolla-'+phase,
+                log=lambda args,receipt,source,output,phase: output/('private-'+phase+'.log'))
 def invoke(args, receipt, source, output, phase):
     config = output/'ansible.cfg'
     env = {k:v for k,v in os.environ.items() if not k.startswith(('ANSIBLE_', 'KOLLA_', 'PYTHON', 'OS_'))}

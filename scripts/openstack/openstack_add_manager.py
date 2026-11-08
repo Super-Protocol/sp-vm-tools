@@ -1,6 +1,7 @@
 """Management-host add-compute: one entry for new, returning and ready hosts."""
 import copy
 import json
+import openstack_progress as progress
 from pathlib import Path
 import time
 from types import SimpleNamespace as R
@@ -337,9 +338,11 @@ finally:c.close()
             'done':[],'inflight':None,'guests_changed':False}
         journal=self.output/'transaction.json'
         def step(name,callback):
-            print('Adding compute: '+name,flush=True);record['inflight']=name;write(journal,record)
-            result=callback();write(self.output/(name+'-result.json'),result or {})
-            record['done'].append(name);record['inflight']=None;write(journal,record)
+            record['inflight']=name;write(journal,record)
+            with progress.step(name,host=self.args.host):
+                result=callback()
+                write(self.output/(name+'-result.json'),result or {})
+                record['done'].append(name);record['inflight']=None;write(journal,record)
             return result
         # Reinspect all inputs before claiming or touching the target.
         for name,sha in plan['inputs'].items():

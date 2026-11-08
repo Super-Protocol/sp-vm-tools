@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 import hashlib
 import json
+import openstack_progress as progress
 import os
 from pathlib import Path
 import select
@@ -266,6 +267,7 @@ print(json.dumps({'status':'REMAINING_HOST_CATALOGS_REFRESHED','hosts':sorted(co
         return result
 
 
+@progress.command('remove')
 def main(argv=None):
     args=parser().parse_args(argv);output=Path(args.output);owned=False
     try:
@@ -322,8 +324,9 @@ def main(argv=None):
                     print('CHECKED_NOT_REMOVED: no host services, registrations or configuration were changed.');return 0
                 print('Retire '+args.host+' ('+plan['hostname']+'). No VM is stopped or deleted; bootstrap/libvirt/QEMU are retained.',flush=True)
                 if not args.yes:
-                    print('Type the host name to approve: ',end='',flush=True)
-                    if sys.stdin.readline().strip()!=args.host:raise InstallerError('Retirement not approved; no removal phase started.')
+                    with progress.pause():
+                        print('Type the host name to approve: ',end='',flush=True)
+                        if sys.stdin.readline().strip()!=args.host:raise InstallerError('Retirement not approved; no removal phase started.')
                 args.action='remove-compute';args.confirm_host=args.host;args.plan_sha256=plan['plan_sha256']
                 return removal.execute(args,output,module,delegation,cfg,receipt,binding,runner,coordinator=coordinator)
     except Exception as error:

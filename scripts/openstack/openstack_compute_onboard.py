@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import re
 import tempfile
+import openstack_progress as progress
 
 from openstack_compute_image import read
 from openstack_container_engine import digest, file_hash, write
@@ -310,34 +311,40 @@ def execute(value,path,module,output,runner,approved):
     record={'status':'PREPARING','phase':'PEER_NETWORK','completed':[]}
     write(journal,record)
     try:
-        peer_network(value,module,runner,cfg,spec,outer,approved=approved['peers'],output=output)
+        with progress.step('peer-network',host=value['host']):
+            peer_network(value,module,runner,cfg,spec,outer,approved=approved['peers'],output=output)
         record['completed'].append('peer-network');record['phase']='HOSTNAMES';write(journal,record)
-        hostnames(value,module,runner,cfg,spec,approved=approved['hostnames'],output=output)
+        with progress.step('hostnames',host=value['host']):
+            hostnames(value,module,runner,cfg,spec,approved=approved['hostnames'],output=output)
         record['completed'].append('hostnames');record['phase']='DEPENDENCIES';write(journal,record)
         public_ca=dependencies.ca(outer['configdir'],cfg['deployment_id'])
         protected=engine.observe(module,cfg['hosts'][value['host']],value['known_hosts'])
-        dependencies.prepare(value,module,receipt,public_ca,output/'dependencies',runner)
+        with progress.step('dependencies',host=value['host'],log=output/'dependencies/private-prepare.log'):
+            dependencies.prepare(value,module,receipt,public_ca,output/'dependencies',runner)
         if engine.observe(module,cfg['hosts'][value['host']],value['known_hosts'])!=protected:
             raise ValueError('dependency preparation changed protected runtime state')
         record['completed'].append('dependencies');record['phase']='CONTAINER_ENGINE';write(journal,record)
         args=engine_args(value,receipt,outer,output/'container-engine','plan-container-engine')
-        plan=engine.execute(args,module)
-        args.action='prepare-container-engine';args.plan_sha256=plan['plan_sha256']
-        engine.execute(args,module)
+        with progress.step('container-engine',host=value['host']):
+            plan=engine.execute(args,module)
+            args.action='prepare-container-engine';args.plan_sha256=plan['plan_sha256']
+            engine.execute(args,module)
         record['completed'].append('container-engine');record['phase']='NETWORK';write(journal,record)
         # Docker must exist before the existing fresh-network probe uses it.
         # Only the target is provisioned; existing peers received additive rules.
         prep=output/'network-recipe.json'
         write(prep,{'network_request':spec['network_request'],'geneve_request':spec['geneve_request']})
-        network.prepare({**value,'preparation':str(prep),
-            'allow_experimental_ubuntu26':outer['allow_experimental_ubuntu26']},path,module,output,
-            targets=[value['host']])
+        with progress.step('network',host=value['host']):
+            network.prepare({**value,'preparation':str(prep),
+                'allow_experimental_ubuntu26':outer['allow_experimental_ubuntu26']},path,module,output,
+                targets=[value['host']])
         record['completed'].append('network');record['phase']='HELPER';write(journal,record)
         helper_before=helper_phase(runner,value['host'],wanted['helper_request'],assembled,files,
             '/var/lib/spvm-installer/'+cfg['deployment_id']+'/helper-'+digest(str(output))[:24])
         if helper_before!=approved['helper']:raise ValueError('protected helper facts drift after prerequisites')
-        helper_phase(runner,value['host'],wanted['helper_request'],assembled,files,
-            '/var/lib/spvm-installer/'+cfg['deployment_id']+'/helper-'+digest(str(output))[:24],apply=True,before=helper_before)
+        with progress.step('helper',host=value['host']):
+            helper_phase(runner,value['host'],wanted['helper_request'],assembled,files,
+                '/var/lib/spvm-installer/'+cfg['deployment_id']+'/helper-'+digest(str(output))[:24],apply=True,before=helper_before)
         record['completed'].append('helper');record['phase']='DRIVER_IMAGE';write(journal,record)
         host=cfg['hosts'][value['host']]
         args=argparse.Namespace(package=spec['image_package'],package_sha256=spec['image_package_sha256'],
@@ -345,7 +352,8 @@ def execute(value,path,module,output,runner,approved):
             known_hosts=value['known_hosts'],ssh_port=host.get('port',22),
             machine_sha256=wanted['helper_request']['machine_sha256'],
             reserve_gib=spec['image_reserve_gib'],output=str(output/'image-delivery'))
-        result=transfer.deliver(args)
+        with progress.step('driver-image',host=value['host'],log=output/'image-delivery/private-transport.log'):
+            result=transfer.deliver(args)
         if result['status']!='COMPUTE_IMAGE_DELIVERED_NOT_DEPLOYED':raise ValueError('image delivery incomplete')
         if deploy.controller(runner)!=approved['controller'] or deploy.cloud(runner)!=approved['cloud']:
             raise ValueError('existing controller or cloud workloads changed')

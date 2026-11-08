@@ -18,6 +18,7 @@ import traceback
 from types import SimpleNamespace as R
 
 import yaml
+import openstack_progress as progress
 from openstack_active_deployment import portable
 from openstack_add_entry import parser
 from openstack_container_engine import digest,file_hash,write
@@ -219,6 +220,7 @@ def write_yaml(path,value):
         os.fchmod(stream.fileno(),0o600);yaml.safe_dump(value,stream,sort_keys=False)
 
 
+@progress.command('add')
 def main(argv=None):
     args=parser().parse_args(argv);output=Path(args.output);batch=None;owned=False
     try:
@@ -227,15 +229,17 @@ def main(argv=None):
         if output.exists() or output.is_symlink():raise InstallerError('Batch output already exists; inspect its journals. No overwrite, resume or automatic replay.')
         output.mkdir(mode=0o700);owned=True
         with deployment_lock():
-            batch=Batch(args,output);batch.scan()
+            batch=Batch(args,output)
+            with progress.step('scan'):batch.scan()
             print('Cloud: '+batch.cloud.pointer['cloud_id']+' · '+batch.initial['deployment_id']+' · '+batch.cloud.identity['api_endpoint'],flush=True)
             print(json.dumps({'status':'ADD_COMPUTE_BATCH_PLAN_READY','hosts':batch.record['hosts'],'plan_sha256':batch.record['plan_sha256']}),flush=True)
             if args.check:batch.record['status']='CHECKED';batch.save();return 0
             print('All selected hosts passed checks. Add sequentially; stop at the first failure. Completed hosts are not rolled back.',flush=True)
             if not args.yes:
                 if not sys.stdin.isatty():raise InstallerError('Explicit approval required: use an interactive terminal or --yes after checking the plan.')
-                print('Type '+batch.initial['deployment_id']+' to approve: ',end='',flush=True)
-                if sys.stdin.readline().strip()!=batch.initial['deployment_id']:raise InstallerError('Batch was not approved; no host apply started.')
+                with progress.pause():
+                    print('Type '+batch.initial['deployment_id']+' to approve: ',end='',flush=True)
+                    if sys.stdin.readline().strip()!=batch.initial['deployment_id']:raise InstallerError('Batch was not approved; no host apply started.')
             result=batch.apply();print(json.dumps({'status':result['status'],'hosts':result['hosts'],'guests_changed':False}));return 0
     except Exception as error:
         if owned:

@@ -19,6 +19,7 @@ from types import SimpleNamespace as R
 
 from openstack_container_engine import digest, file_hash, write
 from openstack_errors import InstallerError
+import openstack_progress as progress
 
 SCHEMA = 1
 PHASES = ('artifacts', 'workspace', 'compute-binding', 'docker',
@@ -98,7 +99,8 @@ class Transaction:
     def scan(self, callback):
         try:
             self.unchanged()
-            plan = callback()
+            with progress.step('scan'):
+                plan = callback()
             if not isinstance(plan, dict) or plan.get('blockers'):
                 blockers = plan.get('blockers', []) if isinstance(plan, dict) else []
                 raise InstallerError('Installation checks failed: ' + ', '.join(blockers))
@@ -121,21 +123,21 @@ class Transaction:
         try:
             for name in PHASES[len(self.record['completed']):]:
                 self.unchanged()
-                self.emit('Installing: ' + name, flush=True)
                 self.record.update(status='RUNNING', active_phase=name, mutation_started=True)
                 self.save()  # Write intent BEFORE allowing any child mutation.
-                result = phases[name]()
-                if not isinstance(result, dict) or result.get('blockers'):
-                    raise InstallerError('Phase ' + name + ' did not confirm completion.')
-                write(self.output / (name + '-result.json'), result)
-                if name == 'platform' and (result.get('status') != 'PLATFORM_READY_NO_SWARM_CREATED'
-                                           or result.get('guests_launched') is not False):
-                    raise InstallerError('Full authenticated API/GUI acceptance is not complete; the installation is NOT ready.')
-                if result.get('status')!=RESULTS[name]:
-                    raise InstallerError('Phase '+name+' returned an unexpected/incomplete status; the installation is NOT ready.')
-                self.record['completed'].append(name)
-                self.record.update(status='PHASE_BOUNDARY', active_phase=None)
-                self.save()
+                with progress.step('install-' + name):
+                    result = phases[name]()
+                    if not isinstance(result, dict) or result.get('blockers'):
+                        raise InstallerError('Phase ' + name + ' did not confirm completion.')
+                    write(self.output / (name + '-result.json'), result)
+                    if name == 'platform' and (result.get('status') != 'PLATFORM_READY_NO_SWARM_CREATED'
+                                               or result.get('guests_launched') is not False):
+                        raise InstallerError('Full authenticated API/GUI acceptance is not complete; the installation is NOT ready.')
+                    if result.get('status')!=RESULTS[name]:
+                        raise InstallerError('Phase '+name+' returned an unexpected/incomplete status; the installation is NOT ready.')
+                    self.record['completed'].append(name)
+                    self.record.update(status='PHASE_BOUNDARY', active_phase=None)
+                    self.save()
             self.unchanged()
             self.record.update(status='OPENSTACK_READY_NO_SWARM_CREATED')
             self.save()
@@ -145,6 +147,7 @@ class Transaction:
             raise
 
 
+@progress.pause()
 def approve(deployment, plan, *, yes=False, stream=None, continuation=None):
     """Never infer permission from a noninteractive session or a stale receipt."""
     stream = stream or sys.stdin
@@ -199,6 +202,7 @@ def parser():
     return p
 
 
+@progress.command('install')
 def main(argv=None):
     args = parser().parse_args(argv)
     args.continue_from = args.continue_platform_from = args.continue_compute_from = args.continue_channel_from = None

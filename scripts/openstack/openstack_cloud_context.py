@@ -19,6 +19,7 @@ import sys
 import uuid
 
 import yaml
+import openstack_progress as progress
 import openstack_cloud_store as store
 from openstack_container_engine import digest, file_hash, write
 from openstack_errors import InstallerError
@@ -97,6 +98,7 @@ class Cloud:
         self.config = self.base / 'deployment.yaml'; self.driver = self.base / 'driver'
         self.pointer = None
 
+    @progress.phase('cloud-fetch',log=lambda self:self.output/'private-cloud-transfer.log')
     def receive(self):
         code = remote_source('''
 import sys
@@ -130,7 +132,9 @@ pack(generation/'payload', sys.stdout.buffer)
                     raise InstallerError('Cloud manifest hash differs from the authenticated pointer.')
                 if digest(self.manifest['identity']) != digest(identity): raise InstallerError('Cloud identity differs from manifest.')
                 # Remote files are not executed before the authenticated manifest is verified.
-                store.unpack(process.stdout, self.base)
+                counted = progress.CountingStream(process.stdout)
+                store.unpack(counted, self.base)
+                counted.finished()
                 if process.wait(timeout=30) != 0 or store.tree(self.base) != self.manifest['files']:
                     raise InstallerError('Cloud transfer failed integrity verification; partial files retained.')
             finally:
@@ -169,6 +173,7 @@ pack(generation/'payload', sys.stdout.buffer)
         self.hydrate()
         return self
 
+    @progress.phase('cloud-environment',log=lambda self:self.output/'private-cloud-environment.log')
     def hydrate(self):
         environment = Path(self.args.environment)
         receipt = json.loads((environment / 'environment.json').read_bytes())
@@ -272,6 +277,7 @@ def seal_workspace(workspace, cfg, environment):
     kolla.check(workspace)
 
 
+@progress.phase('cloud-snapshot')
 def snapshot(directory, *, workspace, config, base, driver, environment, identity, retirements=None, network=None):
     """Build a portable generation from verified current inputs, never a venv/run."""
     directory = Path(directory); directory.mkdir(mode=0o700)
@@ -365,6 +371,7 @@ def copy_driver(source, target):
         raise InstallerError('Driver manifest changed during snapshot preparation.')
 
 
+@progress.phase('cloud-upload',log=lambda coordinator,*a,**k:coordinator.output/'private-cloud-publication.log')
 def upload(coordinator, staged, identity, *, expected=None, operation=None):
     """Stream a bounded private snapshot; commit under the existing held lock."""
     from openstack_remove_manager import lock_guard
@@ -402,7 +409,8 @@ print(json.dumps(pointer))
         try:
             coordinator.alive()
             process.stdin.write(header); process.stdin.flush()
-            store.pack(staged, process.stdin); process.stdin.close()
+            counted = progress.CountingStream(process.stdin)
+            store.pack(staged, counted); counted.finished(); process.stdin.close()
             line = process.stdout.read(65537)
             if process.wait(timeout=60) != 0 or len(line) > 65536:
                 raise InstallerError('Controller cloud snapshot was not committed; inspect private-cloud-publication.log. No replay.')

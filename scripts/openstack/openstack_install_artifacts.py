@@ -6,6 +6,7 @@ import re
 import shlex
 import subprocess
 import sys
+import openstack_progress as progress
 from types import SimpleNamespace as R
 
 from openstack_container_engine import digest, file_hash, write
@@ -54,8 +55,9 @@ def prepare(installation):
         wheel_sha256=file_hash(wheels[0]), output=str(i.output / 'compute-context')))
     i.compute_context_sha = context['context_sha256']
     compute_tag = 'spvm/nova-compute:' + i.run_id
-    built = compute.build(R(output=str(i.output / 'compute-context'),
-        context_sha256=context['context_sha256'], tag=compute_tag, journal=str(i.output / 'compute-build')))
+    with progress.step('build-compute',log=i.output/'compute-build/private-build.log'):
+        built = compute.build(R(output=str(i.output / 'compute-context'),
+            context_sha256=context['context_sha256'], tag=compute_tag, journal=str(i.output / 'compute-build')))
     static = i.output / 'upstream-static'; static.mkdir(mode=0o700)
     name = 'spvm-static-' + digest(i.run_id)[:24]
     created = False
@@ -73,11 +75,13 @@ def prepare(installation):
         '--output', str(i.output / 'console-context')])
     console_sha = file_hash(i.output / 'console-context/console-context.json')
     console_tag = 'spvm/skyline-console:' + i.run_id
-    console = skyline.build(R(output=str(i.output / 'console-context'), context_sha256=console_sha,
-        tag=console_tag, journal=str(i.output / 'console-build')))
+    with progress.step('build-console',log=i.output/'console-build/private-build.log'):
+        console = skyline.build(R(output=str(i.output / 'console-context'), context_sha256=console_sha,
+            tag=console_tag, journal=str(i.output / 'console-build')))
     recipe, _, _ = launcher.recipe(i.path)
     tools = Path(__file__).resolve().parents[2]
-    staged = launcher.stage(i.path, str(tools), recipe['tools_commit'], str(i.output / 'launcher'))
+    with progress.step('prepare-launcher'):
+        staged = launcher.stage(i.path, str(tools), recipe['tools_commit'], str(i.output / 'launcher'))
     i.launcher_files = launcher.verify(i.path, str(i.output / 'launcher'), staged['receipt_sha256'])
     raw = json.loads(json.dumps(yaml_config(i.config)))
     raw['kolla'].update(compute_image=compute_tag, compute_image_id=built['image_id'],

@@ -12,6 +12,7 @@ import sys
 from types import SimpleNamespace as R
 
 import yaml
+import openstack_progress as progress
 from openstack_container_engine import digest, file_hash, write
 from openstack_errors import InstallerError
 
@@ -71,6 +72,7 @@ def address(audit, interface, expected=None):
 
 
 class Installation:
+    @progress.phase('inputs')
     def __init__(self, args):
         from openstack_installer import backend
         self.args = args
@@ -365,9 +367,10 @@ print(json.dumps({'status':'FRESH_HOST_CHECKED','haproxy':ha}))
                 collections_sha256=receipt['collections_sha256'],
                 ansible_playbook=str(self.kolla_python.parent / 'ansible-playbook'),
                 output=str(self.output / ('docker-' + name)))
-            plan = engine.execute(args, self.backend)
-            args.action = 'prepare-container-engine'; args.plan_sha256 = plan['plan_sha256']
-            engine.execute(args, self.backend)
+            with progress.step('container-engine',host=name):
+                plan = engine.execute(args, self.backend)
+                args.action = 'prepare-container-engine'; args.plan_sha256 = plan['plan_sha256']
+                engine.execute(args, self.backend)
         return {'status': 'ALL_HOST_DOCKER_READY'}
 
     def install_network(self):
@@ -398,7 +401,7 @@ print(json.dumps({'status':'FRESH_HOST_CHECKED','haproxy':ha}))
                         'Archive/remove only its proven old CA anchor before starting a new clean installation; --yes does not replace trust.')
                 raise InstallerError('Dependency checks failed: ' + ', '.join(plan['blockers']))
             args.action = 'prepare-' + profile; args.plan_sha256 = plan['plan_sha256']
-            packages.execute(args, self.path, self.backend)
+            with progress.step(profile):packages.execute(args, self.path, self.backend)
         # Native controller-only prerequisites. Do not install packages on petr-dev.
         import openstack_kolla_workspace as workspace
         receipt=workspace.check(self.workspace)
@@ -444,8 +447,9 @@ print(json.dumps({'status':'NEW_HAPROXY_DISABLED_UNTIL_INGRESS_APPROVAL'}))
             snapshot['/etc/spvm/runtime-services.json'] = (json.dumps(runtime, indent=2).encode(), 0o644)
             snapshot.update({str(Path(request['tools']) / 'scripts' / n): (body, 0o755) for n, body in files.items()})
             output = '/var/lib/spvm-installer/' + self.run_id + '/helper-' + name
-            before = helper_phase(self, name, request, assembled, snapshot, output)
-            helper_phase(self, name, request, assembled, snapshot, output, apply=True, before=before)
+            with progress.step('helper',host=name):
+                before = helper_phase(self, name, request, assembled, snapshot, output)
+                helper_phase(self, name, request, assembled, snapshot, output, apply=True, before=before)
         return {'status': 'ALL_HOST_HELPERS_READY_DENY_ALL'}
 
     def install_images(self):
@@ -456,10 +460,11 @@ print(json.dumps({'status':'NEW_HAPROXY_DISABLED_UNTIL_INGRESS_APPROVAL'}))
             image_id=self.cfg['kolla']['compute_image_id'], reserve_gib=10, output=str(package)))
         for name, h in self.cfg['hosts'].items():
             if 'compute' not in h['roles']: continue
-            transfer.deliver(R(package=str(package), package_sha256=exported['package_sha256'],
-                host=h['user'] + '@' + h['address'], identity_file=None, known_hosts=self.known_hosts,
-                ssh_port=h.get('port', 22), machine_sha256=self.audits[name]['host_identity_sha256'],
-                reserve_gib=10, output=str(self.output / ('delivery-' + name))))
+            with progress.step('driver-image',host=name,log=self.output/('delivery-'+name)/'private-transport.log'):
+                transfer.deliver(R(package=str(package), package_sha256=exported['package_sha256'],
+                    host=h['user'] + '@' + h['address'], identity_file=None, known_hosts=self.known_hosts,
+                    ssh_port=h.get('port', 22), machine_sha256=self.audits[name]['host_identity_sha256'],
+                    reserve_gib=10, output=str(self.output / ('delivery-' + name))))
         # The console image is needed only on its single controller; no Docker TCP API is exposed.
         from openstack_install_artifacts import deliver_console
         deliver_console(self)

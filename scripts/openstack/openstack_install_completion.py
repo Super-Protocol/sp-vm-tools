@@ -15,6 +15,7 @@ import shlex
 import subprocess
 import sys
 import time
+import openstack_progress as progress
 from types import SimpleNamespace as R
 
 from openstack_container_engine import digest, file_hash, write
@@ -46,6 +47,8 @@ def snapshot(i):
     return files
 
 
+@progress.phase(lambda i,argv,payload,handler=None,**kw:'controller-accept' if handler else 'controller-prepare',
+                log=lambda i,argv,payload,handler=None,**kw:i.output/('private-controller-completion.log' if handler else 'private-controller-preparation.log'))
 def rpc_process(i, argv, payload, handler=None, *, timeout=1800):
     """Bounded frames; callback data (including credentials) is never logged."""
     log = i.output / ('private-controller-' + ('completion' if handler else 'preparation') + '.log')
@@ -311,7 +314,8 @@ class Operations:
             runner = Backend(i.cfg, i.controller, i.controller_root + '/sdk/bin/python',
                 '/etc/spvm/auth/admin-openrc.sh', target / 'observations', enrollment=self.requests[name])
             plan = runner.plan(name); write(target / 'plan.json', plan)
-            result = execute(plan, plan['plan_sha256'], target / 'transaction', runner)
+            with progress.step('compute-enroll',host=name):
+                result = execute(plan, plan['plan_sha256'], target / 'transaction', runner)
             if result['status'] != 'COMPUTE_READY' or result['guests_restarted'] is not False:
                 step=result.get('inflight')
                 if step not in ('quarantine','stop','enroll','start','accept','enable',None):step='unknown'
