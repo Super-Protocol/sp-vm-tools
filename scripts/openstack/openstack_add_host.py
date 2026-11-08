@@ -17,7 +17,7 @@ UNITS=('host-helper.socket','host-helper.service','spvm-host-control.service',
        'spvm-host-budgets.timer','spvm-host-budgets.service')
 FIXED=('/etc/spvm','/etc/kolla','/var/lib/spvm','/var/lib/nova','/run/spvm','/run/openvswitch',
        '/usr/local/libexec/spvm','/usr/local/libexec/nova-spvm',
-       '/usr/local/libexec/spvm-host-control','/usr/local/bin/spvm_cloud.py',
+       '/usr/local/libexec/spvm-host-control',
        '/etc/tmpfiles.d/spvm.conf','/etc/polkit-1/rules.d/49-spvm-kolla-nova.rules')
 KOLLA_DIRECTORIES={'cron','kolla-toolbox','openvswitch-vswitchd','openvswitch-db-server',
                    'nova-compute','nova-ssh','neutron-ovn-metadata-agent','fluentd','ovn-controller'}

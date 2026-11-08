@@ -26,6 +26,10 @@ manifest digests and Docker config/image IDs. Before changing servers the
 installer verifies these files, the actual installer source bytes, component
 agreement, public registry manifests/configs, source/wheel labels and layer
 availability. Missing, damaged, inaccessible or mixed components fail closed.
+Preflight also assembles the exact helper source snapshot and checks its
+bootstrap capabilities locally, before host audits or mutations. CI performs
+the same consumer check with the pinned installer against the extracted release
+kit; obsolete standalone orchestration scripts are not helper dependencies.
 Integrity checks are not cryptographic signatures and are not guest attestation.
 
 Do not override `installation.compute_base_image` or

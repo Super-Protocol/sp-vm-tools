@@ -27,7 +27,7 @@ UID=42436
 ROOTS={k:'/var/lib/spvm/'+v for k,v in
        [('network','network'),('provider','providers'),('runtime','runtime'),('execution','execution')]}
 FIXED=('/usr/local/libexec/spvm','/usr/local/libexec/nova-spvm',
-       '/usr/local/bin/spvm_cloud.py','/etc/spvm/host-helper.json','/etc/spvm/compute-pools.json',
+       '/etc/spvm/host-helper.json','/etc/spvm/compute-pools.json',
        '/etc/spvm/runtime-services.json','/etc/spvm/launch-policy.json','/etc/spvm/gpu-inventory.json','/etc/systemd/system/host-helper.service',
        '/etc/systemd/system/host-helper.socket','/etc/tmpfiles.d/spvm.conf','/var/lib/spvm/host-resources.json',
        '/etc/polkit-1/rules.d/49-spvm-kolla-nova.rules','/var/lib/nova/compute_id')
@@ -100,7 +100,7 @@ def sources(backend_path):
     result={}
     def read(path):
         if path.resolve()!=path or not path.is_file() or path.stat().st_size>4194304:
-            raise ValueError('bounded regular source file required')
+            raise ValueError('Required helper source missing or unsafe: '+path.relative_to(base).as_posix())
         return path.read_bytes()
     for name in MODULES:
         result['/usr/local/libexec/spvm/'+name]=(read(deployment/name),0o644)
@@ -109,8 +109,7 @@ def sources(backend_path):
         result['/usr/local/libexec/nova-spvm/nova_spvm/'+p.name]=(read(p),0o644)
     if '/usr/local/libexec/nova-spvm/nova_spvm/protocol.py' not in result:
         raise ValueError('driver protocol sources missing')
-    for target,source,mode in [('/usr/local/bin/spvm_cloud.py',base/'spvm_cloud.py',0o755),
-            ('/etc/systemd/system/host-helper.service',deployment/'host-helper.service',0o644),
+    for target,source,mode in [('/etc/systemd/system/host-helper.service',deployment/'host-helper.service',0o644),
             ('/etc/polkit-1/rules.d/49-spvm-kolla-nova.rules',deployment/'kolla-nova-libvirt.rules',0o644)]:
         result[target]=(read(source),mode)
     socket=read(deployment/'host-helper.socket').decode()

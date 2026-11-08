@@ -27,6 +27,11 @@ def selected(backend, *, online=False):
     try:
         module = backend_module(backend)
         kit = module.validate(root, module.document(root / 'manifest.json'))
+        # Validate the exact consumer's privileged source snapshot before any
+        # SSH audit or mutation, not halfway through installation.
+        import openstack_host_helper as helper
+        helper.sources(backend)
+        helper.source_manifest(backend, {}, bootstrap=True)
         if online:
             for component, image in kit['images'].items():
                 with progress.step('verify-image-' + component):
