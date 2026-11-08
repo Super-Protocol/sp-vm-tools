@@ -54,7 +54,7 @@ def network(runner,cfg,host,*,approved=None,output=None):
     from openstack_compute_onboard import remote_tools
     deployment=cfg['deployment_id'];result={}
     for name,peer in cfg['hosts'].items():
-        if name==host or not set(peer['roles']) & {'compute','network'}:continue
+        if name==host:continue
         data={'deployment':deployment,'target':cfg['hosts'][host].get('inventory_name',host),
               'expected':None if approved is None else approved[name],
               'output':None if output is None else '/var/lib/spvm-installer/'+deployment+'/remove-'+digest(str(output))[:24]}
@@ -67,11 +67,14 @@ peer=RemovingPeer();entries=[]
 # not guessed from the public SSH address.
 for kind,field,folder,stem,runtime in (
  ('geneve','peers','/etc/spvm-network','spvm-geneve-','/usr/local/libexec/spvm-geneve-guard.py'),
+ ('management','peers','/etc/spvm-host-network','spvm-management-','/usr/local/libexec/spvm-host-network.py'),
  ('nat','probe_sources','/etc/spvm-host-network','spvm-nat-','/usr/local/libexec/spvm-host-network.py')):
  path=folder+'/'+stem+DATA['deployment']+'.json'
  if not peer.trusted(path).exists():continue
- old=json.loads(peer.read(path));address=DATA['addresses'][kind]
+ old=json.loads(peer.read(path));address=DATA['addresses']['geneve' if kind=='geneve' else 'nat']
+ if kind=='management' and old.get('management_mode')!='shared-interface':continue
  new={**old,field:sorted(set(old[field])-{address})}
+ if kind=='nat' and old.get('management_mode')=='shared-interface':new['peers']=sorted(set(old['peers'])-{address})
  entries.append({'policy':new,'path':path,'kind':kind,'runtime':runtime,
                  'new_address':address,'runtime_sha256':file_hash(runtime)})
 machine=__import__('hashlib').sha256(peer.read('/etc/machine-id').strip()).hexdigest()

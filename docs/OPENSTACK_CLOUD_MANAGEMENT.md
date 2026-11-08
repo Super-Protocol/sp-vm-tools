@@ -33,6 +33,13 @@ inventory. Bootstrap and existing inter-host connectivity remain prerequisites.
 No CC downgrade or automatic bootstrap occurs. Only the single-controller profile
 is supported; HA/failover is separate.
 
+The prepared Kolla checkout normally belongs to the unprivileged environment
+owner, while maintenance runs with sudo. Pinned template, Docker and compute-scope
+Git reads use per-command `safe.directory` for that exact canonical checkout.
+No global Git configuration is changed and no wildcard trust is installed.
+Do not work around an ownership error with `safe.directory=*`; use the matched
+installer/backend containing the scoped checks instead.
+
 ## State, provenance and secrets
 
 Root-private `/var/lib/spvm/cloud-management` holds a pointer and checksummed
@@ -63,6 +70,15 @@ no service SSH identity, new port or arbitrary-command endpoint is introduced.
 Current budgets, pools, GPUs and Enable/Disable remain authoritative in protected
 host state/typed APIs, not the snapshot. New hosts are UNCONFIGURED/disabled;
 existing resources and guests are not reset.
+
+On shared-interface networks membership also updates the existing hosts' owned
+management allowlists, including controller-only hosts. Geneve peers and the NAT
+owner's probe sources change only by the selected host address. NAT probe rules
+are updated under the old management guard, followed by the management guard and
+its persistent NAT peer copy. Every step checks the installed runtime and live
+rules; IPv6 guards, jumps, terminal drops, other firewall rules, interfaces and
+routes are retained. Removal contracts these same lists. No public port is
+opened. A partial network change remains NEEDS_REVIEW, not an automatic retry.
 
 Back up the complete controller directory and referenced installed controller
 components, plus normal OpenStack databases/credentials/configuration. This kit

@@ -100,21 +100,31 @@ def peer_network(value,module,runner,cfg,spec,outer,*,approved=None,output=None)
     import ipaddress
     management_ip=str(ipaddress.IPv4Interface(network_request['hosts'][value['host']]['management_address']).ip)
     for name,host in cfg['hosts'].items():
-        if name==value['host'] or not set(host['roles']) & {'compute','network'}:continue
+        if name==value['host']:continue
         args=argparse.Namespace(config=value['config'],host=name,
             network_request=spec['geneve_request'],action='plan-geneve-guard',
             allow_experimental_ubuntu26=outer['allow_experimental_ubuntu26'])
-        _,policy,binding=geneve.inputs(args,module)
-        entries=[{'policy':policy,'path':'/etc/spvm-network/spvm-geneve-'+cfg['deployment_id']+'.json',
+        entries=[];binding=network_request['hosts'][name]
+        if set(host['roles']) & {'compute','network'}:
+            _,policy,geneve_binding=geneve.inputs(args,module)
+            if geneve_binding['machine_sha256']!=binding['machine_sha256']:raise ValueError('peer machine bindings differ')
+            entries.append({'policy':policy,'path':'/etc/spvm-network/spvm-geneve-'+cfg['deployment_id']+'.json',
                   'kind':'geneve','runtime':geneve.RUNTIME,
                   'new_address':geneve_request['hosts'][value['host']]['tunnel_ip'],
-                  'runtime_sha256':file_hash(Path(__file__).with_name('openstack_geneve_runtime.py'))}]
+                  'runtime_sha256':file_hash(Path(__file__).with_name('openstack_geneve_runtime.py'))})
+        if cfg['network'].get('management_mode','dedicated')=='shared-interface':
+            args.network_request=spec['network_request'];args.action='plan-management'
+            _,management,_=network.inputs(args,module)
+            entries.append({'policy':management,'path':'/etc/spvm-host-network/spvm-management-'+cfg['deployment_id']+'.json',
+                'kind':'management','runtime':network.RUNTIME,'new_address':management_ip,
+                'runtime_sha256':file_hash(Path(__file__).with_name('openstack_network_runtime.py'))})
         if name==network_request['nat']['host']:
             args.network_request=spec['network_request'];args.action='plan-nat'
             _,nat,_=network.inputs(args,module)
             entries.append({'policy':nat,'path':'/etc/spvm-host-network/spvm-nat-'+cfg['deployment_id']+'.json',
                 'kind':'nat','runtime':network.RUNTIME,'new_address':management_ip,
                 'runtime_sha256':file_hash(Path(__file__).with_name('openstack_network_runtime.py'))})
+        if not entries:continue
         data={'entries':entries,'machine':binding['machine_sha256'],'apply':approved is not None,
             'before':None if approved is None else approved[name],
             'output':None if output is None else '/var/lib/spvm-installer/'+cfg['deployment_id']+'/peer-'+digest(str(output))[:24]}

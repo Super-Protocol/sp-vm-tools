@@ -50,6 +50,21 @@ def deletions(before,after):
     return [['-D',*row[1:]] for row in before if row not in after]
 
 
+def policy_change(old,new,kind,address,removing=False):
+    fields={'geneve':{'peers'},'management':{'peers'},'nat':{'probe_sources'}}
+    if kind not in fields:raise ValueError('unknown owned peer policy kind')
+    allowed=fields[kind].copy()
+    if kind!='geneve':
+        if old.get('phase')!=kind:raise ValueError('peer policy phase differs')
+        if kind=='management' and old.get('management_mode')!='shared-interface':
+            raise ValueError('peer management changes require shared-interface mode')
+        if kind=='nat' and old.get('management_mode')=='shared-interface':allowed.add('peers')
+    if {k:v for k,v in old.items() if k not in allowed}!={k:v for k,v in new.items() if k not in allowed}:
+        raise ValueError('only the selected compute peer addresses may change')
+    change=contraction if removing else extension
+    for field in allowed:change({field:old[field]},{field:new[field]},field,address)
+
+
 class Peer:
     removing=False
     def __init__(self,root=Path('/'),runner=subprocess.run):
@@ -92,10 +107,17 @@ class Peer:
         for entry in entries:
             module=self.load(entry);old=module.validate(json.loads(self.read(entry['path'],65536)))
             new=module.validate(entry['policy']);kind=entry['kind']
-            change=contraction if self.removing else extension
-            change(old,new,'peers' if kind=='geneve' else 'probe_sources',entry['new_address'])
+            if kind in result or any(entry['path']==e['path'] for e in entries if e is not entry):
+                raise ValueError('duplicate owned peer policy')
+            policy_change(old,new,kind,entry['new_address'],self.removing)
             result[kind]={'before':old,'after':new,'state':self.state(module,old,kind),
                 'file_sha256':hashlib.sha256(self.read(entry['path'],65536)).hexdigest()}
+        nat=result.get('nat');management=result.get('management')
+        if nat and nat['before'].get('management_mode')=='shared-interface':
+            if not management:raise ValueError('shared NAT requires coordinated management policy')
+            for stage in ('before','after'):
+                for key in ('peers','deployment_id','machine_sha256','management_address','management_interface'):
+                    if nat[stage][key]!=management[stage][key]:raise ValueError('shared peer policies disagree')
         return result
 
     def put(self,name,body):
@@ -130,14 +152,27 @@ class Peer:
             from openstack_container_engine import write
             journal=folder/'transaction.json';write(journal,{'status':'APPLYING','before':before})
             try:
-                for entry in entries:
+                # NAT probe rules are changed while the old management guard is
+                # still active. Then update that guard, and finally synchronize
+                # the NAT policy's copy of its peers. Each step validates its
+                # own live rules and protects all other chains. No permissive
+                # intermediate guard, flush, service restart or route change.
+                ordered=sorted(entries,key=lambda e:('geneve','nat','management').index(e['kind']))
+                for entry in ordered:
                     kind=entry['kind'];old=before[kind]['before'];new=before[kind]['after'];module=self.load(entry)
                     if old==new:continue
+                    if kind=='nat' and old.get('management_mode')=='shared-interface':
+                        new={**new,'peers':old['peers']}
                     expected=self.state(module,old,kind)
                     (folder/(kind+'.before.json')).write_bytes(self.read(entry['path'],65536))
                     if kind=='geneve':
                         oldrows,oldjump=module.rules(old);newrows,newjump=module.rules(new)
                         if oldjump!=newjump:raise ValueError('Geneve jump must remain unchanged')
+                        tables={'filter':(oldrows,newrows)}
+                    elif kind=='management':
+                        oldrows,oldjumps=module.management_rules(old);newrows,newjumps=module.management_rules(new)
+                        if (oldjumps!=newjumps or module.management_rules(old,True)!=module.management_rules(new,True)):
+                            raise ValueError('management jumps and IPv6 rules must remain unchanged')
                         tables={'filter':(oldrows,newrows)}
                     else:
                         tables={}
@@ -157,6 +192,18 @@ class Peer:
                     if hashlib.sha256(self.read(entry['path'],65536)).hexdigest()!=before[kind]['file_sha256']:
                         raise ValueError('peer policy changed concurrently; not overwriting it')
                     self.put(entry['path'],(json.dumps(new,sort_keys=True,indent=2)+'\n').encode())
+                for entry in ordered:
+                    if entry['kind']!='nat' or before['nat']['before'].get('management_mode')!='shared-interface':continue
+                    new=before['nat']['after'];old=before['nat']['before']
+                    intermediate={**new,'peers':old['peers']}
+                    if json.loads(self.read(entry['path'],65536))!=intermediate:
+                        raise ValueError('NAT policy changed during coordinated peer update')
+                    self.state(self.load(entry),new,'nat')
+                    self.put(entry['path'],(json.dumps(new,sort_keys=True,indent=2)+'\n').encode())
+                for entry in ordered:
+                    if json.loads(self.read(entry['path'],65536))!=before[entry['kind']]['after']:
+                        raise ValueError('final peer policy differs')
+                    self.state(self.load(entry),entry['policy'],entry['kind'])
                 write(journal,{'status':'PEER_NETWORK_READY','services_restarted':False})
             except BaseException:
                 write(journal,{'status':'NEEDS_REVIEW','services_restarted':False});raise
