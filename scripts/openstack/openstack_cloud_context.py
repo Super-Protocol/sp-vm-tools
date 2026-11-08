@@ -166,6 +166,8 @@ pack(generation/'payload', sys.stdout.buffer)
         sys.path[:0] = [str(self.backend_path.parent), str(self.driver / 'nova-spvm')]
         module = load_module(self.backend_path, 'installer'); sys.modules['installer'] = module
         self.module = module
+        import openstack_prebuilt as prebuilt
+        prebuilt.verify_installer(prebuilt.selected(self.backend_path))
         transport = load_module(self.backend_path.with_name('ssh_transport.py'), 'cloud_ssh')
         ssh = transport.resolve(self.args.identity_file, self.args.known_hosts)
         os.environ['SPVM_INSTALLER_SSH_POLICY'] = json.dumps(ssh)
@@ -282,7 +284,7 @@ def snapshot(directory, *, workspace, config, base, driver, environment, identit
     """Build a portable generation from verified current inputs, never a venv/run."""
     directory = Path(directory); directory.mkdir(mode=0o700)
     for source, destination in ((workspace, 'workspace'),
-                                (Path(base) / 'launcher', 'launcher'), (Path(base) / 'compute-package', 'compute-package')):
+                                (Path(base) / 'launcher', 'launcher')):
         store.copy_tree(source, directory / destination)
     copy_driver(driver, directory / 'driver')
     # Preserve only sealed workspace members, not logs, historical successors or caches.
@@ -291,8 +293,6 @@ def snapshot(directory, *, workspace, config, base, driver, environment, identit
     raw = copy.deepcopy(yaml.safe_load(Path(config).read_bytes()))
     for host in raw['hosts'].values(): host.pop('ssh_transport', None); host.pop('identity_file', None)
     raw['driver'] = {'directory': DRIVER}
-    for key in ('skyline_console_context', 'skyline_console_context_sha256'):
-        raw['kolla'].pop(key, None)
     write(directory / 'deployment.yaml', raw)
     write(directory / 'network.json', network if network is not None else json.loads((Path(base) / 'network.json').read_bytes()))
     environment_record = json.loads((Path(environment) / 'environment.json').read_bytes())
@@ -347,7 +347,7 @@ def copy_driver(source, target):
     """Only manifest-bound driver files; never incidental operator files/caches."""
     source = Path(source); target = Path(target); target.mkdir(mode=0o700)
     manifest_file = source/'manifest.json'; manifest = json.loads(manifest_file.read_bytes())
-    files = {'manifest.json': file_hash(manifest_file), **manifest['source_sha256'],
+    files = {'manifest.json': file_hash(manifest_file), **manifest['source_sha256'], **manifest['kit_files_sha256'],
              **{'wheels/'+name: sha for name, sha in manifest.get('wheel_sha256', {}).items()}}
     for relative, expected in files.items():
         store.name(relative); path = source/relative

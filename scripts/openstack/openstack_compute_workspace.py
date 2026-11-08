@@ -9,7 +9,7 @@ from pathlib import Path
 import tempfile
 
 import yaml
-from openstack_compute_image import read
+from openstack_artifact_inputs import read
 from openstack_container_engine import digest, file_hash, write
 from openstack_compute_identity import native_uuid
 from openstack_host_helper import source_manifest

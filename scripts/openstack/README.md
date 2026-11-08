@@ -80,18 +80,12 @@ phases; bare-host provisioning and general upgrades are not implied.
 
 Operator guide: [`../../docs/OPENSTACK_DEPLOYMENT.md`](../../docs/OPENSTACK_DEPLOYMENT.md).
 
-`openstack_skyline.py` provides `stage-skyline-console` / `build-skyline-console`
-and `stage-skyline-runtime` (matching source-verified client wheel, isolated SDK,
-web/capacity/publisher unit rendering; no live unit changes).
-Staging delegates the complete overlay to the selected swarm-cloud bundle's
-`deployment/skyline/build_context.py`; no branding/UI implementation is copied
-into this repository. The offline build requires a checksum-approved context,
-cached immutable base and new local tag, verifies upstream runtime defaults and
-emits the image ID plus persistent Kolla overrides. It never replaces containers
-or reconfigures Kolla. Matching web/client/capacity services still require reviewed
-installation, and merely staging an override does not make an existing Kolla
-workspace consume it. See the selected bundle's Skyline README for exact commands,
-template handling and the opt-in root-delegated publication worker.
+`openstack_skyline.py` provides only `stage-skyline-runtime`: source-verified
+client wheel, isolated SDK and non-root web/capacity/publisher unit rendering,
+without live unit changes. The frontend and nginx artifacts come from the
+coordinated CI kit; no local image build or compiled JavaScript modifier remains.
+Runtime installation and root-delegated publication retain their reviewed
+permissions, provenance and WAL boundaries.
 
 `openstack_compute_identity.py` adds native Kolla/Ansible helper-request UUID
 generation (`stage-kolla-identities`), using audited kernel nodenames, not aliases.
@@ -230,13 +224,12 @@ requires an empty quarantined registered compute and remains quarantined until
 separate runtime/Placement/network acceptance. See guide §10.26 for requests,
 approval/recovery and the precise live-NOOP versus fixture-replacement boundary.
 
-`openstack_skyline_prepare.py` owns `plan-skyline-preparation` / `prepare-skyline`:
-one approved offline transaction stages the selected bundle's complete overlay,
-builds a new immutable local image, clones/validates the matching client runtime
-and emits deployment.yaml plus the common workflow's Skyline input. Completed
-repeats verify rather than rebuild; failures preserve evidence and refuse replay.
-No services or guests are replaced. See the guide's common workflow section for
-the exact request and the remaining enrollment/clean-install boundaries.
+Current images are supplied by a coordinated CI kit. `openstack_prebuilt.py`
+verifies manifests and source compatibility without manager Docker, then target
+hosts pull exact digests and confirm config IDs. CI-owned console/nginx metadata
+is sealed into the workspace and controller kit. Old local builders, archive
+transport and console build-context commands have been removed. See
+[prebuilt images](../../docs/OPENSTACK_PREBUILT_IMAGES.md).
 
 `openstack_host_budgets.py` processes explicit private administrator requests on
 empty hosts only, including for increases. It checks all projects, Placement,

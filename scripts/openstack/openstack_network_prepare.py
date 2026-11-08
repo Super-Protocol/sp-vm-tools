@@ -12,7 +12,7 @@ import sys
 import time
 import traceback
 
-from openstack_compute_image import read
+from openstack_artifact_inputs import read
 from openstack_container_engine import digest, file_hash, write
 import openstack_geneve_guard as guard
 import openstack_initial_probe as probe

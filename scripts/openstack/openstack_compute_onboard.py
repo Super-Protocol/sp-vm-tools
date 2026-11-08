@@ -12,15 +12,15 @@ import re
 import tempfile
 import openstack_progress as progress
 
-from openstack_compute_image import read
+from openstack_artifact_inputs import read
 from openstack_container_engine import digest, file_hash, write
 import openstack_container_engine as engine
 import openstack_host_helper as helper
-import openstack_image_transfer as transfer
+import openstack_prebuilt as prebuilt
 import openstack_launcher as launcher
 
 FIELDS={'schema_version','network_request','geneve_request','launcher_stage',
-        'launcher_sha256','image_package','image_package_sha256','image_reserve_gib'}
+        'launcher_sha256','installation_kit','installation_kit_sha256','image_reserve_gib'}
 
 
 @contextmanager
@@ -40,10 +40,10 @@ def specification(filename):
     value=json.loads(read(filename))
     if (type(value) is not dict or set(value)!=FIELDS or type(value['schema_version']) is not int
             or value['schema_version']!=1):raise ValueError('exact compute preparation recipe required')
-    for key in ('network_request','geneve_request','launcher_stage','image_package'):
+    for key in ('network_request','geneve_request','launcher_stage','installation_kit'):
         p=Path(value[key])
         if not p.is_absolute() or p.resolve()!=p:raise ValueError('canonical preparation inputs required')
-    for key in ('launcher_sha256','image_package_sha256'):
+    for key in ('launcher_sha256','installation_kit_sha256'):
         if not isinstance(value[key],str) or not re.fullmatch('[a-f0-9]{64}',value[key]):
             raise ValueError('explicit preparation artifact approval required')
     if type(value['image_reserve_gib']) is not int or value['image_reserve_gib']<1:
@@ -72,8 +72,8 @@ def inputs(value,path,module):
     dependencies.role(receipt)
     dependencies.ca(outer['configdir'],cfg['deployment_id'])
     assembled,files=launcher.verify(path,spec['launcher_stage'],spec['launcher_sha256'])
-    package=transfer.package(spec['image_package'],spec['image_package_sha256'])
-    if package['image_id']!=wanted['image_id'] or package['tag']!=cfg['kolla']['compute_image']:
+    kit=prebuilt.file(path,spec['installation_kit'],spec['installation_kit_sha256'])
+    if kit['images']['compute']['config_id']!=wanted['image_id'] or kit['images']['compute']['reference']!=cfg['kolla']['compute_image']:
         raise ValueError('preparation image differs from the existing cloud driver')
     runtime=helper.bootstrap_policy(wanted['bootstrap_runtime']['auth_url'],wanted['bootstrap_runtime']['region_name'])
     if runtime!=wanted['bootstrap_runtime']:raise ValueError('deny-all bootstrap runtime required')
@@ -167,7 +167,7 @@ def hostnames(value,module,runner,cfg,spec,*,approved=None,output=None):
         identities[name]=identity
     results={}
     modules=('openstack_hostnames.py','openstack_compute_identity.py','openstack_host_helper.py',
-             'openstack_compute_image.py','openstack_container_engine.py')
+             'openstack_artifact_inputs.py','openstack_container_engine.py')
     for name in cfg['hosts']:
         wanted={'schema_version':1,'machine_sha256':identities[name]['machine'],'mappings':mappings}
         data={'request':wanted,'apply':approved is not None,'before':None if approved is None else approved[name],
@@ -192,7 +192,7 @@ else:
 
 
 def input_hashes(filename,path):
-    """Bind transitive artifacts, including a streamed hash of the image archive."""
+    """Bind transitive artifacts, including exact CI manifest and image identities."""
     spec=specification(filename)
     result={str(filename):file_hash(filename)}
     for key in ('network_request','geneve_request'):
@@ -200,9 +200,10 @@ def input_hashes(filename,path):
     launcher.verify(path,spec['launcher_stage'],spec['launcher_sha256'])
     for p in sorted(Path(spec['launcher_stage']).rglob('*')):
         if p.is_file():result[str(p)]=file_hash(p)
-    package=transfer.package(spec['image_package'],spec['image_package_sha256'])
-    result[str(Path(spec['image_package'])/'image-package.json')]=file_hash(Path(spec['image_package'])/'image-package.json')
-    result[str(Path(spec['image_package'])/'image.tar')]=package['archive_sha256']
+    kit=prebuilt.file(path,spec['installation_kit'],spec['installation_kit_sha256'])
+    root=Path(spec['installation_kit']).parent
+    for name in ('installation-kit.json',*kit['files_sha256']):
+        result[str(root/name)]=file_hash(root/name)
     result['helper-source-snapshot-sha256']=digest({name:{'mode':mode,
         'sha256':hashlib.sha256(body).hexdigest()} for name,(body,mode) in helper.sources(path).items()})
     manifest=Path(path).parent.parent/'manifest.json'
@@ -347,14 +348,9 @@ def execute(value,path,module,output,runner,approved):
                 '/var/lib/spvm-installer/'+cfg['deployment_id']+'/helper-'+digest(str(output))[:24],apply=True,before=helper_before)
         record['completed'].append('helper');record['phase']='DRIVER_IMAGE';write(journal,record)
         host=cfg['hosts'][value['host']]
-        args=argparse.Namespace(package=spec['image_package'],package_sha256=spec['image_package_sha256'],
-            host=host['user']+'@'+host['address'],identity_file=host.get('identity_file'),
-            known_hosts=value['known_hosts'],ssh_port=host.get('port',22),
-            machine_sha256=wanted['helper_request']['machine_sha256'],
-            reserve_gib=spec['image_reserve_gib'],output=str(output/'image-delivery'))
-        with progress.step('driver-image',host=value['host'],log=output/'image-delivery/private-transport.log'):
-            result=transfer.deliver(args)
-        if result['status']!='COMPUTE_IMAGE_DELIVERED_NOT_DEPLOYED':raise ValueError('image delivery incomplete')
+        kit=prebuilt.file(path,spec['installation_kit'],spec['installation_kit_sha256'])
+        prebuilt.pull(path,host,kit,'compute',wanted['helper_request']['machine_sha256'],
+                      output/'image-delivery',reserve_gib=spec['image_reserve_gib'])
         if deploy.controller(runner)!=approved['controller'] or deploy.cloud(runner)!=approved['cloud']:
             raise ValueError('existing controller or cloud workloads changed')
         record.update(status='HOST_PREPARED_NOT_DEPLOYED',phase='COMPUTE_DEPLOY')

@@ -26,7 +26,7 @@ def desired_configuration(active,requested,name):
     for key in ('series','revision','base_distro'):
         if requested['kolla'][key]!=result['kolla'][key]:raise InstallerError('Use the active cloud Kolla kit, not an upgrade request.')
     for key,value in requested['kolla'].items():
-        if key not in ('skyline_console_context','skyline_console_context_sha256') and key in result['kolla'] and value!=result['kolla'][key]:
+        if key != 'installation_kit' and key in result['kolla'] and value!=result['kolla'][key]:
             raise InstallerError('Requested image/version differs from the active cloud; update it separately.')
     for peer,host in result['hosts'].items():
         if peer not in requested['hosts']:raise InstallerError('Existing hosts must remain in deployment YAML.')
@@ -154,16 +154,16 @@ class Addition:
         facts=actor(self.runner,host,self.identity,self.pools)
         classification=target.classify(facts,cloud,self.identity,self.proof)
         import openstack_launcher as launcher
-        import openstack_image_transfer as transfer
+        import openstack_prebuilt as prebuilt
         self.launcher,self.launcher_files=launcher.verify(self.i.path,self.base/'launcher')
-        package_sha=read_document(self.base/'compute-package/image-package.json')['package_sha256']
-        self.package=transfer.package(self.base/'compute-package',package_sha)
-        if self.package['image_id']!=cfg['kolla']['compute_image_id'] or self.package['tag']!=cfg['kolla']['compute_image']:
+        self.kit=prebuilt.selected(self.i.path,online=True)
+        if (self.kit['images']['compute']['config_id']!=cfg['kolla']['compute_image_id']
+                or self.kit['images']['compute']['reference']!=cfg['kolla']['compute_image']):
             raise InstallerError('The saved cloud compute image differs; select a complete matching installation kit.')
         from openstack_compute_prepare import controller,verify_network_mtu
         return {'kind':'add-compute-v1','classification':classification,'facts':facts,'cloud':cloud,
             'controller':controller(self.runner),'network_mtu':verify_network_mtu(self.runner,cfg),
-            'launcher':self.launcher,'package':self.package}
+            'launcher':self.launcher,'images':self.kit['images']}
 
     def native(self,action,plan,executor=None):
         # The fixed controller operation uses only installed, verified native
@@ -194,9 +194,7 @@ else:
   old=b['config'];v=json.loads(policy.read_bytes());name=r['host'];new=r['config']
   # Translate only the manager driver path; preserve every native existing host.
   new['driver']=old['driver']
-  for key in ('skyline_console_context','skyline_console_context_sha256'):
-   if key in old['kolla']:new['kolla'][key]=old['kolla'][key]
-   else:new['kolla'].pop(key,None)
+  new['kolla']['installation_kit']=old['kolla']['installation_kit']
   if name in old['hosts'] or {k:x for k,x in new.items() if k!='hosts'}!={k:x for k,x in old.items() if k!='hosts'} or any(new['hosts'].get(n)!=h for n,h in old['hosts'].items()):raise ValueError('only an additive compute configuration is allowed')
   if set(new['hosts'])!=set(old['hosts'])|{name} or new['hosts'][name]['roles']!=['compute']:raise ValueError('exact compute addition required')
   directory=claim.parent/('addition-'+r['operation']);directory.mkdir(mode=0o700)
@@ -244,8 +242,9 @@ print(json.dumps({'status':record['status']}))
         # Existing service configuration, password store and public CA are reused.
         write(self.output/'preparation-recipe.json',{'schema_version':1,'network_request':str(self.output/'network.json'),
             'geneve_request':str(self.output/'geneve.json'),'launcher_stage':str(self.base/'launcher'),
-            'launcher_sha256':self.launcher['receipt_sha256'],'image_package':str(self.base/'compute-package'),
-            'image_package_sha256':self.package['package_sha256'],'image_reserve_gib':10})
+            'launcher_sha256':self.launcher['receipt_sha256'],
+            'installation_kit':str(i.path.parent.parent/'installation-kit.json'),
+            'installation_kit_sha256':file_hash(i.path.parent.parent/'installation-kit.json'),'image_reserve_gib':10})
         runtime=self.runner.remote(self.c.controller,"import json;from pathlib import Path;print(json.dumps(json.loads(Path('/etc/spvm/runtime-services.json').read_bytes())))")
         if runtime['auth_url']!=self.binding['bootstrap_runtime']['auth_url']:raise InstallerError('Existing runtime belongs to a different cloud.')
         from nova_spvm.launch_policy import admit,PolicyError
@@ -257,7 +256,7 @@ print(json.dumps({'status':record['status']}))
                 allowed.append(release)
             project['releases']=allowed
         wanted={'schema_version':1,'helper_request':self.helper,'bootstrap_runtime':self.binding['bootstrap_runtime'],
-            'runtime':runtime,'image_id':self.binding['image_id'],'image_context_sha256':self.binding['image_context_sha256'],
+            'runtime':runtime,'image_id':self.binding['image_id'],'driver_wheel_sha256':self.binding['driver_wheel_sha256'],
             'enrollment_sha256':digest({'runtime':runtime,'helper':self.helper})}
         from openstack_runtime_enrollment import load_backend
         wanted=load_backend(i.path).request(wanted);write(self.output/'enrollment.json',wanted)

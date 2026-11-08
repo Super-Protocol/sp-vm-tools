@@ -16,36 +16,6 @@ import openstack_progress as progress
 from openstack_container_engine import digest, file_hash, write
 from openstack_errors import InstallerError
 
-# The reviewed Noble bases used by this installer profile, not floating tags.
-BASES = {
-    'compute': 'quay.io/openstack.kolla/nova-compute@sha256:f6c91e2c4f51f6b83a320a1000a7f96d8214df070766401206bc957236b40b9d',
-    'console': 'quay.io/openstack.kolla/skyline-console@sha256:28c3fcc9be0785f65f39df2ddd5e0ad0658994db2182104b461b317c385901b4',
-}
-
-
-def check_base_images(options):
-    """Inspect pinned registry metadata before any host mutation; never pull layers."""
-    import openstack_compute_image as image
-    bases = {key: options.get(key + '_base_image', value) for key, value in BASES.items()}
-    for key, reference in bases.items():
-        if not isinstance(reference, str) or not image.BASE_RE.fullmatch(reference):
-            raise InstallerError(key + ' base image must be an immutable repository@sha256 reference.')
-        try:
-            manifest = json.loads(image.docker(['manifest', 'inspect', reference]).stdout)
-            entries = manifest.get('manifests')
-            if entries is not None and not any(
-                    m.get('platform', {}).get('os') == 'linux'
-                    and m.get('platform', {}).get('architecture') == 'amd64' for m in entries):
-                raise ValueError('no linux/amd64 manifest')
-            if entries is None and not manifest.get('config', {}).get('digest'):
-                raise ValueError('invalid image manifest')
-        except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError):
-            raise InstallerError('Cannot verify ' + key + ' base image in its registry. '
-                'The pinned manifest may be unavailable, access may be denied, or registry/network inspection failed. '
-                'No installation phase was started. Check registry access and the pinned base-image configuration.') from None
-    return bases
-
-
 def document(path, value):
     path = Path(path)
     with path.open('x') as stream:
@@ -88,7 +58,9 @@ class Installation:
                     raise InstallerError('Host '+str(name)+': installation resource fields are not accepted: '+', '.join(sorted(forbidden))+
                         '. Configure resources after installation through GUI or CLI/API, then explicitly Enable the host.')
         self.options = self.raw.pop('installation', {})
-        allowed = {'guest_cidr', 'region', 'allow_debug', 'compute_base_image', 'console_base_image'}
+        allowed = {'guest_cidr', 'region', 'allow_debug'}
+        if isinstance(self.options, dict) and {'compute_base_image', 'console_base_image'} & set(self.options):
+            raise InstallerError('Base-image overrides are not accepted. Select a separately built, coordinated CI installation kit.')
         if not isinstance(self.options, dict) or set(self.options) - allowed:
             raise InstallerError('Unknown installation option; executable phase recipes are not supported.')
         if type(self.options.get('allow_debug', False)) is not bool:
@@ -111,6 +83,8 @@ class Installation:
         sys.path[:0] = [str(self.path.parent), str(self.path.parent.parent / 'nova-spvm')]
         self.backend = load_module(self.path, 'installer')
         sys.modules['installer'] = self.backend
+        import openstack_prebuilt as prebuilt
+        prebuilt.verify_installer(prebuilt.selected(self.path))
         transport = load_module(self.path.with_name('ssh_transport.py'), 'installation_ssh')
         self.ssh = transport.resolve(args.identity_file, args.known_hosts)
         os.environ['SPVM_INSTALLER_SSH_POLICY'] = json.dumps(self.ssh, sort_keys=True)
@@ -175,9 +149,8 @@ class Installation:
                 '--yes and --allow-experimental-ubuntu26 do not imply this acknowledgement. No host preparation was started.')
         from basic_preflight import check
         self.verify_environment()
-        from openstack_install_artifacts import console_builder
-        console_builder(self, ['--check-base-image', self.options.get('console_base_image', BASES['console'])])
-        check_base_images(self.options)
+        from openstack_prebuilt import selected
+        selected(self.path, online=True)
         document(self.config, self.raw)
         self.cfg=self.backend.deployment_config(self.config)
         controls = [n for n, h in self.cfg['hosts'].items() if 'control' in h['roles']]
@@ -228,12 +201,6 @@ print(json.dumps({'status':'FRESH_HOST_CHECKED','haproxy':ha}))
                 self.haproxy_initial=observed['haproxy']
                 if self.haproxy_initial['active']=='active' or self.haproxy_initial['enabled']=='enabled':
                     blockers.append(name+': existing enabled/active native HAProxy requires administrator review')
-        import openstack_compute_image as image
-        try:image.docker(['info', '--format', '{{.ServerVersion}}'])
-        except (OSError,ValueError,subprocess.SubprocessError):
-            raise InstallerError('A working local Docker engine is required to assemble the matched Nova/Skyline images. '
-                'Check docker info on the management machine. The environment preparer installs Python environments only; '
-                'this command does not install or repair Docker on the management machine.') from None
         import openstack_launcher as launcher
         recipe,_,_=launcher.recipe(self.path)
         launcher.stage(self.path,str(Path(__file__).resolve().parents[2]),recipe['tools_commit'],str(self.output/'checked-launcher'))
@@ -351,8 +318,9 @@ print(json.dumps({'status':'FRESH_HOST_CHECKED','haproxy':ha}))
         self.requests = requests
         write(self.output / 'requests.json', {'schema_version': 1, 'hosts': requests})
         result = compute.stage(R(config=self.config, rendered=self.rendered, workspace=self.workspace,
-            requests=str(self.output / 'requests.json'), image_context=str(self.output / 'compute-context'),
-            image_context_sha256=self.compute_context_sha, region=self.region,
+            requests=str(self.output / 'requests.json'),
+            installation_kit=str(self.path.parent.parent / 'installation-kit.json'),
+            installation_kit_sha256=file_hash(self.path.parent.parent / 'installation-kit.json'), region=self.region,
             output=str(self.output / 'kolla-bound')), self.path, self.backend, kolla_inputs)
         self.workspace = str(self.output / 'kolla-bound')
         return result
@@ -453,21 +421,14 @@ print(json.dumps({'status':'NEW_HAPROXY_DISABLED_UNTIL_INGRESS_APPROVAL'}))
         return {'status': 'ALL_HOST_HELPERS_READY_DENY_ALL'}
 
     def install_images(self):
-        import openstack_image_transfer as transfer
-        build = self.output / 'compute-build/image-build.json'
-        package = self.output / 'compute-package'
-        exported = transfer.export(R(build_receipt=str(build), build_sha256=file_hash(build),
-            image_id=self.cfg['kolla']['compute_image_id'], reserve_gib=10, output=str(package)))
-        for name, h in self.cfg['hosts'].items():
-            if 'compute' not in h['roles']: continue
-            with progress.step('driver-image',host=name,log=self.output/('delivery-'+name)/'private-transport.log'):
-                transfer.deliver(R(package=str(package), package_sha256=exported['package_sha256'],
-                    host=h['user'] + '@' + h['address'], identity_file=None, known_hosts=self.known_hosts,
-                    ssh_port=h.get('port', 22), machine_sha256=self.audits[name]['host_identity_sha256'],
-                    reserve_gib=10, output=str(self.output / ('delivery-' + name))))
-        # The console image is needed only on its single controller; no Docker TCP API is exposed.
-        from openstack_install_artifacts import deliver_console
-        deliver_console(self)
+        import openstack_prebuilt as prebuilt
+        kit = prebuilt.selected(self.path)
+        for name, host in self.cfg['hosts'].items():
+            if 'compute' not in host['roles']: continue
+            prebuilt.pull(self.path, host, kit, 'compute', self.audits[name]['host_identity_sha256'],
+                          self.output / ('delivery-' + name))
+        prebuilt.pull(self.path, self.cfg['hosts'][self.controller], kit, 'console',
+                      self.audits[self.controller]['host_identity_sha256'], self.output / 'console-delivery')
         return {'status': 'ALL_HOST_IMAGES_DELIVERED_NOT_STARTED'}
 
     def install_kolla(self):

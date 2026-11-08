@@ -81,6 +81,8 @@ def backend(directory, *, verified_bundle=False):
         base = path.parent.parent
         manifest = json.loads((base/'manifest.json').read_text())
         hashes = manifest.get('source_sha256')
+        if 'prebuilt-openstack-images-v1' not in manifest.get('capabilities',[]):
+            raise ValueError('Driver kit lacks prebuilt-openstack-images-v1. Select a new CI kit; no local image build or old workspace migration is supported.')
         if 'manual-host-resource-lifecycle-v1' not in manifest.get('capabilities',[]):
             raise ValueError('Driver kit lacks manual-host-resource-lifecycle-v1. Use a matching new kit; old configurations and workspaces are not migrated.')
         if 'controller-cloud-management-v1' not in manifest.get('capabilities',[]):
@@ -89,7 +91,10 @@ def backend(directory, *, verified_bundle=False):
                 or not re.fullmatch('[a-f0-9]{40}', str(manifest.get('source_commit', '')))
                 or not isinstance(hashes, dict) or 'deployment/installer.py' not in hashes):
             raise ValueError('clean commit bundle with source checksums required')
-        for name, expected in hashes.items():
+        artifacts = manifest.get('kit_files_sha256')
+        if not isinstance(artifacts, dict) or set(artifacts) != {'installation-kit.json','console-component.json','console-manifest.json','nginx.conf.j2'}:
+            raise ValueError('Complete prebuilt installation kit artifact hashes required')
+        for name, expected in {**hashes, **artifacts}.items():
             part = PurePosixPath(name)
             if (part.is_absolute() or '..' in part.parts or '\\' in name
                     or part.as_posix() != name or not re.fullmatch('[a-f0-9]{64}', str(expected))):
@@ -162,8 +167,7 @@ def main(argv=None):
         'Offline runtime: stage-runtime-enrollment, check-runtime-enrollment, plan-runtime-enrollment, install-runtime-enrollment. '
         'Initial host ingress: stage-ingress, check-ingress, plan-ingress, install-ingress, plan-ingress-activation, activate-ingress. '
         'Root-approved UI publication: plan-spvm-publication, publish-spvm-ui. '
-        'Complete offline Skyline preparation: plan-skyline-preparation, prepare-skyline. '
-        'Individual phases: stage-skyline-console, build-skyline-console, stage-skyline-runtime. '
+        'Driver-owned web API runtime: stage-skyline-runtime. Console images are supplied by the CI kit. '
         'Fresh web services: plan-skyline-runtime, install-skyline-runtime (never overwrite occupied units). '
         'Prepared empty compute: plan-compute-activation, activate-compute. '
         'Retire a reachable empty compute-only host: plan-remove-compute, remove-compute. '
@@ -180,8 +184,7 @@ def main(argv=None):
         'Host SDK / public API trust: plan-host-sdk, prepare-host-sdk, plan-api-trust, prepare-api-trust. '
         'Root-local fresh helper: plan-host-helper, prepare-host-helper. '
         'Measured launcher assembly: stage-launcher, check-launcher. '
-        'Offline compute image: stage-compute-image, build-compute-image. '
-        'Image transport: export-compute-image, import-compute-image, deliver-compute-image. '
+        'Matched Nova and Skyline images are retrieved on target hosts by immutable CI-kit digest. '
         'General fresh deploy remains gated; this wrapper does not bypass it.'))
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument('--driver-dir', help='Trusted swarm-cloud checkout or expanded bundle')
@@ -250,13 +253,10 @@ def main(argv=None):
         if remaining[0] in ('plan-hostnames','prepare-hostnames'):
             from openstack_hostnames import main as hostnames
             return hostnames(remaining)
-        if remaining[0] in ('plan-skyline-preparation','prepare-skyline'):
-            from openstack_skyline_prepare import main as skyline_prepare
-            return skyline_prepare(path, remaining)
         if remaining[0] in ('plan-skyline-runtime', 'install-skyline-runtime'):
             from openstack_skyline_runtime import main as skyline_runtime
             return skyline_runtime(path, remaining)
-        if remaining[0] in ('stage-skyline-console', 'build-skyline-console', 'stage-skyline-runtime'):
+        if remaining[0] == 'stage-skyline-runtime':
             from openstack_skyline import main as skyline
             return skyline(path, remaining)
         if remaining[0] in ('plan-openstack','apply-openstack'):
@@ -317,12 +317,6 @@ def main(argv=None):
         if remaining[0]=='stage-kolla-computes':
             from openstack_kolla_compute import main as kolla_compute
             return kolla_compute(path,remaining)
-        if remaining[0] in ('export-compute-image','import-compute-image','deliver-compute-image'):
-            from openstack_image_transfer import main as image_transfer
-            return image_transfer(path,remaining)
-        if remaining[0] in ('stage-compute-image','build-compute-image'):
-            from openstack_compute_image import main as compute_image
-            return compute_image(path,remaining)
         if remaining[0] in ('stage-launcher','check-launcher'):
             from openstack_launcher import main as launcher
             return launcher(path,remaining)

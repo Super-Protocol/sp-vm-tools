@@ -44,13 +44,11 @@ configuration's exact commit. The source collections must still match the READY
 receipt; the installer prepares the Docker role in its own workspace, never in
 the original environment.
 
-The management host needs a **working local Docker engine** to assemble the
-matched Nova and Skyline images, sufficient local disk space for the bases and
-export archives, Git/OpenSSH/OpenSSL and outbound access to the pinned public
-images and Python package repositories. The environment preparer installs only
-Python environments; neither it nor this installer installs/repairs management
-host Docker or other management system packages. No local CC, KVM or GPU is
-required. Actual image build/export failures remain failures, not readiness.
+The management host needs the prepared Python/Kolla environment, Git, OpenSSH,
+OpenSSL and outbound HTTPS access. No local Docker binary/socket, image build,
+CC, KVM or GPU is required. Target hosts retrieve the exact prebuilt Nova and
+Skyline digests after approval; the manager verifies manifests and compatibility
+before changing servers. See [prebuilt CI kits](OPENSTACK_PREBUILT_IMAGES.md).
 
 Every server must already have its appropriate hardware bootstrap, working
 operator SSH and passwordless sudo. A service-only controller need not have KVM.
@@ -92,35 +90,15 @@ address. DNS defaults are `1.1.1.1` and `8.8.8.8`. Check this policy against loc
 network requirements before approving. For a differently structured network,
 do not pretend this profile applies; use a reviewed supported extension.
 
-`installation.compute_base_image` and `installation.console_base_image` may
-override the reviewed default Noble bases with explicit repository@sha256
-references. Unknown Skyline/launcher source layouts still fail their exact
-source checks; supplying a digest is not a compatibility bypass. Default digests
-are recorded in the implementation and the installation artifact receipt. There
-are no `latest` downloads or operator patch/SHA256 steps in this scenario.
-The scan contacts the configured registries to inspect both pinned manifests
-before any installation phase. It does not download image layers. Registry
-garbage collection can remove old digests; pinning guarantees identity, not
-availability. A missing or inaccessible manifest blocks installation early.
-The default pins were refreshed from the official `2026.2-ubuntu-noble` images
-on 2026-11-07 after upstream removed the previous manifests; source-layout and
-build smoke checks remain mandatory. Archive validated images in an
-operator-controlled registry for durable production delivery.
-
-### Matched Skyline source contract (2026-11-07)
-
-The updated overlay targets reviewed `*.bundle.1791833599.js` assets from
-Noble 2026.2 console digest
-`ab9b7c6d361948f6ee01337a00a3304f4d0be8049738e3007d7b2dd2db09fda4`.
-An older already-downloaded bundle does not acquire these source changes.
-The initial scan executes the selected bundle's isolated builder to check its
-imports and explicit base contract before host preparation. Unknown pairs fail
-closed. Registry availability alone is **not** GUI compatibility; actual source
-checksums, exact one-occurrence patch sites and offline image checks remain
-mandatory. No renaming, fuzzy patches, checksum bypass or old temporary-directory
-assets are used. Mirrors may retain the same approved manifest digest.
-Local real-image rendering/build checks are distinct from end-to-end cloud
-installation and authenticated live UI acceptance, which must still complete.
+Base-image overrides are rejected. Select the complete coordinated
+`prebuilt-openstack-images-v1` driver archive, verify its SHA256 and use the
+unchanged sp-vm-tools commit recorded in `installation-kit.json`.
+The kit pins the three repositories, Kolla, wheel, launcher, images and UI/nginx
+files. Image availability, config ID, platform and source/wheel labels are
+checked before host changes. There is no local image build or JS patch step.
+Older kits/workspaces are not migrated. These two images are prebuilt; remaining
+Kolla/OS/Python dependencies may still require Internet. Publication and GHCR
+retention rules are described in [the CI-kit guide](OPENSTACK_PREBUILT_IMAGES.md).
 
 ## Scan, approval and execution
 

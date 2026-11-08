@@ -276,7 +276,7 @@ Do not describe a passing basic preflight as a deployed or attested cloud.
 | Isolated new-cloud Kolla workspace, passwords, private API CA and task parsing | Exercised in a real cleared-cloud redeployment; credentials and CA retained across reviewed corrections |
 | Root-local fresh Kolla SPVM helper provisioning | Applied on both cleared hosts; `.245` needed an explicit reviewed directory-permission repair; not a fresh-OS test |
 | Pinned Nova launcher assembly and transactional fresh-host installation | Pinned source plus reviewed patches installed on both cleared hosts; measured bootstrap was retained |
-| Offline custom compute-image context and local build | Built, delivered and running on both cleared hosts; image bytes bound to receipts |
+| Prebuilt Nova/Skyline CI images | Immutable digests/config IDs and matching wheel, console and nginx metadata; live acceptance reported separately |
 | Checksum-bound image export/import and SSH delivery | `.247` to `.245` passed with the exact image ID preserved |
 | Initial deny-all runtime and Kolla compute intent binding | Real new-cloud deployment passed; deny-all remains until separate runtime enrollment |
 | Approved initial Kolla prechecks executor | Passed on both cleared physical hosts, followed by deploy/post-deploy |
@@ -1247,392 +1247,24 @@ matched **all three** staged files byte for byte. This binds reproduction to the
 currently installed runtime, not merely to an untested source recipe; it still
 does not replace fresh-host installation or guest-launch acceptance.
 
-### 10.5. Stage and build the custom Nova compute image
+### 10.5–10.8. Consume the coordinated CI images
 
-The driver bundle supplies `compute-image.Dockerfile.in` and the offline driver
-import smoke test. The tools installer owns `stage-compute-image` and
-`build-compute-image`. The output is a **new local image**, not deployment or
-replacement of a running compute container. This phase does not invoke Kolla.
+Current installation uses the single `install` coordinator and a verified
+`prebuilt-openstack-images-v1` kit. See [single-command installation](OPENSTACK_SINGLE_INSTALL.md)
+and [prebuilt image identity](OPENSTACK_PREBUILT_IMAGES.md). There are no local
+image-context creation/build/export/import/delivery commands.
 
-Select a Linux/amd64 Kolla `nova-compute` base by immutable registry digest.
-Have an administrator preload that exact base on the build host; the build command
-does not pull it. Use a compatible base with all driver dependencies already
-installed in `/var/lib/kolla/venv`. The generated Dockerfile uses
-`pip install --no-index --no-deps` and `pip check`: missing dependencies cause a
-visible failed build, never an implicit download or Nova dependency upgrade.
-There is currently no automatic offline dependency-wheelhouse assembly. A base
-with an existing SPVM shim is rejected; do not use an old custom SPVM image as an
-unreviewed base overlay.
+The kit supplies exact Nova/Skyline digests, config IDs, matching wheel and
+CI-owned console/nginx metadata. The manager checks component/source agreement
+and registry availability before changes. Target Docker pulls and verifies the
+selected images after approval. Kolla binding and prechecks use these sealed
+identities; no fake legacy context/build receipts are generated. Other Kolla,
+OS and Python dependencies may still require Internet.
 
-Select the driver wheel from the same reviewed bundle, with its trusted SHA256.
-For a trusted development checkout, build its wheel separately with the available
-build toolchain; this is not a clean published release. In either case staging
-checks wheel package/version, safe bounded ZIP layout and exact Python-source
-equality with the selected driver tree. Unexpected payloads such as `.pth` files,
-additional modules or a stale wheel under the same version are refused. A bundle's
-declared wheel checksum is checked as well.
-
-```bash
-./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
-  stage-compute-image \
-  --base-image 'registry.example/kolla/nova-compute@sha256:<64-hex-digest>' \
-  --wheel /srv/reviewed-driver-bundle/wheels/nova_spvm-0.2.21-py3-none-any.whl \
-  --wheel-sha256 '<trusted wheel SHA256>' \
-  --output /srv/compute-context-01
-
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
-  build-compute-image --output /srv/compute-context-01 \
-  --context-sha256 '<approved context_sha256 returned by staging>' \
-  --tag spvm/nova-compute:reviewed-install-01 \
-  --journal /var/lib/spvm-image-build-01
-```
-
-The build caller must own the private context. If switching from a deploy user to
-root, review and transfer ownership of the **specific new context directory** and
-its files first; do not weaken its private modes. Docker access means privileged
-host access; this is not a sandbox for untrusted driver bundles. The installer
-targets only the local `/var/run/docker.sock`, not an inherited Docker context or
-remote daemon. It sanitizes Docker environment variables and ignores user Docker
-credentials/config. The base must already have its exact RepoDigest locally.
-
-Review the context receipt before build. Only Dockerfile, the verified wheel and
-smoke test enter the context (plus its non-secret receipt); extra files, symlinks
-and changed inputs are refused. Build uses `--pull=false --network=none` so RUN
-steps cannot fetch dependencies. Existing tags, including successful prior builds,
-are never intentionally overwritten. Use a new explicit non-floating tag and a
-new journal directory. Coordinate with other image builders so nobody races to
-assign that tag. No image/container/cache cleanup is performed on failure.
-
-The write-ahead journal records context and base image identity. Failed builds
-become `NEEDS_REVIEW_IMAGE_BUILD`, retaining private logs; do not replay blindly
-or assume a leftover image tag is accepted. A successful build runs the offline
-Nova driver import smoke test as `nova`, checks runtime user and context label,
-and records `COMPUTE_IMAGE_BUILT_NOT_DEPLOYED` with the immutable local `image_id`.
-That ID is **not** a registry RepoDigest. After separately approved image
-distribution, use the tag/reference and matching per-host image ID for
-`kolla.compute_image` / `kolla.compute_image_id`; never assume a local tag exists on
-other computes. Use the verified delivery phase below; Kolla activation and
-runtime acceptance remain separate integration work.
-
-Acceptance on 2026-10-16: the real current development wheel was source-matched
-and built on `.247` from
-`quay.io/openstack.kolla/nova-compute@sha256:0e6a281d09f5841eb04154a19d2e1784580dd85646604b26e9c48ba7ef1e0cac`.
-Wheel SHA256:
-`2ef05798e9b0a021902af0a998b71286842a044bc5e6478aaa1c15aaf3ff9f16`.
-The final offline build passed dependency checks and the Nova-user driver import
-smoke test. Its **test-only** tag is
-`spvm/nova-compute:installer-accept-20261016-03`, image ID
-`sha256:1b2bd23a8a2f76792cdc9e641dd5e899c7b5c74a5860c5aacfc20909df169a16`.
-Evidence is under `/home/petr/kolla-spvm/image-build-accept-U7YvxGB8/build-03/`.
-This is a development acceptance artifact, not a signed/published driver release.
-It was not activated in Kolla or used to launch guests.
-
-The real build caught a permissions pitfall that fixture tests had not: private
-context file/directory modes can propagate through Docker COPY. The template now
-sets the smoke script to `0644` and its `/usr/local/libexec` directory to `0755`
-before switching to `USER nova`. Keep the host build context private; do not
-solve container readability by making the host context world-readable. The two
-earlier failed attempts and their journals were preserved for diagnosis.
-
-### 10.6. Deliver the accepted compute image to another host
-
-`export-compute-image` packages an accepted build; `deliver-compute-image`
-transfers it over explicitly trusted SSH and invokes `import-compute-image` on
-the destination. None of these commands updates Kolla config, starts/stops a
-container, calls Nova or manipulates a VM. Importing an image is permitted while
-workloads run; **activating** it remains a separate reviewed operation.
-
-On the build host, independently review the successful `image-build.json`, its
-SHA256 and the immutable image ID. Export into a new private directory:
-
-```bash
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
-  export-compute-image \
-  --build-receipt /var/lib/spvm-image-build-01/image-build.json \
-  --build-sha256 '<approved SHA256 of that build receipt file>' \
-  --image-id 'sha256:<approved local image ID>' \
-  --output /srv/compute-image-package-01 --reserve-gib 10
-```
-
-The command verifies current tag/image ID/context against the approved build,
-reserves free space conservatively, runs Docker save and checks the archive's
-single intended tag. Export records archive size and SHA256, source image ID,
-build receipt SHA256 and build-context hash in `image-package.json`. Approve the
-returned `package_sha256` separately. This is the canonical digest of package
-metadata, **not** the raw JSON file checksum and not the tar SHA256. Partial
-exports keep a failure journal without a successful package receipt.
-
-For each target, obtain the machine fingerprint through a trusted channel:
-SHA256 of the **stripped text** in `/etc/machine-id`. Hashing the file including
-its final newline produces a different value. The fingerprint binds the command
-to that OS installation, not cryptographic hardware attestation. SSH host-key
-verification remains mandatory.
-
-```bash
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
-  deliver-compute-image --package /srv/compute-image-package-01 \
-  --package-sha256 '<approved package_sha256>' \
-  --host deploy@compute.example.net --ssh-port 22 \
-  --identity-file /root/.ssh/openstack_deploy_ed25519 \
-  --known-hosts /root/.ssh/openstack_known_hosts \
-  --machine-sha256 '<approved target machine fingerprint>' \
-  --output /var/lib/spvm-image-delivery-compute01 --reserve-gib 10
-```
-
-Run delivery as the owner of the private package, with read access to the explicit
-SSH identity/trust files. The remote user needs Python 3.11+ and non-interactive
-sudo for the installer; Ubuntu 24/26 provide a suitable Python. Only `user@host`
-DNS names/IPv4 are currently accepted, not bracketed IPv6 destinations. SSH ignores
-user SSH config, disables agent use/forwarding and enforces strict host-key checks.
-No TOFU or implicit credential discovery is performed.
-
-Delivery checks the target machine and `/var/tmp` staging capacity before making
-a remote directory. It copies only `image.tar`, its package receipt and three
-installer modules, never a private key, provider config or OpenStack credentials.
-Received file hashes are verified before executing the installer as root; hashing
-is streamed, not loaded into RAM. The private staging directory is then root-owned.
-Source/remote journals retain exact staging locations for diagnosis and cleanup.
-
-Import rechecks target identity, tar hash/size/layout, existing tags and available
-Docker storage. It refuses a tag that points elsewhere. An already matching image
-is a no-op. Docker load is followed by an exact image-ID, Linux/amd64, `nova` user
-and build-context-label check. OCI containerd archives may include a short
-`org.opencontainers.image.ref.name` alongside a full `io.containerd.image.name`;
-both must agree with the approved Docker manifest tag. Image identity must survive
-transport: a daemon that changes it is not silently accepted as equivalent.
-
-Successful delivery reports `COMPUTE_IMAGE_DELIVERED_NOT_DEPLOYED`; failures keep
-`NEEDS_REVIEW_IMAGE_DELIVERY` and any remote import journal. Never retry a partial
-transaction blindly or remove mismatched tags automatically. Coordinate image
-writers so they cannot race to assign the selected tag. Temporary archives,
-remote staging and Docker cache are **not** automatically deleted.
-
-For offline/manual transport, copy the package to a private directory on the
-target, review ownership, then invoke the same root-local importer:
-
-```bash
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
-  import-compute-image --package /srv/received-image-package-01 \
-  --package-sha256 '<approved package_sha256>' \
-  --machine-sha256 '<approved local machine fingerprint>' \
-  --output /var/lib/spvm-image-import-01 --reserve-gib 10
-```
-
-Acceptance on 2026-10-16: `deliver-compute-image` exported the real test image from
-`.247` and loaded it on `.245` over the pre-existing trusted deployment SSH
-connection. The exact image ID survived Docker/containerd save/load:
-`sha256:1b2bd23a8a2f76792cdc9e641dd5e899c7b5c74a5860c5aacfc20909df169a16`.
-Approved package digest:
-`68f5d73fab0b7493268adbfa80ec1c829ea7a966949f13ddec7533cc9ae98517`.
-Source evidence:
-`/home/petr/kolla-spvm/image-transfer-accept-KVMQxg31/delivery-01/` on `.247`;
-target staging `/var/tmp/spvm-image-receive-vx0z5phj` and sibling `-import` journal
-on `.245`. A repeated target import returned
-`COMPUTE_IMAGE_ALREADY_PRESENT_NOT_DEPLOYED` without another load. Both running
-Nova containers retained their IDs, start times and previous active image
-`sha256:44c8802cdf14dfbe6e7aeb3ffbd97d6babbb50740c4732c631c2f06e9251a97b`.
-The existing seed remained running. Temporary packages and diagnostic logs were
-retained; this acceptance did not deploy Kolla or boot a guest with the new image.
-
-### 10.7. Bind the compute configuration for initial cloud deployment
-
-There is a bootstrap dependency: a new cloud does not yet have real project/user/
-network IDs, but Nova's SPVM runtime config bind must already exist when its
-container starts. Do **not** invent enrollment IDs, grant wildcard access or put
-operator credentials in that file. The driver now supports an explicit
-`bootstrap_deny_all: true` document with `projects: {}`. It composes zero service
-readers, denies every SPVM project before API access, and does not affect ordinary
-non-SPVM guests. Empty projects without that explicit mode remain invalid. The
-flag cannot coexist with enrolled projects. There is no debug-only runtime
-schema; use the current API-based enrollment for debug and release guests alike.
-
-The selected driver bundle must declare `deny-all-runtime-bootstrap`. Old images
-and bundles, even if their development version string is also `0.2.21`, are not
-interchangeable with the new source/wheel. Image source equality and manifest
-hashes are checked; rebuild and verify the matching image. Existing working
-clusters keep their enrolled runtime config unchanged.
-
-`stage-kolla-computes` combines a checked initialized Kolla workspace, its exact
-config/render, a source-matched image build context and one explicit helper request
-per audited compute. It creates a **new private workspace**. It does not contact
-hosts, install helpers, load images or invoke Kolla. The source workspace is
-checked before and after; passwords, API CA and private keys are copied unchanged,
-not regenerated. Never run both workspaces as independent deployments of the same
-cloud.
-
-Set `kolla.compute_image` and `kolla.compute_image_id` in the deployment config to
-the approved built image **before** audit/render/init. Provide a resource-validated
-render, not a fragment or a render without physical host facts. Copy and edit the
-[compute-request mapping example](openstack-compute-requests.example.json): keys
-must match **every** inventory host with the compute role, including a controller
-that also runs compute. Values are absolute paths to the host-specific helper
-request JSON files described in section 10.3. No default GPU selection, new compute
-UUID or disk budget is silently invented.
-
-```bash
-./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
-  stage-kolla-computes --config /srv/deployment.yaml \
-  --rendered /srv/reviewed-render --workspace /srv/initial-kolla-workspace \
-  --requests /root/compute-requests.json \
-  --image-context /srv/compute-context-01 \
-  --image-context-sha256 '<approved image context_sha256>' \
-  --region RegionOne --output /srv/bound-kolla-workspace
-
-./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
-  check-kolla-workspace --output /srv/bound-kolla-workspace
-```
-
-The binding verifies unique machine fingerprints/compute UUIDs, default guest
-release, exact state pool IDs/paths/mounts/reserves, positive budgets within
-audited ceilings and selected GPU BDFs within audited VFIO candidates. It generates
-per-inventory-alias Nova driver/libvirt/CPU/RAM/device overrides, matching scheduler
-PCI aliases/filter, fixed helper/runtime/pool mounts and the explicit compute
-image reference. Only **selected** GPUs are registered, including an explicit
-empty list; discovery alone does not donate hardware. CPU/RAM allocation ratios
-remain 1.0. Region is set consistently in Kolla globals and the bootstrap policy.
-The initial Keystone URL is the private API VIP on HTTPS port 5000 `/v3`.
-
-Review `compute-binding.json`, its `binding_sha256`, generated Nova overrides and
-`helper-requests/<host>.json`. The status is deliberately
-`COMPUTE_INTENT_BOUND_NOT_DEPLOYABLE`. It is configuration intent, not a claim that
-a GPU is free, an image was delivered, a compute UUID is registered or physical
-facts are still fresh. Helpers must still be applied on the matching fresh host,
-and image/CA/network prerequisites revalidated before any Kolla deployment.
-
-On each fresh compute, use that generated request and the binding's bootstrap
-endpoint/region in **both** helper phases, in addition to any launcher flags:
-
-```bash
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
-  plan-host-helper --request /root/compute01-helper-request.json \
-  --bootstrap-auth-url https://192.0.2.10:5000/v3 --bootstrap-region RegionOne \
-  --output /var/lib/spvm-helper-install-01
-
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
-  prepare-host-helper --request /root/compute01-helper-request.json \
-  --bootstrap-auth-url https://192.0.2.10:5000/v3 --bootstrap-region RegionOne \
-  --output /var/lib/spvm-helper-install-01 --plan-sha256 '<approved helper plan>'
-```
-
-Replace the example URL with the exact generated binding. The helper transaction
-installs the root-owned `0644` deny-all `/etc/spvm/runtime-services.json` together
-with its other fixed files and binds its bytes into the approval plan. Omitting
-both bootstrap flags retains the earlier helper-only path; supplying only one
-is refused. Installed helpers or live guests are never adopted/reconfigured by
-this fresh-only workflow.
-
-After initial OpenStack deployment, create and validate the real project/users,
-shared network and Barbican permissions, then enroll explicit IDs/releases using
-a separately reviewed runtime configuration step. The deny-all flag must be
-removed when projects are enrolled. This work does not authorize guest or Swarm
-bootstrap restart; existing ephemeral guest state remains non-restartable.
-
-Acceptance on 2026-10-16: all 539 Nova driver/CLI tests passed, including explicit
-bootstrap rejection and unchanged ordinary-guest behavior. The compute binding
-and fresh-helper paths passed fixture tests, with source credential preservation,
-GPU selection/budget checks, failure journaling and traversal rejection.
-
-A real new test image was also built on `.247` from the current source-matched
-development wheel. Its offline smoke test, running as `nova`, reported
-`bootstrap_deny_all: true` together with successful driver/class loading:
-
-- Tag: `spvm/nova-compute:bootstrap-accept-20261016-01`.
-- Image ID: `sha256:6da8b1f285d8b7a1dc5ed1a6cbfe9152544e23e495e6489258f507a890e03155`.
-- Wheel SHA256: `b1891761523cfecc0be2fbe4d0f573f189cbf9ee2f55784d37b0120dcb376da7`.
-- Context digest: `64847d4c1acd2ae482eb0a18f16a245b092e2f72a314c13f3995bac134388c45`.
-- Evidence: `/home/petr/kolla-spvm/bootstrap-image-accept-dBrHcAM7/build-01/`.
-
-That image was not activated or distributed. The active `.247` Nova container
-retained its previous ID/start time and image. This is not fresh-host Kolla
-deployment acceptance; fixture-generated compute intent must not be deployed to
-the running cloud.
-
-### 10.8. Plan and run real Kolla prechecks on prepared empty hosts
-
-`list-kolla-tasks` only parses tasks. The new `plan-kolla-prechecks` /
-`run-kolla-prechecks` workflow can execute the real pinned Kolla `prechecks`
-action, but only after fresh per-host verification and explicit plan approval.
-It never substitutes `bootstrap-servers`, `deploy`, `reconfigure` or `destroy`.
-It is for an initial cloud, not a way to run an experimental new workspace
-against a working installation.
-
-Prerequisites are the compute-bound workspace from section 10.7, installed fresh
-helpers with matching deny-all runtime, the approved image already present on
-each compute, usable Docker, required prepared network interfaces and any host
-dependencies required by Kolla. This phase does **not** install missing packages,
-configure network links, distribute API trust or fix failed prechecks automatically.
-If dependencies are missing, preserve the failed run. Section 10.9 covers the
-limited base-package preparation step; other dependencies still need separately
-reviewed preparation. Do not skip upstream assertions.
-
-The basic audit and binding now retain a unique machine fingerprint for **every**
-role, including controller-only hosts, not just computes. An older binding without
-the `machines` map must be re-staged from its original unbound workspace. Do not
-hand-edit a receipt or invent a fingerprint to pass this check.
-
-```bash
-./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
-  plan-kolla-prechecks --config /srv/deployment.yaml \
-  --workspace /srv/bound-kolla-workspace \
-  --known-hosts /root/.ssh/openstack_known_hosts \
-  --allow-experimental-ubuntu26 --output /srv/initial-prechecks-01
-
-./scripts/spvm-openstack.sh --driver-dir /srv/reviewed-driver-bundle -- \
-  run-kolla-prechecks --config /srv/deployment.yaml \
-  --workspace /srv/bound-kolla-workspace \
-  --known-hosts /root/.ssh/openstack_known_hosts \
-  --allow-experimental-ubuntu26 --output /srv/initial-prechecks-01 \
-  --plan-sha256 '<approved plan_sha256>'
-```
-
-Use the private workspace owner with optional local SSH CLI overrides (see the
-SSH settings section above) and working non-interactive sudo on targets. The Ubuntu 26
-flag acknowledges experimental support; it does not falsify Ansible facts.
-The resolved SSH trust file is used by both probes and Ansible. User SSH config
-is ignored; local agent authentication is supported but forwarding is disabled,
-and host-key checking stays strict.
-
-Review `prechecks-plan.json` before execution. A blocked plan returns a failing
-exit code and names blockers. The 900-second approval binds workspace/config,
-helper/launcher source hashes, SSH identity/trust file hashes, pinned Kolla source,
-collection tree, and per-host observations. Execution repeats those checks;
-changed inputs or hosts invalidate the plan. Observation collection itself also
-has a freshness limit.
-
-The probe refuses wrong machines, existing libvirt domains/direct guests/Nova
-processes, existing OpenStack containers/volumes/configuration and mismatched
-prerequisites. A busy VM host is rejected **before** reading private helper
-configuration. Unrelated Docker containers are not stopped: their IDs, images,
-states and start times are protected before/after observations. It checks actual
-Ubuntu/architecture, required interfaces, and the persistent VIP for a
-single-controller configuration without keepalived.
-
-On computes it additionally checks available capacity above CPU/RAM reserves,
-KVM/TDX/SEV prerequisites, peer UID/socket permissions and active helper socket,
-compute UUID/public pool binding, empty owned SPVM state, mounted pool budgets,
-selected GPU vendor/product/VFIO/IOMMU facts, installed helper/launcher hashes,
-explicit deny-all policy and exact cached image ID/context label. QEMU/libvirt
-hashing is streamed: actual QEMU binaries exceed the small configuration-file
-size limit. This probe does not perform confidential guest attestation or prove
-QGS access as the QEMU runtime user; hardware bootstrap acceptance remains separate.
-
-An approved run writes its transaction journal **before** invoking Kolla and
-stores stdout/stderr only in `private-prechecks.log`. Input/environment overrides
-are sanitized; only the scoped `prechecks` action is passed. On completion the
-workspace and protected host observations are checked again. Success is
-`INITIAL_KOLLA_PRECHECKS_PASSED_NOT_DEPLOYED`, not a deployed or attested cloud.
-Errors, interruption, drift or lost acknowledgement require manual review;
-the journal prevents blind replay. A timeout does not prove that all descendant
-Ansible processes stopped. Inspect the log and processes before authorizing a
-new attempt. Never remove a failure journal simply to bypass a refusal.
-
-Acceptance on 2026-10-16: fixture tests cover prepared empty host checks, approval,
-expiry, drift, failures and action scope. The real read-only probe on busy `.245`
-returned `EXISTING_LIBVIRT_DOMAINS`, without invoking Kolla or reading private
-helper config. Real installed QEMU is a 31,328,048-byte regular file; the streamed
-runtime-hash path is covered by a large-file fixture. **A real passing initial
-Kolla prechecks run on prepared empty machines is not yet accepted.** No current
-Swarm node or Nova container was stopped, restarted or reconfigured by this work.
+Initial host resources remain UNCONFIGURED/disabled. Set budgets and pools
+manually after installation and separately Enable the host. Source ownership,
+WAL, empty-host checks, operator SSH trust, confirmation and supported
+continuation boundaries are unchanged.
 
 ### 10.9. Prepare base packages without running the full host bootstrap
 
@@ -3552,40 +3184,21 @@ The scenarios do not certify generic Kolla reconfigure idempotency or clean-OS
 installation; fresh and mutating compute paths still require separate live
 acceptance on suitable empty hosts.
 
-### 10.29. Skyline customization artifact
+### 10.29. Source-built Skyline component
 
-Skyline itself is supplied by the pinned Kolla console image. All SPVM-specific
-UI pages, branding, login compatibility patches and service examples belong to
-**swarm-cloud**, alongside its Nova driver and authenticated web API.
-
-Use `deployment/skyline/` from the verified OpenStack driver bundle selected in
-section 8. The bundle manifest binds these files, including the logo and web
-assets, to source SHA256 hashes. Do not copy patches from an unrelated installer
-checkout or mix UI and API versions.
-
-The detailed build, service, capacity-admission and recovery instructions are in
-`deployment/skyline/README.md` inside that same artifact. Repository reference:
-[SPVM Skyline extension](https://github.com/Super-Protocol/swarm-cloud/blob/feature/spvm-bare-metal-cloud/examples/test-cluster/bare-metal-spvm/deployment/skyline/README.md).
-That branch link is for navigation, not an immutable deployment input; use the
-documentation shipped with the approved archive.
-
-The installer remains responsible for artifact resolution, derivative-image
-deployment, service/nginx configuration and reviewed Kolla overrides. It does
-not maintain another implementation of the frontend or patch helpers. Existing
-releases such as 0.2.22 predate the Skyline extension; do not assume those archives
-include it.
-
-Pin the derivative console image and its exact image ID with the paired
-`kolla.skyline_console_image` / `kolla.skyline_console_image_id` fields in a
-supported backend. Preserve the nginx proxy customization in Kolla's approved
-custom configuration. Regenerate reviewed inputs instead of editing immutable
-workspaces. Deploying the console must not restart Nova, libvirt or SPVM guests.
+The skyline-console fork's `SuperProtocol/` directory owns the frontend:
+React fixes, static pages, logo, native links, container recipe and CI checks.
+The driver archive retains the authenticated API, protected workers and service
+runtime examples, plus source-bound console descriptors supplied by CI. See
+[prebuilt images](OPENSTACK_PREBUILT_IMAGES.md) and the matching driver's
+`deployment/PREBUILT_IMAGES.md`. Neither repository carries compiled-bundle
+patch scripts as an installation interface.
 
 ### 10.30. Super image category and logo
 
-See the matching bundle's `deployment/skyline/README.md`, **Super image category
-and logo** section. The unchanged Glance marker is `os_distro=super-spvm`.
-The logo is bundled, not fetched from an external service at runtime.
+The unchanged Glance marker is `os_distro=super-spvm`. The source-built console
+displays **Super** and the bundled logo. Measured flavors use the **Super
+Protocol** category; presentation does not modify resources or scheduling.
 
 ### 10.31. Swarm pages and join admission
 
@@ -4022,49 +3635,24 @@ verified unchanged without the original complete observation. The lab retirement
 helper now saves both observations; its older selected-only backups cannot prove
 that retrospectively.
 
-## Complete Skyline overlay and automatic Swarm UI publication
+## Source-built Skyline and automatic Swarm UI publication
 
-The updated installer exposes five explicit commands for the matching Skyline
-extension from the selected swarm-cloud source/bundle:
+Current CI kits supply a fully built console plus its file/nginx manifests.
+The manager neither needs Docker nor modifies JavaScript. Kolla initialization
+seals the CI-owned nginx override and metadata into a new workspace. The
+controller cloud kit retains these identities and image references, not build
+contexts or image archives.
 
-1. `stage-skyline-console`: compose login, Super image/logo, Super Protocol
-   flavors and all Swarm forms/navigation from reviewed original assets; render
-   the persistent Kolla nginx proxy override in the same output.
-2. `build-skyline-console`: build against an already cached repository digest,
-   offline, without overwriting a tag; preserve upstream runtime defaults and
-   record the exact image ID plus Kolla/backend overrides.
-3. `stage-skyline-runtime`: verify the wheel matches the selected bundle, clone
-   an approved dependency SDK without modifying it, install the client offline,
-   render matching web/capacity/publisher units and validate imports as the
-   non-root service user. Bind dependency bytes, ownership, modes and symlinks.
-4. `plan-skyline-runtime`: approve a fresh web runtime's exact inputs and host.
-5. `install-skyline-runtime`: install and activate only those approved fresh
-   services. Existing targets/loaded units/listeners/non-empty state are refused,
-   never silently stopped or overwritten. Mutations are journaled under a host
-   install lock; uncertain attempts retain evidence and are not blindly replayed.
+The driver still owns `stage-skyline-runtime`, `plan-skyline-runtime` and
+`install-skyline-runtime` for explicit protected API/worker runtime preparation.
+Source wheel checks, non-root import validation, private state and service
+ownership remain mandatory. Runtime staging alone does not update an installed
+cloud or authorize a guest.
 
-Full commands, schemas and recovery instructions live in the selected driver's
-`deployment/skyline/README.md`. This keeps UI implementation/documentation with
-the driver, rather than duplicating its assets in sp-vm-tools. These commands
-require the matching updated sources; the older published 0.2.22 archive does not
-gain them merely because a local checkout has changed. Adopt the complete image
-and custom nginx into an approved Kolla workspace; staging/building alone does
-not reconfigure the console. Fresh service installation is not an upgrade path
-for an occupied lab or proof of clean-OS acceptance.
-
-The console build's `backend-image-fragment.json` now includes the image/tag ID
-and paired `kolla.skyline_console_context` / `skyline_console_context_sha256`.
-Include these in deployment.yaml before render/`init-kolla`. Initialization
-validates the context and adopts its nginx override into the new workspace's
-actual `node_custom_config` tree, including it in file checksums. There is no
-manual proxy-template copy and no mutation of a previously sealed workspace.
-
-Use `repository@sha256:...`, not Docker's bare image configuration ID, as the
-Dockerfile base. BuildKit can interpret `sha256:<image-ID>` as a repository name
-and attempt a registry lookup even with `--pull=false`; the renderer rejects it.
-When cloning an existing private venv as root, preserve non-root read/traversal
-through the dedicated primary group. Never make config/secrets world-readable to
-work around a service permission error.
+Use the matching archive's `deployment/skyline/README.md` for runtime
+permissions, enrollment, publication and recovery. Frontend build/publication
+belongs to skyline-console; read the kit guide for the immutable component
+contract and remaining online dependencies.
 
 Optional automatic publication uses a separate root-owned timer worker, not
 root/Docker privileges on the web API. The administrator delegates one project
@@ -4094,82 +3682,14 @@ host; clean-OS deployment, HA and real-browser acceptance remain separate.
 
 ### Common workflow: optional Skyline completion and repeat verification
 
-#### Automatic Skyline image and runtime preparation
+#### CI component and runtime preparation
 
-Replace individual `stage-skyline-console`, `build-skyline-console` and
-`stage-skyline-runtime` calls with one approved preparation transaction. Run it
-as root on the controller after Docker/SDK setup and before initializing a new
-Kolla workspace. The command never bootstraps CC hardware, installs packages,
-reconfigures a running cloud or launches a guest. Its private request contains
-exactly the following fields:
-
-```json
-{
-  "schema_version": 1,
-  "deployment_config": "/etc/spvm-install/deployment.yaml",
-  "console": {
-    "static_dir": "/var/lib/spvm-inputs/upstream-static",
-    "nginx_template": "/var/lib/spvm-inputs/nginx.conf.j2",
-    "nginx_sha256": "<approved Kolla template SHA256>",
-    "base_image": "quay.io/openstack.kolla/skyline-console@sha256:<approved digest>",
-    "tag": "spvm/skyline-console:deployment-001"
-  },
-  "runtime": {
-    "sdk_venv": "/opt/spvm/sdk-venv",
-    "web_user": "spvm-web",
-    "web_config": "/etc/spvm-install/web-config.json",
-    "wheel": "/var/lib/spvm-inputs/driver/wheels/nova_spvm-<version>-py3-none-any.whl",
-    "wheel_sha256": "<approved wheel SHA256>",
-    "publication_policy": "/etc/spvm-install/web-publication-policy.json"
-  }
-}
-```
-
-The exact Linux amd64 upstream repository digest must already be cached. Supply
-its original unpatched static files, the pinned Kolla nginx template, a matching
-wheel from the selected release's wheels/ directory and a provisioned SDK venv.
-Even a same-version wheel is rejected if its code differs from the selected
-driver sources. Use `null` for publication_policy only if web-config disables
-publication. The non-root service account, trusted API CA, provider/enrollment
-policy and web config must already exist; they are not guessed defaults.
-
-```sh
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
-  plan-skyline-preparation --request /etc/spvm-install/skyline-preparation.json \
-  --output /var/lib/spvm-install/skyline-001
-# Review preparation-plan.json; approve its exact plan_sha256 within 15 minutes:
-sudo ./scripts/spvm-openstack.sh --driver-dir /srv/swarm-cloud -- \
-  prepare-skyline --request /etc/spvm-install/skyline-preparation.json \
-  --output /var/lib/spvm-install/skyline-001 \
-  --plan-sha256 '<approved SHA256>' --allow-changes
-```
-
-The parent /var/lib/spvm-install must exist, be root-owned/protected from non-root
-writes, and permit traversal by the web user. The transaction is private. Its
-sibling skyline-001-runtime is created with service-group read/traversal by the
-runtime stager; neither directory may already exist. Secrets are not made
-world-readable. Non-root import/config checks use isolated state, not live state.
-
-Preparation emits deployment.yaml with pinned image/context merged into the
-original settings, skyline.json with runtime path/receipt SHA, and preparation.json
-with provenance. Use the generated deployment.yaml for render/init-kolla and
-point the common fresh workflow's skyline field to the generated skyline.json.
-Rendering/workspace initialization and SPVM resource/network/publication
-enrollment retain their separate boundaries; this replaces manual image/runtime
-assembly, not hardware or all host preparation.
-
-Repeat the approved prepare-skyline command without --allow-changes to verify
-outputs, overlay, runtime files/venv and image ID. It returns
-SKYLINE_PREPARATION_VERIFIED_NOOP, with no rebuild or reinstall. Changed inputs,
-source drift and occupied tags are refused. Interrupted preparations retain
-NEEDS_REVIEW and their private logs: no blind resume, overwrite or evidence
-deletion. Review before explicitly choosing a new transaction/tag.
-
-On 2026-10-21 this combined path passed real offline build/runtime staging on
-.247 plus two verified repeats, with the protected host/container snapshot
-unchanged. Evidence: /var/lib/spvm-skyline-preparation-20261021-01/accepted.json.
-The new image was not activated over the running console; this is not clean-OS
-or authenticated visual-browser acceptance.
+The old local image/preparation commands and build-context receipts have been
+removed. Use a coordinated CI kit with the normal `install` command, or the
+driver-owned runtime staging interface for an explicitly reviewed runtime-only
+operation. No compiled JS, upstream static directory, base-image override or
+manual console image build is accepted. New workspaces seal the supplied CI
+console file manifest and nginx artifact automatically.
 
 #### Common install and existing-state verification
 
@@ -4188,7 +3708,7 @@ For `mode: fresh`, the Skyline specification contains exactly:
 }
 ```
 
-Prepare the complete console image/context, merge the build's image fragment
+Select the complete coordinated CI kit and its pinned console image
 into deployment.yaml and initialize its new immutable Kolla workspace first, as
 described above. Stage the matching wheel/runtime using `stage-skyline-runtime`.
 The common plan validates the staged runtime, vacant systemd targets, non-root
@@ -4214,11 +3734,11 @@ For `mode: existing`, the specification contains exactly these fields:
 ```json
 {
   "origin": "https://<trusted-controller-VIP>:9999",
-  "manifest": "/var/lib/spvm-install/overlay/console-context.json",
+  "manifest": "/var/lib/spvm-install/overlay/console-manifest.json",
   "ca_file": "/etc/ssl/certs/ca-certificates.crt",
   "image_id": "sha256:<approved complete console image ID>",
   "files_sha256": {
-    "/var/lib/spvm-install/overlay/console-context.json": "<approved manifest SHA256>",
+    "/var/lib/spvm-install/overlay/console-manifest.json": "<approved manifest SHA256>",
     "/etc/kolla/skyline-console/nginx.conf": "<approved live nginx config SHA256>",
     "/etc/systemd/system/spvm-web-nodes.service": "<approved unit SHA256>"
   },

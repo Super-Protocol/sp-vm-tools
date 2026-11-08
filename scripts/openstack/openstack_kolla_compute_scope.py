@@ -17,7 +17,7 @@ import time
 
 import yaml
 from openstack_container_engine import digest, file_hash, write
-from openstack_compute_image import read, TAG_RE
+from openstack_artifact_inputs import read, TAG_RE
 
 GUARD=r'''
 def spvm_compute_guard(params, spec, root=None, runner=None):
@@ -200,7 +200,7 @@ def inputs(spec):
         if p.is_symlink() or not p.is_file():raise ValueError('regular tracked Kolla files required')
         protected[str(p)]=file_hash(p)
     runner_sources={p.name:file_hash(p) for p in (Path(__file__),Path(__file__).with_name('openstack_container_engine.py'),
-                   Path(__file__).with_name('openstack_compute_image.py'))}
+                   Path(__file__).with_name('openstack_artifact_inputs.py'))}
     return {'request':spec,'files':protected,'overrides':overrides,'runner_sources':runner_sources}
 
 

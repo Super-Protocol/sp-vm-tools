@@ -12,7 +12,7 @@ import sys
 import time
 import traceback
 
-from openstack_compute_image import read
+from openstack_artifact_inputs import read
 from openstack_container_engine import digest, file_hash, write
 import openstack_geneve_runtime as runtime
 import openstack_initial_probe as initial_probe
@@ -47,7 +47,7 @@ def inputs(args,backend):
         'allow_ubuntu26':args.allow_experimental_ubuntu26,
         'sources':{n:file_hash(Path(__file__).with_name(n)) for n in
             ('openstack_geneve_guard.py','openstack_geneve_runtime.py','openstack_initial_probe.py',
-             'openstack_container_engine.py','openstack_compute_image.py','openstack_firewall_managers.py')}}
+             'openstack_container_engine.py','openstack_artifact_inputs.py','openstack_firewall_managers.py')}}
     backend_root=Path(backend.__file__).parent
     binding['backend_sources_sha256']=digest({p.relative_to(backend_root).as_posix():file_hash(p)
         for p in backend_root.rglob('*.py') if '__pycache__' not in p.parts})

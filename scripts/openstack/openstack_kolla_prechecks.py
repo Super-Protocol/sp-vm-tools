@@ -15,7 +15,7 @@ import time
 import traceback
 
 import yaml
-from openstack_compute_image import read
+from openstack_artifact_inputs import read
 from openstack_container_engine import collection_hash, digest, file_hash, write
 from openstack_host_helper import request, sources, source_manifest
 from openstack_launcher import recipe
@@ -110,7 +110,7 @@ def inputs(args,backend_path,backend):
                 host_source_sha256={**source_hashes,**{str(Path(spec['tools'])/'scripts'/n):h
                     for n,h in launcher['result_sha256'].items()}},launcher_sha256=launcher['result_sha256'],
                 image_reference=binding['image_reference'],image_id=binding['image_id'],
-                image_context_sha256=binding['image_context_sha256'])
+                driver_wheel_sha256=binding['driver_wheel_sha256'])
         requests[name]=wanted
     fingerprint={'workspace_sha256':digest(receipt),'binding_sha256':binding['binding_sha256'],
         'use_testing_images':testing_images(args),

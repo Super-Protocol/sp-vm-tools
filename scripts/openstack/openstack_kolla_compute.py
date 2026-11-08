@@ -10,7 +10,8 @@ import traceback
 
 import yaml
 from openstack_container_engine import digest, file_hash, write
-from openstack_compute_image import context, wheel_bytes, read, TAG_RE, BASE_RE
+from openstack_artifact_inputs import read, TAG_RE, BASE_RE
+import openstack_prebuilt as prebuilt
 from openstack_host_helper import request, bootstrap_policy, source_manifest
 import openstack_kolla_workspace as workspace
 
@@ -58,10 +59,10 @@ def stage(args,backend_path,backend,nova_inputs):
     physical=json.loads(files['resource-plan.json'])
     specs,gpus=selected_requests(cfg,physical,args.requests)
     for spec in specs.values():source_manifest(backend_path,spec,bootstrap=True)
-    image=context(args.image_context,args.image_context_sha256)
-    _,version,manifest_sha=wheel_bytes(backend_path,Path(args.image_context)/'driver.whl',image['files']['driver.whl'])
-    if image['manifest_sha256']!=manifest_sha or image['driver_version']!=version:
-        raise ValueError('image context belongs to a different driver manifest')
+    kit=prebuilt.file(backend_path,args.installation_kit,args.installation_kit_sha256)
+    manifest_sha=file_hash(Path(backend_path).parent.parent/'manifest.json')
+    if kit['images']['compute']['reference']!=cfg['kolla']['compute_image']:
+        raise ValueError('compute image differs from the selected CI kit')
     image_name=cfg['kolla'].get('compute_image','')
     if (not (TAG_RE.fullmatch(image_name) or BASE_RE.fullmatch(image_name))
             or (TAG_RE.fullmatch(image_name) and image_name.rsplit(':',1)[-1] in ('latest','main','master'))
@@ -111,7 +112,8 @@ def stage(args,backend_path,backend,nova_inputs):
         for name,body in overrides.items():workspace.private_file(output/name,body)
         binding={'schema_version':1,'status':'COMPUTE_INTENT_BOUND_NOT_DEPLOYABLE',
             'image_reference':image_name,'image_id':cfg['kolla']['compute_image_id'],
-            'image_context_sha256':args.image_context_sha256,'driver_manifest_sha256':manifest_sha,
+            'driver_wheel_sha256':kit['driver']['wheel_sha256'],
+            'installation_kit_sha256':args.installation_kit_sha256,'driver_manifest_sha256':manifest_sha,
             'source_workspace_sha256':digest(before),'config_sha256':digest(cfg),
             'bootstrap_runtime':policy,'hosts':{},'hosts_changed':False,'guests_launched':False,
             'machines':machines,
@@ -148,7 +150,7 @@ def stage(args,backend_path,backend,nova_inputs):
 def main(backend_path,argv):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['stage-kolla-computes'])
-    for field in ('config','rendered','workspace','requests','image-context','image-context-sha256','region','output'):
+    for field in ('config','rendered','workspace','requests','installation-kit','installation-kit-sha256','region','output'):
         parser.add_argument('--'+field,required=True)
     args=parser.parse_args(argv)
     try:

@@ -10,7 +10,7 @@ import re
 import subprocess
 import uuid
 
-from openstack_compute_image import read
+from openstack_artifact_inputs import read
 from openstack_container_engine import digest, file_hash, write
 from openstack_host_helper import request as helper_request
 

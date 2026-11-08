@@ -170,7 +170,7 @@ def probe(old_root,source_root,*,activation=None,activated=False,channel=None):
         path=source_root/'driver/deployment/service_credentials.py'
         loader=importlib.util.spec_from_file_location('reviewed_service_credentials',path)
         creds=importlib.util.module_from_spec(loader);loader.loader.exec_module(creds)
-        paths=[data/name for name in ('prepared.json','deployment.yaml','compute-binding.json','platform.json','network.json','base-haproxy.cfg','console-context.json','sdk-packages.txt')]
+        paths=[data/name for name in ('prepared.json','deployment.yaml','compute-binding.json','platform.json','network.json','base-haproxy.cfg','console-manifest.json','sdk-packages.txt')]
         paths += [clouds,previous/'platform-transaction.json',previous/'network-request.json',
                   previous/'network/network-plan.json',previous/'network/network-transaction.json',Path('/etc/spvm/auth/admin-openrc.sh'),Path(ca)]
         if checkpoint:
@@ -235,8 +235,7 @@ def remote_probe(i):
 
 def prepare(i,tx):
     from openstack_install import PHASES
-    from openstack_install_artifacts import console_builder
-    from openstack_install_phases import BASES
+    import openstack_prebuilt as prebuilt
     import openstack_kolla_workspace as workspace
     import openstack_kolla_workflow as kolla
     if not i.args.use_testing_images:raise InstallerError('Explicit --use-test-images acknowledgement remains required.')
@@ -257,17 +256,17 @@ def prepare(i,tx):
         if file_hash(path)!=wanted:raise InstallerError('Previous approved input changed: '+str(path))
         i.inputs[filename]=wanted;tx.inputs[filename]=wanted
     i.verify_environment()
-    console_builder(i,['--check-base-image',i.options.get('console_base_image',BASES['console'])])
+    prebuilt.selected(i.path)
     i.config=str(private(base/'deployment.artifacts.yaml'));i.refresh()
     i.workspace=str(base/'kolla-bound');workspace.check(i.workspace)
     i.requests=document(base/'requests.json')['hosts']
     binding=document(Path(i.workspace)/'compute-binding.json')
     previous_plan=document(base/'plan.json')
-    previous_bases=document(base/'artifacts-result.json')['bases']
+    previous_images=document(base/'artifacts-result.json')['images']
     if (str(i.guest)!=previous_plan['guest_cidr'] or i.region!=binding['bootstrap_runtime']['region_name']
             or any(document(filename)['allow_debug']!=i.options.get('allow_debug',False) for filename in i.requests.values())
-            or any(i.options.get(key+'_base_image',BASES[key])!=previous_bases[key] for key in ('compute','console'))):
-        raise InstallerError('Prepared guest/debug/region/base-image policy changed; continuation refused.')
+            or prebuilt.selected(i.path)['images']!=previous_images):
+        raise InstallerError('Prepared guest/debug/region/prebuilt-image policy changed; continuation refused.')
     i.controller=next(n for n,h in i.cfg['hosts'].items() if 'control' in h['roles'])
     i.run_id=i.cfg['deployment_id']+'-'+digest(str(base))[:12]
     i.controller_root='/opt/spvm-openstack/'+i.run_id

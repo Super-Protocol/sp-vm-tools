@@ -11,7 +11,7 @@ import traceback
 
 import yaml
 from openstack_container_engine import digest, file_hash, write, collection_hash
-from openstack_compute_image import read
+from openstack_artifact_inputs import read
 import openstack_collections as managed_collections
 from openstack_errors import InstallerError
 
@@ -177,16 +177,19 @@ def file_set(output):
 
 
 def skyline_override(cfg, output):
-    """Adopt approved console nginx into a new workspace, never mutate an old one."""
-    selected = cfg['kolla'].get('skyline_console_context')
+    """Copy CI-owned verified nginx and UI metadata into a new workspace."""
+    selected = cfg['kolla'].get('installation_kit')
     if selected is None: return
-    from openstack_skyline import context
-    root = Path(selected)
-    expected = cfg['kolla']['skyline_console_context_sha256']
-    context(root, expected)
+    import prebuilt_images
+    root = Path(selected).parent
+    expected = cfg['kolla']['installation_kit_sha256']
+    if file_hash(Path(selected)) != expected:
+        raise ValueError('CI installation kit changed')
+    prebuilt_images.validate(root, prebuilt_images.document(root/'manifest.json'))
     private_file(Path(output)/'kolla/config/skyline/nginx.conf',
-                 read(root/'kolla-custom/skyline/nginx.conf'))
-    private_file(Path(output)/'skyline-console-context.json', read(root/'console-context.json'))
+                 read(root/'nginx.conf.j2'))
+    private_file(Path(output)/'console-manifest.json', read(root/'console-manifest.json'))
+    private_file(Path(output)/'installation-kit.json', read(root/'installation-kit.json'))
 
 
 def init(args,backend):

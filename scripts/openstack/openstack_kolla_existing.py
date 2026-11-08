@@ -10,7 +10,7 @@ import sys
 import time
 
 import yaml
-from openstack_compute_image import read
+from openstack_artifact_inputs import read
 from openstack_container_engine import digest, file_hash, write, collection_hash
 import openstack_kolla_workspace as workspace
 import openstack_kolla_compute_scope as compute

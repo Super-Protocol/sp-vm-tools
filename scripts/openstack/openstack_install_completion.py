@@ -27,7 +27,8 @@ LIMIT = 64 * 1024 * 1024
 def snapshot(i):
     root = i.path.parent.parent
     manifest = json.loads((root / 'manifest.json').read_bytes())
-    names = {**manifest['source_sha256'], **{'wheels/'+n:s for n,s in manifest.get('wheel_sha256', {}).items()}}
+    names = {**manifest['source_sha256'], **manifest['kit_files_sha256'],
+             **{'wheels/'+n:s for n,s in manifest.get('wheel_sha256', {}).items()}}
     files = {}
     for name in ['manifest.json', *names]:
         path = root / name
@@ -154,9 +155,7 @@ def prepare(i):
     raw['driver']['directory'] = i.controller_root + '/driver'
     for host in raw['hosts'].values():
         host.pop('identity_file', None)
-    # Local build context paths/transport policy have no meaning for the runtime.
-    raw['kolla'].pop('skyline_console_context', None)
-    raw['kolla'].pop('skyline_console_context_sha256', None)
+    raw['kolla']['installation_kit'] = i.controller_root + '/driver/installation-kit.json'
     binding = json.loads((Path(i.workspace) / 'compute-binding.json').read_bytes())
     requests = {}
     for name, host in binding['hosts'].items():
@@ -165,7 +164,7 @@ def prepare(i):
     binding['binding_sha256'] = digest({k: v for k, v in binding.items() if k != 'binding_sha256'})
     payload = {'root': i.controller_root, 'machine': i.audits[i.controller]['host_identity_sha256'],
         'controller': i.controller, 'config': raw, 'binding': binding, 'requests': requests,
-        'files': snapshot(i), 'console_manifest': json.loads((i.output / 'console-context/console-context.json').read_bytes()),
+        'files': snapshot(i), 'console_manifest': json.loads((i.path.parent.parent / 'console-manifest.json').read_bytes()),
         'host_sources': [str(__import__('ipaddress').IPv4Interface(v['management_address']).ip) + '/32'
                          for v in i.host_network['hosts'].values()],
         'guest_cidr': str(i.guest), 'region': i.region,
@@ -241,7 +240,7 @@ def finalize_setup(root,payload):
             raise ValueError('invalid helper host name')
         write(data / ('helper-' + name + '.json'), request)
     write(data / 'network.json', payload['network'])
-    write(data / 'console-context.json', payload['console_manifest'])
+    write(data / 'console-manifest.json', payload['console_manifest'])
     base = Path('/etc/haproxy/haproxy.cfg')
     if not base.is_file(): raise ValueError('install controller HAProxy prerequisites before completion preparation')
     (data / 'base-haproxy.cfg').write_bytes(base.read_bytes())
@@ -252,7 +251,7 @@ def finalize_setup(root,payload):
         'origins': ['https://' + payload['config']['network']['api_vip'] + ':9999'],
         'host_sources': payload['host_sources'], 'ingress_address': payload['config']['network']['public_ip'],
         'base_haproxy_config': str(data / 'base-haproxy.cfg'), 'preserve_project_quotas': True,
-        'console_manifest': str(data / 'console-context.json'), 'release_registration': True}
+        'console_manifest': str(data / 'console-manifest.json'), 'release_registration': True}
     write(data / 'platform.json', spec)
     platform.prepare_account(spec, data)
     platform.check_sdk_access(spec)

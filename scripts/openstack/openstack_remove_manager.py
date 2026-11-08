@@ -39,7 +39,7 @@ def private(path):
 def configuration_identity(cfg):
     value=json.loads(json.dumps(cfg));value['driver'].pop('directory',None)
     for h in value['hosts'].values():h.pop('ssh_transport',None);h.pop('identity_file',None)
-    for name in ('skyline_console_context','skyline_console_context_sha256'):value['kolla'].pop(name,None)
+    value['kolla'].pop('installation_kit',None)
     return value
 
 

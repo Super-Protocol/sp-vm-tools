@@ -174,7 +174,7 @@ def verify_computes(i):
 def prepare(i, tx):
     import yaml
     from openstack_install import PHASES
-    from openstack_install_phases import BASES
+    import openstack_prebuilt as prebuilt
     import openstack_kolla_workspace as workspace
     state=reviewed(i.args.continue_channel_from);i.channel_state=state
     if not i.args.use_testing_images:raise InstallerError('Explicit --use-test-images remains required.')
@@ -198,8 +198,8 @@ def prepare(i, tx):
     if (str(i.guest)!=document(state.base/'plan.json')['guest_cidr']
             or i.region!=binding['bootstrap_runtime']['region_name']
             or any(document(p)['allow_debug']!=i.options.get('allow_debug',False) for p in i.requests.values())
-            or any(i.options.get(k+'_base_image',BASES[k])!=document(state.base/'artifacts-result.json')['bases'][k] for k in ('compute','console'))):
-        raise InstallerError('Prepared region/guest/debug/base-image policy changed.')
+            or prebuilt.selected(i.path)['images']!=document(state.base/'artifacts-result.json')['images']):
+        raise InstallerError('Prepared region/guest/debug/prebuilt-image policy changed.')
     hosts=document(state.base/'plan.json')['hosts']
     if set(hosts)!=set(i.cfg['hosts']) or any(a['host_identity_sha256']!=hosts[n]['machine_sha256'] for n,a in i.audits.items()):
         raise InstallerError('Prepared host identities changed.')

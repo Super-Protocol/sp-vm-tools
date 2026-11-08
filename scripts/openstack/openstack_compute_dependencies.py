@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from openstack_compute_image import read
+from openstack_artifact_inputs import read
 from openstack_container_engine import digest,file_hash,write
 import openstack_kolla_packages as packages
 

@@ -197,7 +197,7 @@ def probe(request,root=Path('/'),runner=subprocess.run):
         image=json.loads(run(['docker','image','inspect',request['image_reference']]).stdout)
         if (len(image)!=1 or image[0]['Id']!=request['image_id'] or image[0]['Config']['User']!='nova'
                 or image[0]['Os']!='linux' or image[0]['Architecture']!='amd64'
-                or image[0]['Config'].get('Labels',{}).get('io.spvm.context-sha256')!=request['image_context_sha256']):
+                or image[0]['Config'].get('Labels',{}).get('io.spvm.wheel-sha256')!=request['driver_wheel_sha256']):
             blockers.append('DELIVERED_IMAGE_MISMATCH')
         result['protected_runtime']={p:digest(p,limit=512*1024**2) for p in ('/usr/bin/qemu-system-x86_64','/usr/bin/virsh',
             '/usr/sbin/libvirtd','/etc/libvirt/qemu.conf','/etc/libvirt/libvirtd.conf') if path(p).is_file()}

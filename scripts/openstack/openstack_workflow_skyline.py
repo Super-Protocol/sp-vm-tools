@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import re
 
-from openstack_compute_image import read
+from openstack_artifact_inputs import read
 import openstack_kolla_existing as existing
 import openstack_skyline_runtime as runtime
 

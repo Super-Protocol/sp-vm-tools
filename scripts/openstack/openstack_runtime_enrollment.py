@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 import time
 
-from openstack_compute_image import read
+from openstack_artifact_inputs import read
 from openstack_container_engine import digest,file_hash,write
 import openstack_kolla_workspace as workspace
 from openstack_host_helper import request as helper_request
@@ -51,7 +51,7 @@ def stage(args,path):
             runtime['projects'][project]={**policy,'releases':releases}
         requests[name]=backend.request({'schema_version':1,'helper_request':spec,
             'bootstrap_runtime':binding['bootstrap_runtime'],'runtime':runtime,
-            'image_id':binding['image_id'],'image_context_sha256':binding['image_context_sha256'],
+            'image_id':binding['image_id'],'driver_wheel_sha256':binding['driver_wheel_sha256'],
             'enrollment_sha256':enrollment['enrollment_sha256']})
     if workspace.check(root)!=receipt:raise ValueError('workspace changed during staging')
     for host in binding['hosts'].values():

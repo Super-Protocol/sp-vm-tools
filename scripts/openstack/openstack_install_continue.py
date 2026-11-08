@@ -91,11 +91,10 @@ def reviewed(origin):
 
 def prepare(i,tx):
     from openstack_install import protected_parent
-    from openstack_compute_image import read
+    from openstack_artifact_inputs import read
     import openstack_kolla_workflow as kolla
     import openstack_kolla_workspace as workspace
-    from openstack_install_artifacts import console_builder
-    from openstack_install_phases import BASES
+    import openstack_prebuilt as prebuilt
     if not i.args.use_testing_images:
         raise InstallerError('Continuation requires explicit --use-test-images acknowledgement; --yes is not sufficient.')
     origin=Path(i.args.continue_from)
@@ -113,7 +112,7 @@ def prepare(i,tx):
         if file_hash(path)!=wanted or i.inputs.get(filename)!=wanted:
             raise InstallerError('Original config, SSH trust/identity, driver or environment changed; continuation refused.')
     i.verify_environment()
-    console_builder(i,['--check-base-image',i.options.get('console_base_image',BASES['console'])])
+    prebuilt.selected(i.path)
     i.config=str(private(origin/'deployment.artifacts.yaml'))
     i.refresh()
     i.workspace=str(origin/'kolla-bound')

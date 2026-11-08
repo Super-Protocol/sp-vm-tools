@@ -9,7 +9,7 @@ import stat
 import sys
 import time
 
-from openstack_compute_image import read
+from openstack_artifact_inputs import read
 from openstack_container_engine import digest,file_hash,write
 from openstack_runtime_enrollment import protected_output
 
