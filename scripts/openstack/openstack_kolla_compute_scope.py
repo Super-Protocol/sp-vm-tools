@@ -7,6 +7,7 @@ by drift. Replacement additionally requires an empty, quarantined compute.
 import argparse
 import fcntl
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -18,8 +19,9 @@ import time
 import yaml
 from openstack_container_engine import digest, file_hash, write
 from openstack_artifact_inputs import read, TAG_RE
+from openstack_image_identity import pinned_image_id
 
-GUARD=r'''
+GUARD=inspect.getsource(pinned_image_id)+'\n'+r'''
 def spvm_compute_guard(params, spec, root=None, runner=None):
     import fcntl,hashlib,json,os,stat,subprocess
     from pathlib import Path
@@ -58,8 +60,9 @@ def spvm_compute_guard(params, spec, root=None, runner=None):
     if helper['storage']['compute_uuid']!=spec['compute_uuid']:raise ValueError('helper identity differs')
     if params.get('image')!=spec['image']:raise ValueError('rendered image differs')
     image=json.loads(run(['docker','image','inspect',spec['image']]).stdout)
-    if len(image)!=1 or image[0]['Id']!=spec['image_id']:raise ValueError('cached image differs; never pull implicitly')
-    if action=='compare_container' and spec['mode']=='verify':return
+    if len(image)!=1:raise ValueError('cached image differs; never pull implicitly')
+    runtime_id=pinned_image_id(image[0],spec['image'],spec['image_id'])
+    if action=='compare_container' and spec['mode']=='verify':return runtime_id
     if run(['virsh','-c','qemu:///system','list','--all','--uuid']).stdout.strip():raise ValueError('compute has domains')
     p=run(['pgrep','-f',r'^(/[^ ]*/)?(qemu-system-[^ ]+|qemu-kvm|cloud-hypervisor)( |$)'],(0,1))
     if p.returncode!=1:raise ValueError('direct guest present')
@@ -88,6 +91,7 @@ def spvm_compute_guard(params, spec, root=None, runner=None):
         if ({p.name for p in leases.iterdir()}!={'.leases.lock','leases.json'} or
                 json.loads(trusted('/var/lib/spvm/runtime/leases.json').read_text())!={} or
                 trusted('/var/lib/spvm/runtime/.leases.lock').stat().st_size):raise ValueError('GPU/runtime leases remain')
+    return runtime_id
 
 def spvm_compute_snapshot(spec):
     import hashlib,json,subprocess
@@ -118,7 +122,7 @@ def guarded_module(original,spec):
     anchor='def main():\n    module = generate_module()\n'
     if original.count(anchor)!=1:raise ValueError('unsupported pinned container module entry point')
     guard=('\nSPVM_COMPUTE_SCOPE='+repr(spec)+'\n'+GUARD+'\n'+anchor+
-        "    try:\n        spvm_compute_guard(module.params, SPVM_COMPUTE_SCOPE)\n"
+        "    try:\n        spvm_runtime_image_id = spvm_compute_guard(module.params, SPVM_COMPUTE_SCOPE)\n"
         "    except Exception:\n        module.fail_json(changed=False, msg='SPVM compute admission refused before container action')\n")
     result=original.replace(anchor,guard)
     action="        result = bool(getattr(cw, module.params.get('action'))())\n"
@@ -127,7 +131,7 @@ def guarded_module(original,spec):
       "        cw.pull_image = spvm_no_pull\n        spvm_before = spvm_compute_snapshot(SPVM_COMPUTE_SCOPE)\n"+action+
       "        if module.params['action'] == 'recreate_or_restart_container':\n"
       "            spvm_current = cw.get_container_info()\n"
-      "            if not spvm_current or spvm_current['Image'] != SPVM_COMPUTE_SCOPE['image_id'] or not spvm_current['State']['Running']:\n"
+      "            if not spvm_current or spvm_current['Image'] != spvm_runtime_image_id or not spvm_current['State']['Running']:\n"
       "                module.fail_json(changed=cw.changed, msg='SPVM resulting compute image/state differs')\n"
       "        if spvm_compute_snapshot(SPVM_COMPUTE_SCOPE) != spvm_before:\n"
       "            module.fail_json(changed=cw.changed, msg='SPVM protected container/service/domain drift')\n"
@@ -200,7 +204,7 @@ def inputs(spec):
         if p.is_symlink() or not p.is_file():raise ValueError('regular tracked Kolla files required')
         protected[str(p)]=file_hash(p)
     runner_sources={p.name:file_hash(p) for p in (Path(__file__),Path(__file__).with_name('openstack_container_engine.py'),
-                   Path(__file__).with_name('openstack_artifact_inputs.py'))}
+                   Path(__file__).with_name('openstack_artifact_inputs.py'),Path(__file__).with_name('openstack_image_identity.py'))}
     return {'request':spec,'files':protected,'overrides':overrides,'runner_sources':runner_sources}
 
 

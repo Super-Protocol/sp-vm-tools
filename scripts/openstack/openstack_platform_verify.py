@@ -79,7 +79,7 @@ def verify(spec,path,connection,auth,binding):
     files={str(runtime/'config.json'):hashlib.sha256((runtime/'config.json').read_bytes()).hexdigest()}
     for name,sha in stage['files_sha256'].items():
         if name.startswith('units/'):files['/etc/systemd/system/'+Path(name).name]=sha
-    result=installed.verify({'image_id':spec['console_image_id'],'files_sha256':files,
+    result=installed.verify({'image_id':spec['console_image_id'],'image_reference':spec['console_image_reference'],'files_sha256':files,
         'units':['spvm-web-nodes.service','spvm-web-capacity.timer'],
         'manifest':spec['console_manifest'],'origin':origin},assets.verify,fetch,probe)
     jar=http.cookiejar.CookieJar();session=build_opener(HTTPSHandler(context=context),HTTPCookieProcessor(jar))

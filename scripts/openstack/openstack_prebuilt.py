@@ -1,5 +1,6 @@
 """Consume a coordinated CI kit. No Docker on the management machine."""
 import importlib.util
+import inspect
 import hashlib
 import json
 import os
@@ -10,6 +11,7 @@ import subprocess
 from openstack_container_engine import file_hash
 from openstack_errors import InstallerError
 import openstack_progress as progress
+from openstack_image_identity import pinned_image_id
 
 
 def backend_module(backend):
@@ -90,7 +92,7 @@ def pull(backend, host, kit, component, machine, output, *, reserve_gib=10):
     output.mkdir(mode=0o700, parents=False, exist_ok=False)
     image = kit['images'][component]
     expected = {'machine': machine, 'image': image, 'reserve_gib': reserve_gib}
-    code = 'WANTED=' + repr(expected) + '\n' + '''
+    code = inspect.getsource(pinned_image_id) + '\nWANTED=' + repr(expected) + '\n' + '''
 import hashlib,json,shutil,subprocess
 from pathlib import Path
 if hashlib.sha256(Path('/etc/machine-id').read_bytes().strip()).hexdigest()!=WANTED['machine']:
@@ -104,12 +106,12 @@ image=WANTED['image'];reference=image['reference']
 result=subprocess.run(['docker','pull','--platform=linux/amd64',reference],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=1800)
 if result.returncode:raise ValueError('pinned image download failed')
 actual=json.loads(subprocess.check_output(['docker','image','inspect',reference],timeout=30))
-if (len(actual)!=1 or actual[0]['Id']!=image['config_id'] or actual[0]['Os']!='linux'
- or actual[0]['Architecture']!='amd64' or reference not in actual[0].get('RepoDigests',[])):
+if len(actual)!=1:
  raise ValueError('downloaded image identity/platform differs from the kit')
+runtime_id=pinned_image_id(actual[0],reference,image['config_id'])
 if shutil.disk_usage(info).free<WANTED['reserve_gib']*1024**3:
  raise ValueError('Docker storage reserve exhausted; image retained for review')
-print(json.dumps({'status':'PREBUILT_IMAGE_PULLED_NOT_DEPLOYED','reference':reference,'image_id':actual[0]['Id']}))
+print(json.dumps({'status':'PREBUILT_IMAGE_PULLED_NOT_DEPLOYED','reference':reference,'image_id':image['config_id'],'runtime_id':runtime_id}))
 '''
     spec = importlib.util.spec_from_file_location('image_pull_transport', backend)
     module = importlib.util.module_from_spec(spec)
@@ -123,6 +125,7 @@ print(json.dumps({'status':'PREBUILT_IMAGE_PULLED_NOT_DEPLOYED','reference':refe
         raise InstallerError('Pinned ' + component + ' image retrieval failed; inspect ' + str(log) + '. No automatic retry.')
     receipt = json.loads(result.stdout)
     if (receipt.get('status') != 'PREBUILT_IMAGE_PULLED_NOT_DEPLOYED'
-            or receipt.get('image_id') != image['config_id'] or receipt.get('reference') != image['reference']):
+            or receipt.get('image_id') != image['config_id'] or receipt.get('reference') != image['reference']
+            or receipt.get('runtime_id') not in (image['config_id'],image['reference'].split('@')[1])):
         raise InstallerError('Target did not confirm the exact prebuilt image identity.')
     return receipt

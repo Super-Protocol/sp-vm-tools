@@ -618,7 +618,8 @@ def post_install(value,path,backend,output,core,*,operations=None,verify_existin
         # Full authenticated GUI acceptance is implemented separately to keep
         # tokens/cookies strictly in memory and out of all phase receipts.
         from openstack_platform_verify import verify
-        accepted=phase('verify-platform',lambda:verify({**spec,'console_image_id':cfg['kolla']['skyline_console_image_id']},path,connection,auth,binding))
+        accepted=phase('verify-platform',lambda:verify({**spec,'console_image_id':cfg['kolla']['skyline_console_image_id'],
+            'console_image_reference':cfg['kolla']['skyline_console_image']},path,connection,auth,binding))
         if list(connection.compute.servers(all_projects=True)):raise ValueError('unexpected guest appeared during installation')
         record.update(status='PLATFORM_READY_NO_SWARM_CREATED',acceptance=accepted)
         write(journal,record)

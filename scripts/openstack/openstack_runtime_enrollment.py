@@ -51,7 +51,7 @@ def stage(args,path):
             runtime['projects'][project]={**policy,'releases':releases}
         requests[name]=backend.request({'schema_version':1,'helper_request':spec,
             'bootstrap_runtime':binding['bootstrap_runtime'],'runtime':runtime,
-            'image_id':binding['image_id'],'driver_wheel_sha256':binding['driver_wheel_sha256'],
+            'image_id':binding['image_id'],'image_reference':binding['image_reference'],'driver_wheel_sha256':binding['driver_wheel_sha256'],
             'enrollment_sha256':enrollment['enrollment_sha256']})
     if workspace.check(root)!=receipt:raise ValueError('workspace changed during staging')
     for host in binding['hosts'].values():
@@ -83,6 +83,7 @@ def execute(args,path,host=None):
     backend=load_backend(path);wanted=backend.request(backend.parse(read(args.request)))
     host=host or backend.Host()
     identity={'request_sha256':digest(wanted),'backend_sha256':file_hash(Path(path).with_name('runtime_enrollment.py')),
+              'image_identity_sha256':file_hash(Path(path).with_name('image_identity.py')),
               'runner_sha256':file_hash(Path(__file__))}
     if args.action=='check-runtime-enrollment':
         if hashlib.sha256(host.read('/etc/machine-id').strip()).hexdigest()!=wanted['helper_request']['machine_sha256']:

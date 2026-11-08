@@ -75,7 +75,7 @@ def inputs(args,backend_path,backend):
             or globals_.get('enable_nova_libvirt_container') is not False
             or globals_.get('nova_compute_image_full')!=binding['image_reference']):
         raise ValueError('preserving measured runtime profile and bound image required')
-    code=read(Path(__file__).with_name('openstack_network_probe.py')).decode()+'\n'+read(Path(__file__).with_name('openstack_initial_probe.py')).decode()
+    code=read(Path(__file__).with_name('openstack_image_identity.py')).decode()+'\n'+read(Path(__file__).with_name('openstack_network_probe.py')).decode()+'\n'+read(Path(__file__).with_name('openstack_initial_probe.py')).decode()
     source_hashes={p:hashlib.sha256(body).hexdigest() for p,(body,mode) in sources(backend_path).items()}
     launcher,_,_=recipe(backend_path)
     requests={}
@@ -117,7 +117,7 @@ def inputs(args,backend_path,backend):
         'config_sha256':digest(cfg),'known_hosts_sha256':file_hash(trust),
         'identity_files_sha256':{p:file_hash(p) for h in cfg['hosts'].values() for p in h['ssh_transport']['identity_files']},
         'installer_sha256':{n:file_hash(Path(__file__).with_name(n)) for n in
-            ('openstack_kolla_prechecks.py','openstack_initial_probe.py','openstack_kolla_workspace.py','openstack_network_probe.py','openstack_network_runtime.py')},
+            ('openstack_kolla_prechecks.py','openstack_initial_probe.py','openstack_kolla_workspace.py','openstack_network_probe.py','openstack_network_runtime.py','openstack_image_identity.py')},
         'requests':requests}
     return cfg,receipt,source,code,fingerprint
 

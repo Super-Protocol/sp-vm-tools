@@ -13,6 +13,8 @@ import subprocess
 
 if 'check_shared_network' not in globals():
     from openstack_network_probe import check_shared_network
+if 'pinned_image_id' not in globals():
+    from openstack_image_identity import pinned_image_id
 
 
 def native_ovs_conflicts(run):
@@ -195,7 +197,7 @@ def probe(request,root=Path('/'),runner=subprocess.run):
                     or sorted(p.name for p in device.joinpath('iommu_group/devices').iterdir())!=[bdf]):
                 blockers.append('GPU_NO_LONGER_VFIO_ISOLATED')
         image=json.loads(run(['docker','image','inspect',request['image_reference']]).stdout)
-        if (len(image)!=1 or image[0]['Id']!=request['image_id'] or image[0]['Config']['User']!='nova'
+        if (len(image)!=1 or not pinned_image_id(image[0],request['image_reference'],request['image_id']) or image[0]['Config']['User']!='nova'
                 or image[0]['Os']!='linux' or image[0]['Architecture']!='amd64'
                 or image[0]['Config'].get('Labels',{}).get('io.spvm.wheel-sha256')!=request['driver_wheel_sha256']):
             blockers.append('DELIVERED_IMAGE_MISMATCH')

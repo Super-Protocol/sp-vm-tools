@@ -4,6 +4,7 @@ Hardware, trusted management transport and matching image/helper inputs remain
 owned prerequisite phases. Never invoke a control-plane deploy or post-deploy.
 """
 import argparse
+import inspect
 import json
 import openstack_progress as progress
 import os
@@ -17,6 +18,7 @@ import yaml
 from openstack_artifact_inputs import read
 from openstack_container_engine import digest, file_hash, write, collection_hash
 import openstack_kolla_workspace as workspace
+from openstack_image_identity import pinned_image_id
 
 
 def specification(filename):
@@ -95,7 +97,7 @@ if h.get_vars().get('ansible_host')!=v['address'] or h.get_vars().get('ansible_u
     return cfg,receipt,enrollment,spec,alias
 
 
-HOST = r'''
+HOST = inspect.getsource(pinned_image_id) + '\n' + r'''
 import hashlib,json,subprocess,platform
 from pathlib import Path
 def run(args,allowed=(0,)):
@@ -125,7 +127,7 @@ ids=run(['docker','ps','--all','--no-trunc','--format','{{.ID}}']).split()
 containers=json.loads(run(['docker','inspect',*ids])) if ids else []
 if any(c['Name']=='/nova_compute' for c in containers):raise ValueError('target already has nova_compute; use prepared-host path')
 image=json.loads(run(['docker','image','inspect',IMAGE]))
-if len(image)!=1 or image[0]['Id']!=WANT['image_id']:raise ValueError('preloaded pinned driver image required')
+if len(image)!=1 or not pinned_image_id(image[0],IMAGE,WANT['image_id']):raise ValueError('preloaded pinned driver image required')
 files={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in [Path('/usr/bin/qemu-system-x86_64'),
  Path('/usr/sbin/libvirtd'),Path('/etc/libvirt/qemu.conf'),Path('/etc/libvirt/libvirtd.conf'),Path('/etc/docker/daemon.json'),
  Path('/etc/spvm/host-helper.json'),Path('/etc/spvm/runtime-services.json'),Path('/var/lib/nova/compute_id')] if p.is_file()}

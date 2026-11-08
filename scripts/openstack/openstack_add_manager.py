@@ -256,7 +256,8 @@ print(json.dumps({'status':record['status']}))
                 allowed.append(release)
             project['releases']=allowed
         wanted={'schema_version':1,'helper_request':self.helper,'bootstrap_runtime':self.binding['bootstrap_runtime'],
-            'runtime':runtime,'image_id':self.binding['image_id'],'driver_wheel_sha256':self.binding['driver_wheel_sha256'],
+            'runtime':runtime,'image_id':self.binding['image_id'],'image_reference':self.binding['image_reference'],
+            'driver_wheel_sha256':self.binding['driver_wheel_sha256'],
             'enrollment_sha256':digest({'runtime':runtime,'helper':self.helper})}
         from openstack_runtime_enrollment import load_backend
         wanted=load_backend(i.path).request(wanted);write(self.output/'enrollment.json',wanted)

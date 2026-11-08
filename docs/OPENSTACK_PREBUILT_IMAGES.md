@@ -52,6 +52,14 @@ host restrictions are unchanged.
 
 ## UI ownership and publication
 
+OCI config identity and Docker runtime identity are distinct. The kit and the
+verified registry manifest always pin the config SHA256. With the classic image
+store Docker uses that config ID; with the containerd image store Docker uses the
+image manifest digest as its runtime ID. Target acceptance checks the exact
+Linux/amd64 RepoDigest and single-platform descriptor, then binds containers to
+that observed runtime ID. It does not accept a floating tag, an image index or
+an arbitrary second ID. No old installation format is converted.
+
 Frontend React changes and standalone SPVM pages are owned by the
 `SuperProtocol/` directory of the `Super-Protocol/skyline-console` fork.
 Authenticated APIs, workers, authorization and privileged operations remain in
