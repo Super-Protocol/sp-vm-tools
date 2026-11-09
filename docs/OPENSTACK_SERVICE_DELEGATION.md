@@ -119,7 +119,7 @@ Perform a scoped migration with backups and matching worker/exporter/client code
    background workers. Never reboot a measured guest to migrate credentials.
 5. Use optional integer Unix `not_before` to leave already queued confirmations
    waiting for explicit approval. Otherwise enabling automatic permits may
-   execute a historical queue. The lab migration intentionally used this fence.
+   execute a historical queue.
 6. Verify timers, unchanged VM processes, and an isolated no-VM permit-preparation
    smoke test with a disposable Barbican intent. Do not fake a confirmation in
    the live queue to test deletion.

@@ -125,75 +125,23 @@ files, clear review markers or re-enable scheduling until actual helper/native/
 canonical/Placement consistency is verified on an empty host. No automatic adoption
 or migration of an old/interrupted installation is attempted.
 
-## Remaining acceptance
+## Activation prerequisites
 
-### Activation and experimental format replacement
+Install one matching set of driver/compute image, helper/model sources, pinned
+launcher, web backend/GUI, worker and capacity collector. On empty hosts, prepare
+the disabled inventory and native PCI Placement modes before activation. Verify
+exact BDF/resource-class registration and fresh catalogs before enabling GPU use
+and separately enabling host scheduling. A console update alone does not activate
+GPU management; hardware bootstrap and CC/PPCIe setup remain separate.
 
-Install one matching set of driver wheel/compute image, helper/model sources,
-pinned launcher, web backend/GUI, worker and capacity collector. On empty hosts,
-stage inventory/canonical intent and provision native PCI Placement modes before
-activating the set; verify exact native BDF/resource-class registration and fresh
-catalogs before restoring scheduling. A console update or a prepared image alone
-does not activate GPU management. Technical lab activation and Nova control-service
-restarts require separate explicit approval. CC/bootstrap and hypervisor setup
-remain separate and are not changed by metadata corrections.
-The bundle must advertise `gpu-pci-identity-v1`; worker activation requires the
-matching PCI-only model API in the web environment. A matching package version
-or the older generic GPU capability alone is insufficient.
+The kit must advertise `gpu-pci-identity-v1`; the web environment must expose the
+matching PCI-only model API. An equal package version alone is insufficient.
+Technical changes may restart the affected Nova services and need explicit
+administrative approval. Retain quarantine and private journals on partial
+failure; there is no automatic repair, rollback or replay.
 
-No backward compatibility, old-ID aliases, conversion or automatic flavor
-reassignment is supported. Explicitly review and retire obsolete experimental
-GPU flavors, then create replacements using the current profiles. Do not change
-flavor extra specs or instance PCI allocations to disguise an ID change. On a
-partial failure retain quarantine/evidence for manual review, not migration or
-automatic replay. This stage does not introduce characteristics-based scheduling.
-
-First-time GPU preparation is still an explicit onboarding prerequisite. Complete
-installer/workflow regression acceptance and physical GPU validation remain before
-rollout. Synthetic race/failure and browser checks are not physical fabric acceptance.
-The prior lab update installed observation-only GUI/backend and metadata; compute,
-helper/launcher and PCI modes were not activated. This implementation does not
-change that activation status or claim physical fabric acceptance.
-
-Local evidence (2026-10-27): all 447 installer tests passed, including current GPU
-inventory fixtures and synthetic native-configuration transactions. The matching
-driver's current Nova set (646 tests), related deployment set (68 tests), pinned
-launcher tests (21 tests) and Chromium mock-UI checks passed. Full local Nova
-discovery still has 52 errors/one failure in 137 older-contract fixtures; the same
-counts reproduce with HEAD resource/launch logic. No compatibility entrypoints
-were restored to satisfy those fixtures. This is not a physical GPU rollout or
-clean-host/fabric acceptance. Test files are not part of the staged changes.
-
-PCI-only follow-up: all 447 installer tests and 655 tests in the current Nova set
-passed with the previously documented older-contract exclusions. Related native
-transaction/discovery/deployment tests and Chromium mock-API checks passed.
-New coverage includes unknown VRAM without a fabricated capacity, stable PCI
-identities/aliases/flavors after descriptive corrections, deterministic shared
-names across hosts, CLI unknown fields, read-only free counts and preserved
-experimental fabric restrictions. Current source snapshots and wheel are prepared
-locally. This follow-up did not activate any lab runtime or change native PCI
-settings; a separate approved activation is still necessary.
-
-### Full native lab activation, 2026-10-27
-
-The operator subsequently authorized full rollout on `.247` (controller/compute)
-and `.245` (compute). Matching Nova/helper/launcher, web/GUI, administrator worker,
-collector and operator CLI are now active. Native PCI Placement modes and the
-current GPU alias were provisioned on empty hosts with backups and scheduling
-fenced; Nova control/compute services were restarted, not QEMU/libvirt or CC
-bootstrap. Scheduling is enabled again. Canonical configuration/image references
-were persisted. The superseded observation-only timer is stopped and disabled.
-
-Both hosts report one free H100 in the shared PCI-only profile
-`gpu-03293e2feebd5bf23a657c57`, despite unknown VRAM. Nova device status and
-Placement per-device inventories were verified with no overcommit/reservations.
-The live GUI reports two free GPUs and permits selecting NVIDIA H100 when creating
-a flavor. A temporary GPU flavor was created through the GUI, its generated alias
-verified, then that exact test flavor was removed. Existing flavors were not
-rewritten. No VMs or Swarm clusters were started; guest passthrough, multi-GPU/
-NVSwitch and clean-host acceptance are still separate checks.
-
-Active image tag suffix: `gpu-20261027-02`. Evidence/backups on both hosts:
-`/var/lib/spvm-gpu-20261027-02`; controller web runtime:
-`/srv/spvm-web-gpu-20261027-02`. See the matching driver's `GPU_PROFILES.md`
-for exact image IDs and verification records. No commit/push/release was created.
+Old-ID aliases, conversion and automatic flavor reassignment are unsupported.
+Review and retire obsolete experimental GPU flavors explicitly, then create
+replacements against the current PCI profiles. Do not edit existing allocations
+or extra specs to disguise an identity change. Synthetic checks cannot establish
+physical GPU isolation, DMA safety, CC readiness or NVSwitch fabric support.

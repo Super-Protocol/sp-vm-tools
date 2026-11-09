@@ -297,16 +297,6 @@ global packages. Failure output identifies the compute, activation step and
 private evidence directory. Bounded remote stderr is saved only in mode-0600
 `observations/private-remote-*.json`; do not publish those diagnostics.
 
-The observed super6 failure on 2026-11-06 stopped at `enroll` after quarantine
-and Nova stop. Read-only inspection with the corrected host payload confirmed
-the expected bootstrap runtime and an empty stopped host. No runtime enrollment,
-Nova start, scheduling enable or platform continuation was performed by that
-inspection. The cloud had zero servers; super7 remained up/enabled and super6
-down/disabled. The idle libvirt process had a refreshed PID/start timestamp,
-so the old protected-services baseline cannot simply be asserted unchanged.
-Use a new verified bundle and an explicitly reconciled continuation; do not
-reset old journals or present a read-only payload test as successful activation.
-
 ### Continue the first compute enrollment failure
 
 Repeat the ordinary command with the same `--output`. The installer recognizes
@@ -351,24 +341,6 @@ and agents are never delivered to the controller; native API calls use the
 existing verified SDK. Final success still requires authenticated platform/GUI
 acceptance. Selecting this mode or passing `--check` is not installation success.
 
-This continuation was tested synthetically and against the locally saved
-failed/fresh-review plans on `petr-dev`. No target-host command or installation
-was run for this continuation implementation. The next operator-run `--check`
-must perform fresh live observations; the cached plans are not treated as them.
-
-### Same-output validation evidence
-
-The 66 targeted synthetic tests cover transaction ordering, both reviewed
-reconcilers, same-command check/apply/no-op sequences, refused unknown failures,
-private history validation and Skyline checks. Shell syntax and dependency-free
-public `--help` passed. Tests do not prove successful live continuation.
-
-Three real read-only invocations with the same output
-`/var/lib/spvm-openstack-install-01/run-05` passed on super7 and super6; evidence
-is below `attempts/attempt-000001` through `attempt-000003`. Selection chose
-platform only and retained the original failed journal. No continuation claim,
-router creation, Kolla deployment or other installation phase was executed.
-
 ### Reviewed platform-only continuation of the OVN router refusal
 
 Repeating the ordinary command with the same `--output` selects the platform
@@ -412,58 +384,10 @@ bundle hashes are checked before each phase. The parent intent is fsynced before
 each child action. A failed/interrupted phase is `NEEDS_REVIEW`; later phases do
 not run. There is no automatic rollback of a partial cloud, workspace adoption,
 host reset, service repair, guest recovery or blind restart from a boundary.
-Existing output directories are refused even for a successful earlier run.
+Existing output directories are validated for supported continuation or a recorded completed result.
 Inspect both the parent and child journals before selecting another directory;
 a new directory does not authorize adoption of a partially installed cloud.
 
 The controller copy also retains its SDK dependency list, API/GUI acceptance and
 service configuration journals. Keep these private. Do not commit private logs,
 Kolla passwords/TLS keys, API credentials, provider configuration or SSH keys.
-
-## Acceptance boundary
-
-### Test-image continuation validation (2026-11-05)
-
-Installer fix `fa4c79b` passed 45 targeted installer/continuation/Skyline checks.
-Real read-only validation of the prepared `.247`/`.245` run passed, followed by
-actual Kolla `prechecks` with explicit test-image acknowledgement, including
-Nova, Neutron and Skyline checks. Protected host observations before/after were
-identical with the libvirt connections held. Evidence is private under
-`/var/lib/spvm-openstack-install-01/run-04-real-prechecks-01`; the explicit
-continuation was not reserved and no `deploy` or platform completion was run.
-This proves the prechecks fix, not a completed cloud installation. Continue the
-reviewed failed run using the same output directory, never
-by changing the failed journal's status or replaying initial preparation.
-
-This new entry point has synthetic failure/order/approval/protocol checks and
-local shell/Python/help checks. Those **do not establish** clean-OS, cold-cache,
-real Kolla deployment, Ubuntu26 dependency resolution, reboot, API-canary or
-authenticated GUI acceptance of the integrated command. Record the actual
-outcome of a subsequent live run separately; do not relabel mock callbacks or
-an older multi-command installation as this command's live acceptance.
-
-### Earlier checkpoint: 2026-11-05, before the Skyline/continuation fixes
-
-The current implementation passed 24 targeted single-install tests and 46
-existing host-control protocol/coordinator tests. The public shell syntax,
-Python AST and dependency-free help were also checked. This is a targeted test
-result, not a claim that the entire historical untracked test tree passes:
-broader attempts found stale fixtures for launcher contracts, workspace source
-bindings and the earlier host-catalog API. Production checks were not weakened
-to satisfy those fixtures.
-
-A real read-only run from `petr-dev` succeeded against `super7` and `super6`,
-starting with the original infrastructure YAML (without resource fields) and the
-existing READY environment. It validated pip/import/CLI/collection state and
-both hosts, then recorded `CHECKED_NOT_INSTALLED`. Private evidence is in
-`/var/lib/spvm-openstack-install-01/one-command-check-08`. Earlier local failed
-attempts remain retained rather than overwritten. These checks found and fixed
-sudo Git ownership handling for pinned launcher blobs and automatic-storage
-planning order. No remote directory/package/network/helper/cloud deployment was
-performed by these checks.
-
-The selected existing driver is 0.2.30, source commit
-`4a70cf06d13ffe107a0e922b371cbf5c9fbef5ca`. The new orchestration changes are in
-`sp-vm-tools`; this checkpoint does not require pretending that a new driver
-binary was published. Full integrated installation and authenticated API/GUI
-acceptance remain **not executed** at this checkpoint.

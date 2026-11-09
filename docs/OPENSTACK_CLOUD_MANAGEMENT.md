@@ -44,7 +44,7 @@ installer/backend containing the scoped checks instead.
 
 Root-private `/var/lib/spvm/cloud-management` holds a pointer and checksummed
 generations: portable infrastructure, Kolla inputs, unchanged passwords/CA/TLS,
-prepared collections, launcher, offline compute image and verified driver kit.
+prepared collections, launcher, prebuilt image references and verified installation kit.
 Identity binds cloud UUID, controller machine, API endpoint/CA and administrative
 project. Each generation retains operation kind, host, ID and approved plan hash;
 removal evidence enables returning-host classification without the old PC.
@@ -84,12 +84,12 @@ Back up the complete controller directory and referenced installed controller
 components, plus normal OpenStack databases/credentials/configuration. This kit
 is **not database backup or disaster recovery**. Losing it and its backup is a
 refusal, not permission for API guesswork, password/CA regeneration or latest
-downloads. Full generations contain the offline compute image: allow space for
-retained generations and a new transfer on both PCs. Space is checked; successful
+downloads. Allow space for retained
+generations and a new kit transfer on both management and controller hosts. Space is checked; successful
 staging is renamed into the generation, not duplicated. Partial files remain for
 review. Automatic pruning/cleanup is not implemented.
 
-## Failure and acceptance scope
+## Failures and limitations
 
 The controller resource lock and generation claims serialize mutations. Check
 all targets before approval, commit sequentially, stop at first failure without
@@ -100,18 +100,4 @@ connections require review. No replay, failover, host/VM recovery or repair thro
 private kit and inspects read-only, without persistent controller changes,
 enrollment, package installation or credential rotation.
 
-The focused synthetic checks cover archive/permissions, generations,
-concurrency/interruption, batch ordering and portability after old paths disappear.
-The portability fixture substitutes SSH, dependency execution and TLS; it is not
-itself proof of a live fleet operation. Existing clouds without this capability
-are deliberately refused, not migrated. Keep live-acceptance results separate
-from synthetic coverage and identify the exact source and artifact used.
-
-[Live acceptance, 2026-11-08](OPENSTACK_CLOUD_MANAGEMENT_ACCEPTANCE_20261108.md)
-used a cleared two-host CC stand and an isolated manager without original
-installation history. Normal controller-based removal and return preserved a
-running peer and its resource settings. A separate initially empty manager
-directory passed read-only preflight. The first new-host add needed the explicit
-reviewed completion described in that report after a YAML defect was fixed;
-it was not an uninterrupted final-revision fresh-install/new-add run. The test
-was a local container with real SSH/API/Kolla execution, not another physical PC.
+Existing clouds without the required capability are refused, not migrated.

@@ -8,16 +8,15 @@ a private inter-host network nor WireGuard. Enable it with:
 network:
   management_mode: shared-interface
   mode: host-nat
-  api_vip: 92.223.119.247
-  ingress_host: super7
-  public_ip: 92.223.119.247
+  api_vip: 192.0.2.10
+  ingress_host: controller
+  public_ip: 192.0.2.10
   transit_cidr: 172.30.79.0/24
 ```
 
-For both lab hosts set `management_interface: bond0.2907` and
-`tunnel_interface: bond0.2907`. Their SSH addresses are respectively
-`92.223.119.247` and `92.223.119.245`. These are concrete lab addresses, not a
-portable allocation for another deployment. The `api_vip` field in this profile
+These documentation-only addresses are not a deployable configuration. Set
+`management_interface` and `tunnel_interface` to each host's actual existing
+interface and use its verified address. The `api_vip` field in this profile
 means the controller's **already assigned address**, not an additional VIP.
 
 SSH key/trust paths are local CLI settings, not deployment YAML fields. Optional
@@ -41,8 +40,8 @@ not enabled. See the main deployment guide's local SSH settings section.
   fresh audit, not guessed defaults.
 - Management requests still cover every host. In
   `openstack-host-network.example.json`, replace each `management_address` with
-  the actual host address/prefix (`92.223.119.247/28`, `92.223.119.245/28` in this
-  lab), set `route_interface: bond0.2907` and `transport_unit: null`. The request's
+  the actual host address/prefix, set `route_interface` to the verified interface
+  and `transport_unit: null`. The request's
   machine identities must be audited again after any OS reinstall.
 - Use matching updated installer and spvm-openstack backend components. An older
   published bundle does not understand `management_mode`; do not edit its
@@ -50,7 +49,7 @@ not enabled. See the main deployment guide's local SSH settings section.
 - Complete the updated TDX/SNP/non-CC host bootstrap before helper provisioning.
   All three bootstraps prepare launcher tools (`uplink`, `nc`, `zstd`, `curl`,
   `jq`, `unzip`). Missing Uplink is installed from the pinned, SHA256-verified
-  v1.165.6 archive; an existing executable is preserved and checked. The helper
+  artifact declared by bootstrap; an existing executable is preserved and checked. The helper
   preparation rejects missing tools before installing services. Its sandbox
   deliberately makes `/usr` read-only: starting a VM is not a host-package
   installation step. Updating only the GUI or driver cannot supply these tools.
@@ -113,9 +112,9 @@ Those must still permit the selected peers and SSH/ingress as intended. Managed
 firewall conflicts retain the installer's existing fail-closed behavior. Peer
 membership is derived from the complete inventory and bound to approved plans;
 it is not an automatic discovery/trust mechanism. Membership changes require a
-new reviewed policy on every affected host. Existing add/remove-compute and HA
-acceptance must not be assumed to cover this new profile; coordinate firewall
-membership explicitly before using those maintenance workflows or reusing an IP.
+new reviewed policy on every affected host. Membership operations must preserve
+the owned peer guards. Verify the supported topology before maintenance or IP
+reuse; an allowlist does not introduce HA or authorize an arbitrary network.
 
 ## Kolla listener layout and access
 
@@ -158,30 +157,10 @@ SSH tunnels. Trust the generated API CA in the browser/client; never use
 `--insecure` as a deployment fix. For example:
 
 ```bash
-ssh -N -L 9999:92.223.119.247:9999 petr@92.223.119.247
+ssh -N -L 9999:192.0.2.10:9999 operator@192.0.2.10
 ```
 
 Then use `https://localhost:9999`. Other OpenStack clients need suitable tunnels
 and endpoint handling too: the operator workstation is not automatically a
 trusted network peer and direct API calls from it may be blocked. An SSH login
 does not make direct public API traffic originate from the controller.
-
-## Acceptance boundary
-
-Synthetic tests exercise config validation, listener overrides, primary-IP/default
-route preservation, IPv4/IPv6 guard behavior, repeated runtime calls, NAT/probe
-routes, Geneve coexistence and read-only deployment admission. Existing dedicated
-profile tests remain applicable. None of these alone proves an end-to-end Kolla
-deployment or public/network security. Complete fresh-host Kolla prechecks,
-deploy/post-deploy, reboot persistence, peer connectivity and external negative
-access tests before declaring this profile accepted. Do not remove guards to get
-a passing deployment. Preparation does not launch Swarm or recover guests.
-
-Implementation checkpoint (2026-11-02, unpublished working tree): 118 targeted
-synthetic/regression tests passed, including real temporary OpenSSL certificate
-verification. The concrete lab YAML also passed local schema validation and
-rendering against Kolla commit `689533989dc27670e4fde6e0b313c5150b8efe7f`.
-A separate broader `test_installer.py` run had four fixture/permission errors;
-the same four errors reproduced with the pre-change HEAD installer and the same
-tests. This is not a claim that the whole repository test suite is green. No
-host firewall, address or deployment was changed for these checks.

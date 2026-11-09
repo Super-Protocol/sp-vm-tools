@@ -1,357 +1,74 @@
-# Fresh platform workflow: prepared hosts to Skyline Swarm management
+# Platform installation and subsequent administration
 
 ## Current contract: infrastructure first
 
-The current installer deploys OpenStack and its SPVM driver/helper/CLI/GUI without
-selecting a guest build or reading provider credentials. Deployment YAML must not
-contain `guest_release`, `provider_config`, `domains` or per-host
-`bootstrap_release`. The platform JSON must not contain `profiles`,
-`provider_directory` or `template_name`. See the updated example files.
+Use [`spvm-openstack.sh install`](OPENSTACK_SINGLE_INSTALL.md) for a fresh cloud.
+The integrated coordinator owns phase ordering, all-host checks and approval;
+administrators do not need to invoke each internal preparation command manually.
+Hardware bootstrap, existing inter-host connectivity and a
+[prepared management environment](OPENSTACK_ENVIRONMENT.md) are prerequisites.
 
-Fresh completion expects empty image, flavor, provider-template and cluster
-catalogs. It still prepares project access, shared Neutron networking, storage
-and compute budgets, helpers, capacity reporting and the management UI. It does
-not create a Swarm or require its domains. Guest images, flavors and named
-provider templates are administrator operations through the CLI/UI afterwards;
-cluster-specific domains are chosen when creating a cluster.
+Deployment YAML contains infrastructure only. It must not contain guest builds,
+provider credentials, Swarm domains, CPU/RAM budgets, state pools or GPU inventory.
+The installer prepares cloud access, shared Neutron networking, helpers,
+restricted management and the source-built GUI. It does not create an image,
+flavor, provider template, guest or Swarm cluster.
 
-Set `release_registration: true` in the platform JSON to enable administrator
-image registration. This grants no guest build automatically: static enrollment
-starts with `releases: []`. Without registration opt-in or an explicit later
-administrator enrollment, no SPVM guest image is authorized. Debug additionally
-requires the host and image registration policies to permit debug. A non-CC
-compute still rejects release images, including direct Nova API requests.
+`installation-kit.json` supplies exact component revisions and immutable image
+references. Use the unchanged matching installer and Kolla environment. Targets
+retrieve the prebuilt images by digest; no local Docker build or JavaScript
+patching is involved. See [kit delivery](OPENSTACK_PREBUILT_IMAGES.md).
 
-Helper requests specify the protected `registered_release_cache_root`, launcher,
-host mode and debug policy, but no `release` or `cache`. Every launch supplies its
-explicit build; the helper independently checks host admission and derives only
-that build's isolated cache directory. No default image or fallback exists.
+Fresh installation is not an upgrade, reset or occupied-host repair workflow.
+Ambiguous partial operations require review. Original private journals and
+ownership/provenance checks must not be reset or edited to bypass refusal.
 
-The empty ingress scaffold is installed without provider DNS credentials or
-domain-scoped publication/retirement authority. Before web cluster publication
-and deletion, an administrator must explicitly configure the domain-scoped
-publication and retirement policies using the matching runtime staging tools.
-Uploading a provider template alone does not grant privileged DNS/ingress access.
-The installed catalogs/UI are not proof that these workers are activated.
+## Configure and enable compute hosts
 
-All components must agree on `image-independent-host-provisioning`. Rebuild or
-select a matching bundle; an older downloaded archive cannot be used with the new
-inputs. Replace experimental requests/workspaces explicitly; there is no format
-migration or automatic flavor reassignment. Local synthetic checks do not prove
-a new live installation. The dated checkpoint below describes the previous
-workflow, including its previously preloaded catalogs, not this new contract.
+Installation and add-compute finish with healthy **UNCONFIGURED/disabled** hosts.
+Detected hardware is informational: no CPU/RAM budgets, workload pools or GPUs
+are allocated. The technical cache `/var/lib/spvm/registered-releases` is separate
+from workload state and still needs sufficient filesystem space.
 
-For the separate, empty compute-only retirement workflow, see
-[Retiring an OpenStack compute host](OPENSTACK_COMPUTE_REMOVAL.md).
+Through the GUI or typed CLI/API, assign explicit CPU/RAM limits, at least one
+enabled state pool and optional GPU devices. Then separately Enable the host.
+Changes require an empty host across all projects; Disable only blocks new
+admissions and does not stop running guests. See
+[manual resources](OPENSTACK_HOST_RESOURCES.md) and [GPU profiles](OPENSTACK_GPU_PROFILES.md).
+Current resource state is protected host data, not an installation baseline.
 
-This workflow extends `plan-openstack` / `apply-openstack` with a `platform`
-specification. It runs existing owned phases in order and resolves project,
-user, network and security-group IDs from the **new** cloud. It never launches
-a Swarm, resumes encrypted guest disks, signs a release or reboots hardware.
+## Register images and create workload inputs
 
-Live checkpoint (2026-10-21): after another scoped cleanup of both prepared hosts,
-the common workflow completed **uninterrupted**, without child recovery or a local
-worker overlay. The parent journal is `COMPLETE`; the platform result is
-`PLATFORM_READY_NO_SWARM_CREATED`. It used installer commit
-`52cd397c538d28b7032a9ddb88693ea7955c6c1f` and published driver 0.2.23, source
-`c4df9f8ee9395cd0a5da492c3f4a058ed28c0025`. The release archive SHA256 is
-`1b032cc543cd26a4aadcb094bcc5ba786f4484a5a7906e6ff3d5b55b5c9b99f5`.
+Administrators register approved images, create private resource flavors and
+import named provider templates through the matching CLI/UI. Registration is
+explicitly delegated; the GUI alone does not authorize a build or prove its
+measurement/signature. Static empty allowlists permit no images.
 
-Strict-TLS HTTP/API acceptance passed: two enabled/up computes, one private
-provider template, one image, two profiles, fresh native capacity, nine static
-probes, authenticated login/domain/catalog APIs and no guests. The separate web
-account cannot read the operator admin OpenRC. The installed publication worker
-matches the published bundle byte-for-byte. All 123 protected libvirt/QEMU/CC
-files and both public routes remained unchanged; 38 controller and nine compute
-containers were running with none unhealthy. Host runtime identity checks passed.
+Every launch supplies an explicitly authorized build. The helper independently
+checks admission and uses that build's isolated registered cache; there is no
+default release or fallback. Debug requires independent host and registration
+opt-ins. Non-CC compute rejects release images, including direct Nova requests.
+See [debug policy](OPENSTACK_DEBUG_BUILDS.md) and [non-CC hosts](OPENSTACK_NON_CC.md).
 
-Evidence is retained privately under
-`/var/lib/spvm-openstack-release023-20261021-03` on the lab hosts, with recoverable
-configuration backups under `/var/backups/spvm-openstack-cleanup-20261021-03`.
-Older failed journals remain `NEEDS_REVIEW`; they have not been relabelled.
-This is not clean-OS, cold-cache, reboot, headed-browser or Swarm-launch proof.
+Provider configuration contains secrets and belongs in approved protected
+storage/Barbican, not Git or installation YAML. Template upload does not grant
+root publication/retirement authority. Administrators must separately configure
+domain-scoped DNS/ingress and retirement delegation with restricted service
+credentials. See [service delegation](OPENSTACK_SERVICE_DELEGATION.md).
 
-The selected driver must advertise `separate-web-ingress-identities`. The older
-0.2.22 artifact used in the preceding lab run lacks that capability: its worker
-required the web exporter and ingress publisher to share a Unix identity. Do not
-grant admin OpenRC access to the web service to satisfy that obsolete check.
-The new worker validates both root-configured accounts as non-root independently.
-The planner refuses the old artifact before host preparation. Never edit a
-verified manifest to bypass this gate. The published 0.2.23 bundle passed the
-uninterrupted cleared-host run described above.
+## Readiness, networking and failures
 
-## Prerequisites and current boundary
+The base project enrollment selects a shared Neutron network; each cluster still
+needs its scoped security group and approved readiness-probe sources. All
+compute hosts need the required connectivity, including routes back from guests.
+Do not open probe/API ports unrestricted to the Internet to fix a routing issue.
 
-Hardware bootstrap remains separate. Prepare BIOS/TDX/SEV, VFIO, libvirt/QEMU and
-the launcher prerequisites first. Provide a trusted root operator environment on
-the selected single controller, strict SSH known-hosts, noninteractive sudo on
-the hosts, a non-root operator account and the reviewed driver bundle/SDK environment.
-Set `SPVM_INSTALLER_PYTHON` to a Python containing the matching driver client,
-OpenStackSDK, keystoneauth and YAML dependencies. No system-wide pip is used.
+Nova ACTIVE, SPVM readiness and public HTTPS UI reachability are separate.
+Release readiness retains signature-presence and original-CA checks. Untrusted
+debug does not fabricate measurement or attestation. An installed ingress
+scaffold or successful template upload is not proof of public DNS/TLS access.
 
-Deployment SSH keys may use `no-pty`. Generated Ansible configurations explicitly
-set `[ssh_connection] usetty = False`; package preparation, API trust, prechecks
-and deployment use noninteractive SSH and `sudo` without allocating a terminal.
-Do not weaken a deployment key's restrictions to fix `PTY allocation request
-failed on channel 0`. Noninteractive `sudo` remains a prerequisite.
-
-The existing artifact preparation stages still supply a clean pinned Kolla
-source/collections, generated fresh password/TLS workspace, built custom Nova
-and Skyline images, compute image delivery, installed bootstrap-deny-all helpers,
-and the bound compute workspace. The new coordinator does **not** download these
-artifacts, install a missing Docker engine, create a physical management network,
-or provision WireGuard peers/keys. Those are explicit earlier preparation stages,
-not an implied OS-to-cloud one-liner. See the main deployment guide.
-
-For host network preparation, the approved management transport and its addresses
-must already be UP. The default profile requires a dedicated non-default path.
-The explicit [shared-interface profile](OPENSTACK_SHARED_INTERFACE.md) instead
-uses existing primary IPv4 addresses, no extra VIP, distinct backend ports and
-persistent peer guards. No VPN is required in either profile. Existing WireGuard AllowedIPs and
-routes must cover the declared guest probes/replies. The optional recipe runs
-owned Geneve guards, management VIP/routes and isolated NAT; it does not attach
-the public bond to OVS or invent a new per-Swarm network.
-
-Initial platform completion currently enrolls the operator's administrator project
-and identity. A multi-project/user onboarding wizard, controller HA and live
-adoption/upgrade remain separate work. Run on empty hosts only.
-
-## Generate native compute identities before installing helpers
-
-Do not invent a random compute UUID. Use a recent `audit.json` from the deployment
-preflight and the helper request mapping, whose storage/GPU/host-policy settings were
-already reviewed:
-
-```bash
-scripts/spvm-openstack.sh --installation-kit-dir /srv/verified-driver-bundle -- \
-  stage-kolla-identities --config /srv/operator/deployment.yaml \
-  --audit /srv/operator/preflight/audit.json \
-  --requests /srv/operator/helper-requests.json \
-  --output /srv/operator/native-identities
-```
-
-The command writes a new `helper-requests.json` mapping and per-host requests;
-it changes no host. It uses the audited **kernel nodename**, not the inventory
-alias, with the pinned Kolla/Ansible `to_uuid` namespace. Feed those generated
-requests to helper installation and `stage-kolla-computes`. Never rewrite a
-sealed workspace or a live Nova UUID. The platform planner checks the identities
-again against fresh host audits and refuses mismatches before deployment.
-Existing-cloud adoption must use the already registered Nova identity instead.
-
-## Prepare input files
-
-Review the provider directory's services version and any explicit ACME override
-before import. Templates are immutable snapshots of those inputs: a fresh
-installation does not inherit earlier Barbican-only edits or silently replace
-a migration services tag or an explicit certificate-provider choice. VM/CA
-readiness and public UI/TLS readiness remain separate checks.
-
-The prepared `sdk_venv` is also used by the non-root web and ingress services.
-Install the pinned client and SDK into a root-owned, service-readable location
-such as `/opt/spvm-openstack-client`, not beneath `/root` or a mode-0700 operator
-transaction directory. Planning checks Python imports and CLI execution as both
-service accounts before deployment. Keep provider files, auth scripts and
-transaction directories private; do not make the whole operator tree readable
-to fix a client-path permission error. Package code in this SDK must contain no
-operator credentials.
-
-Candidate 0.2.24 adds optional administrator registration of additional public
-SPVM releases through Skyline. It is disabled by default. To enable it on a fresh
-platform, prepare `registered_release_cache_root` in **every** helper request
-before staging/binding and set `release_registration: true` in the platform
-specification. The root cache must be isolated from state, tools, runtime and the
-default cache. The matching bundle must advertise
-`administrator-release-registration`; old bundles or missing compute cache opt-ins
-are refused before deployment. The selected administrator operator is enrolled
-as the trusted Barbican release registrar/reader. Both the immutable compute
-configuration and web delegation name that identity; the UI also checks its
-current Keystone admin role. Debug registration requires debug opt-in on every
-selected helper. Existing static release policies remain unchanged when omitted.
-
-Debug is disabled in the shipped helper-request example (`allow_debug: false`).
-See [OPENSTACK_DEBUG_BUILDS.md](OPENSTACK_DEBUG_BUILDS.md) for both admission
-gates, fresh-install opt-in, existing-install maintenance, and disabling debug
-after diagnostics. The required helper boolean must be explicit; omission is
-not an implicit permission. Enabling web registration alone cannot enable host
-debug launches.
-
-### Mixed compute bootstrap builds
-
-The project bootstrap release allowlist is the exact union of builds prepared
-in the bound helper requests. For example, TDX computes can prepare
-`build-449-release` while an explicitly debug-only non-CC compute prepares
-`build-447-debug`. Do not require every host to prepare the same bootstrap
-build, and do not add unprepared builds to this static allowlist.
-
-Runtime staging projects that catalog onto each compute: its static release
-list contains only that host's prepared bootstrap build. A project-wide catalog
-is not authorization to launch every image on every host. Additional registered
-builds still require isolated registered caches, trusted registration approval,
-host debug opt-in when applicable, and independent compute/helper/launcher
-admission. Release images remain forbidden on `untrusted` hosts.
-
-A failed installation transaction is not a resume token. Preserve its journals
-and inspect completed side effects before choosing a separately recorded
-operator recovery or a cleared-state retry. Never mark a refused parent
-transaction successful merely because a later reviewed completion succeeds.
-
-Registration creates a private Glance marker and project/image-bound private
-Barbican approval after checking the official GitHub release and `vm.json` asset.
-Signature presence, CA, grants and membership are still checked at launch.
-No guest or Nova restart is needed per registration **after** installing this
-opt-in capability. First launch may download assets; cache budgeting/cleanup is
-still the operator's responsibility. Enabling the capability on an existing cloud
-requires a reviewed matching driver/helper/runtime rollout, not a hot config edit.
-See the selected bundle's `deployment/skyline/README.md` for exact field semantics.
-
-Copy and edit these English examples; placeholder paths/IPs are not lab defaults:
-
-- `openstack-platform.example.json`: operator/web/ingress settings and file paths.
-- `openstack-platform-network.example.json`: shared Neutron topology, deliberately
-  **without** `project_id`. The new API supplies it after Kolla deployment.
-- `openstack-host-preparation.example.json`: kernel-hostname address mappings,
-  plus the optional owned Geneve/management/NAT request paths from the main guide.
-- `openstack-resource-profiles.example.json`: per-node resource/flavor profiles.
-
-Copy the initial inactive HAProxy config into an immutable operator file, verify
-its checksum against the host baseline and select that copy as
-`base_haproxy_config`. Do not point this field at `/etc/haproxy/haproxy.cfg`,
-because ingress installation intentionally changes that live file.
-
-The `operator_user` must match the controller SSH user; it identifies transport
-only, never a daemon or credential reader. Administrative API commands escalate
-to root **before** sourcing `/etc/spvm/auth/admin-openrc.sh` (root:root, 0640,
-parent 0750). Ingress runs as the fixed `spvm-ingress` system account and reads
-its separate root-owned OpenRC in `/etc/spvm/ingress-auth/` (root:spvm-ingress,
-0640, parent 0750). This separates Linux identities; it does not silently create
-a different Keystone user or change the enrolled project's API authorization.
-The web API uses only the logged-in user's token and cannot read either OpenRC.
-
-The reviewed plan creates missing `web_user` and `spvm-ingress` system accounts
-with dedicated groups, `/nonexistent` homes and `/usr/sbin/nologin` shells.
-An existing ingress account must have that non-login configuration, no extra
-groups, and no shared UID/group access with the SSH or web accounts. Existing
-user groups, homes and shells are never modified to force adoption. No password
-or SSH login is provisioned for service accounts. Older bundles without the
-`private-publication-input-handoff` capability are rejected before installation:
-the root publisher must broker private spec/enrollment copies for ingress,
-rather than sharing web-state directory permissions.
-
-Keep the provider directory private. Its `base_domain` supplies the allowed DNS
-zone and its `gateway_hostname` supplies the shared publication gateway. The
-coordinator imports a named immutable template into private Barbican records;
-credentials are neither placed in the web config nor printed in a plan. It does
-not register or change external DNS during empty-platform installation.
-
-`quota_from_host_budgets: true` explicitly authorizes project CPU/RAM quotas from
-the audited configured ceilings, after subtracting host reserves. State capacity
-and GPUs remain host-local Placement/native PCI resources. This does not promise
-that a large VM can span two hosts or authorize thin-disk overcommit.
-
-## Review and apply the common workflow
-
-Example parent request:
-
-```json
-{
-  "schema_version": 1,
-  "mode": "fresh",
-  "config": "/srv/operator/deployment.yaml",
-  "workspace": "/srv/operator/compute-bound",
-  "known_hosts": "/srv/operator/known_hosts",
-  "ack_new_cloud": true,
-  "allow_experimental_ubuntu26": false,
-  "use_testing_images": false,
-  "preparation": "/srv/operator/host-preparation.json",
-  "platform": "/srv/operator/platform.json"
-}
-```
-
-`preparation` is optional if hostnames and the owned host network are already
-prepared. In it, `network_request` and `geneve_request` must be present together
-or both omitted for hostname-only preparation. Hostname/IP agreement and machine
-fingerprints are checked before changes. Unrelated `/etc/hosts` aliases and
-comments are preserved; conflicting non-loopback mappings are refused.
-
-`repair_stale_networkd_cache` defaults to `false`. Set it to `true` only after
-reviewing the networkd reload in the plan. Repair is limited to a positively
-identified deleted `.network` file cached for an existing dedicated dummy.
-Active files, physical interfaces, default-route interfaces and foreign
-addresses are never rewritten. Only the dummy receives a reconfigure command;
-the preceding manager-wide reload is an explicit opt-in, so review pending
-networkd configuration changes first. Unrelated IPv4/IPv6 addresses, routes and
-rules must remain unchanged. This option is not a general network-manager
-conflict override.
-
-```bash
-export SPVM_INSTALLER_PYTHON=/srv/operator/client-venv/bin/python
-scripts/spvm-openstack.sh --installation-kit-dir /srv/verified-driver-bundle -- \
-  plan-openstack --request /srv/operator/workflow.json \
-  --output /srv/operator/platform-install-01
-
-# Review the plan and exact source/input checksums before authorizing changes.
-scripts/spvm-openstack.sh --installation-kit-dir /srv/verified-driver-bundle -- \
-  apply-openstack --request /srv/operator/workflow.json \
-  --output /srv/operator/platform-install-01 \
-  --plan-sha256 REPLACE_WITH_APPROVED_SHA256 --allow-changes
-```
-
-The initial approval expires after 900 seconds. The parent binds request files,
-provider hashes, SDK code, driver/wheel and installer sources. Child plans are
-generated immediately before their phase, when prerequisite state and new API
-IDs are available; their desired policy is already bound by the parent intent.
-An installed cloud is refused before preparatory hostname/network writes.
-When the request includes the owned network recipe, the early guard defers only
-its not-yet-created API VIP and the NAT host's `spvm-ext0` interface. Management
-and tunnel interfaces must already exist. The later native Kolla plan checks all
-interfaces and the VIP again after the owned network phase has created them.
-Hostname-only preparation does not defer these requirements.
-
-The installer runs with a private `umask 077`. Atomic replacement of `/etc/hosts`
-must explicitly restore its approved original owner and mode using `fchown` and
-`fchmod`, not just pass the mode to `open`. Otherwise a normal `0644` file becomes
-`0600`: root lookup succeeds while Kolla's unprivileged RabbitMQ `getent` task
-cannot read the new mappings and may fall back to a stale/loopback DNS answer.
-This was reproduced during cleared-host acceptance; the replacement and rollback
-paths now have a regression test under `umask 077`. Recovery must verify the
-approved content checksum and original metadata before restoring permissions.
-The same rule applies to the operator auth directory: explicitly restore `0750`
-after creation/chown under `umask 077`; the auth file remains root/operator-group
-`0640`. Merely calling `mkdir(mode=0o750)` creates `0700` in that context, so the
-operator cannot traverse it and native accounting fails before compute mutation.
-A separate regression test covers this directory/file permission contract.
-
-## Ordered phases and result
-
-1. Explicitly planned dedicated web account creation/reuse, followed by optional
-   owned hostname and host network preparation/verification.
-2. Base packages, host Docker SDK and API CA trust checks/preparation.
-3. Native Kolla prechecks, deploy and post-deploy.
-4. Strict-TLS API scope validation and new private operator auth file.
-5. Shared Neutron network/router, project-private flavors/release marker and
-   private-ACL Barbican probe with cleanup.
-6. Runtime request staging and guarded quarantine/stop/enroll/start/accept/enable
-   of each empty compute. Other control-plane containers remain protected.
-7. Project quotas from configured host budgets.
-8. Empty domain-based ingress scaffold and activation.
-9. Private provider template import, matching web environment staging, capacity
-   collector and delegated publication worker installation.
-10. Authenticated Skyline login/profile/domain/catalog checks, anonymous access
-    rejection, pinned JS/logo/gzip checks, and an empty healthy Nova cloud.
-
-Success returns `PLATFORM_READY_NO_SWARM_CREATED`. It is an empty-platform HTTP/
-API acceptance boundary, **not** a headed-browser test or a successful Swarm
-launch. Creating a three-node release Swarm is a separate authorized operation.
-
-## Failure handling
-
-Every mutating stage writes intent before execution and retains its own plan,
-journal and available backup. A failed parent becomes `NEEDS_REVIEW`; the new
-platform path deliberately refuses automatic resume or ambiguous child replay.
-Inspect actual side effects and finish an explicitly scoped recovery before
-starting a new reviewed transaction. Repeating a completed parent returns
-`ALREADY_APPLIED_NOT_REVERIFIED`, not a reinstall and not a new health claim.
-
-No automatic rollback can recover encrypted guest disks, restore a deleted cloud
-database or reverse external DNS writes. This workflow does none of those things.
-Keep root/private transaction directories out of git and HTTP document roots.
+No automatic guest recovery, bootstrap restart or CA replacement is performed.
+SPVM state uses ephemeral per-boot keys; preserving an encrypted disk does not
+make a stopped guest resumable. Inspect private operation results by their
+original request IDs after failures, without replaying ambiguous mutations.

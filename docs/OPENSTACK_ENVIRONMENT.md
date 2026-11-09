@@ -44,9 +44,8 @@ git -C /srv/operator/kolla-ansible status --porcelain
 ```
 
 Replace the placeholder with the full reviewed commit, not a branch or `latest`.
-Prepare writable parent directories first. A historical lab commit may belong to
-a separate reviewed checkout and not exist upstream; do not substitute a newer
-upstream commit just to make a fetch succeed. The preparer neither fetches nor
+Prepare writable parent directories first. Use the source and revision declared
+by the installation kit; do not substitute another commit to make a fetch succeed. The preparer neither fetches nor
 modifies the supplied checkout. It creates a local copy for package builds, since
 Python build backends may write into their input directory.
 
@@ -82,7 +81,7 @@ The private output directory contains:
 
 | Path | Purpose |
 | --- | --- |
-| `installer-venv/` | Python with `PyYAML==6.0.3` for `spvm-openstack.sh`. |
+| `installer-venv/` | Python with the preparer's pinned PyYAML dependency for `spvm-openstack.sh`. |
 | `kolla-venv/` | Non-editable selected Kolla installation and its Python dependencies, including Ansible. |
 | `collections/` | Collections installed from Kolla's `requirements.yml` and `requirements-core.yml`. |
 | `kolla-source/` | Local source copy used for builds and later Kolla operations. |
@@ -147,11 +146,7 @@ deleted or repaired, and there is no implicit resume. Download errors and failed
 pip/CLI/collection checks return a nonzero exit code. No target host or global
 Python/Ansible installation is modified.
 
-## Verification boundary
+## Scope
 
-Synthetic tests cover successful preparation with fake command executors,
-missing prerequisites, Python/root/source/path rejection, failed preparation
-phases, collection changes and repeat-without-install behavior. Local syntax,
-dependency-free help and read-only preflight checks are separate checks.
-They are **not** evidence of a real online Kolla installation, target-host
-deployment, Ansible task compatibility or a working OpenStack/Swarm cloud.
+This prepares local tooling only. It does not validate online image availability,
+target hosts, Ansible deployment tasks or OpenStack/Swarm readiness.

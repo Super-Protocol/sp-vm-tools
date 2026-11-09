@@ -193,30 +193,3 @@ cloud resource ID, not just the public IP or display name. Delete only that VM
 and its exclusively attached disks, NIC and public IP after checking ownership.
 Never delete a shared resource group, network, NSG, gateway or transport peer as
 a shortcut. Detached disks and public IPs may continue billing if left behind.
-
-## Reviewed completion acceptance (2026-11-06)
-
-The interrupted `remove-super6-04` operation was completed only after explicit
-operator approval, without replaying quarantine, service stop, executor revocation
-or native Nova/Placement/OVN deletion. Before continuation, the original plan hash,
-exact controller claim, policy/config/source hashes, validated successor workspace,
-empty stopped target and removed native registrations were checked again. The
-re-approved peer snapshot differed only in the diagnosed last-OVN-tunnel topology
-hashes (links, addresses and routes); policy files, firewall state, machine identity
-and hostname mappings were unchanged. Original failure evidence was retained.
-
-The final receipt is `COMPUTE_REMOVED`, with no inflight step and
-`guests_changed: false`. Its private `reviewed-completion-01` directory preserves
-the prior journal and the explicitly reviewed network snapshot. The remaining
-policy/config contains only `super7`. Its Nova service and resource timer are
-active, and a normal resource worker pass completed after retirement.
-
-The future-operation fixes are covered by 25 targeted synthetic tests: removal
-coordination/order and prepared workspace handling (15), strict peer networking
-(7), and unfinished-retirement worker deferral (3). The older, broader budget
-fixture suite is not fully passing: six failures/errors reproduce against the
-pre-change module too (stale activation/dispatcher fixtures and missing test import
-paths). Do not describe this result as a fully passing budget suite or as a fresh
-end-to-end run of the reordered removal. Worker deferral is a source-level fix for
-the next matching installer/tool deployment; the installed worker was restored
-using the completed, reduced policy, not manually patched in place.
