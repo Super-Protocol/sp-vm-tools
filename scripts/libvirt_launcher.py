@@ -310,8 +310,6 @@ def _add_cpu_and_features(domain: ET.Element, config: DomainConfig) -> None:
         _sub(cpu, "maxphysaddr", mode="emulate", bits=config.phys_bits)
     else:
         cpu = _sub(domain, "cpu", mode="host-passthrough", migratable="off")
-        if config.mode == "untrusted":
-            _sub(cpu, "feature", policy="disable", name="kvm-steal-time")
     _sub(
         cpu,
         "topology",
@@ -447,6 +445,13 @@ def build_domain_xml(config: DomainConfig) -> str:
     # QEMU namespace extensions must follow native domain elements for the
     # libvirt domain schema to accept the document.
     _add_fw_cfg_qemu_args(domain, config)
+    if config.mode == "untrusted":
+        # This is a QEMU CPU property, not a libvirt CPU-map feature. Preserve
+        # the direct launcher's -cpu host,-kvm-steal-time setting without an
+        # unknown-feature XML rejection or a second conflicting -cpu argument.
+        commandline = _qemu_commandline(domain)
+        _sub(commandline, f"{{{QEMU_NS}}}arg", value="-global")
+        _sub(commandline, f"{{{QEMU_NS}}}arg", value="host-x86_64-cpu.kvm-steal-time=off")
 
     ET.indent(domain, space="  ")
     return ET.tostring(domain, encoding="unicode")

@@ -11,6 +11,7 @@ Utilities for bootstrapping a Confidential Computing host (Intel **TDX** or AMD 
   - [3. Reboot](#3-reboot)
   - [4. Verify the host](#4-verify-the-host)
 - [Running a Swarm cluster](#running-a-swarm-cluster)
+- [OpenStack deployment guide](https://github.com/Super-Protocol/spvm-openstack/blob/feature/sync-with-swarm-cloud/docs/OPENSTACK_DEPLOYMENT.md) — use the self-contained OpenStack release kit
 - [Requirements](#requirements) — OS, CPU, BIOS, GPU
 - [Roadmap](#roadmap)
 - [License](#license)
@@ -32,11 +33,18 @@ Utilities for bootstrapping a Confidential Computing host (Intel **TDX** or AMD 
 
 This is the main path: take a bare Ubuntu host, turn it into a confidential hypervisor, and launch your first VM. Before you begin, confirm your hardware and BIOS match the [Requirements](#requirements) — the bootstrap scripts enforce the supported OS versions and will check CPU/BIOS settings for you.
 
-> All scripts run as `root` and need an internet connection. A reboot is required partway through.
+> Hardware bootstrap scripts run as `root` and need an internet connection. A reboot is required partway through. OpenStack deployment is separate: use the environment preparer and root `spvm-openstack.sh` in a verified spvm-openstack release. See the [OpenStack guide](https://github.com/Super-Protocol/spvm-openstack/blob/feature/sync-with-swarm-cloud/docs/OPENSTACK_DEPLOYMENT.md). This repository contains no OpenStack installer implementation.
 
 For the exact commands to clone the repository, run the bootstrap scripts, and launch a VM, see [docs/swarm.md](docs/swarm.md).
 
 ### Libvirt launcher (Ubuntu 24.04 and 26.04)
+
+This is the standalone launcher. Nova uses a separate, ordinary-source launcher
+in `spvm-openstack/launcher/`. Changes to shared launch logic must be reviewed
+for **both** implementations, applicable fixes carried across, intentional
+differences documented, and both launch paths checked. Do not replace the Nova
+variant with these files: Nova owns its state, networking, PCI allocations and
+protected launch policy. See the [required consistency checklist](https://github.com/Super-Protocol/spvm-openstack/blob/feature/sync-with-swarm-cloud/docs/NOVA_LAUNCHER.md).
 
 `scripts/start_super_protocol_libvirt.sh` reuses the release, disk, provider-config, and VFIO preparation from the direct QEMU launcher, then builds domain XML and starts a transient domain through `libvirt-python`. GPU passthrough uses IOMMUFD. The TDX and SEV-SNP bootstrap scripts install libvirt **12.5.0** when the system version is older, configure AppArmor, grant `passt` the capability required for privileged ports, and validate the daemon and domain capabilities before VFIO devices are bound.
 
