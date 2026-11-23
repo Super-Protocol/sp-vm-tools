@@ -90,6 +90,25 @@ That's it — the script generates per-node configs, starts the VMs, and sets up
 <details>
 <summary>Advanced: all flags and what happens under the hood</summary>
 
+### Public DNS and internal gateway discovery
+
+For the documented single-host configuration, `gateway_hostname` resolves to the
+physical host's public address. Swarm's `dns-manager` maintains public names in
+PowerDNS. Public HTTP/HTTPS enters the host HAProxy, not each guest separately.
+
+The host HAProxy also uses **internal** Knot DNS to resolve
+`gw.dyn.<global_id>.<base_domain>` into the guest addresses running OpenResty.
+`swarm-network.sh` currently queries the bootstrap guest on its private address,
+port 53; its `server-template` follows multiple A records and health-checks the
+backends. This does not require exposing guest DNS on public TCP/UDP 53.
+The bootstrap DNS endpoint and the single physical host remain availability
+limits. This is distinct from public delegation to Knot on directly addressed
+Swarm nodes.
+
+OpenStack's coordinated kit validates discovered addresses against its own
+Nova/Neutron/Barbican cluster authority before applying ingress routes; see the
+[OpenStack publication guide](https://github.com/Super-Protocol/spvm-openstack/blob/main/docs/OPENSTACK_PUBLICATION.md).
+
 ### Key flags
 
 | Flag | Default | Description |
