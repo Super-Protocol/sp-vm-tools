@@ -54,7 +54,17 @@ get_current_kernel_log() {
 # (dedicated quota); never ship a shared key that may expire and cause HTTP 401.
 PCCS_API_KEY="${PCCS_API_KEY:-}"
 PCCS_PORT="8081"
-PCCS_URL="https://localhost:${PCCS_PORT}"
+# Empty PCCS_URL keeps the local LAZY PCCS. A value is the site PCCS origin
+# (https://pccs.site.internal:8081, without the /sgx/certification/v4 suffix).
+# A site URL also requires PCCS_CA_FILE and PCCS_USER_TOKEN.
+PCCS_CA_FILE="${PCCS_CA_FILE:-}"
+PCCS_USER_TOKEN="${PCCS_USER_TOKEN:-}"
+REMOTE_PCCS=0
+if [ -n "${PCCS_URL:-}" ]; then
+    REMOTE_PCCS=1
+else
+    PCCS_URL="https://localhost:${PCCS_PORT}"
+fi
 # Intel PCS (upstream), used to tell a PCCS-side problem from a real
 # registration error when the local PCCS cannot serve a PCK certificate.
 INTEL_PCS_URL="https://api.trustedservices.intel.com/sgx/certification/v4"
@@ -331,6 +341,57 @@ verify_tdx_hardware() {
     fi
 }
 
+write_qcnl() {
+    local secure="false"
+    local api="${PCCS_URL%/}/sgx/certification/v4/"
+    if [ "$REMOTE_PCCS" -eq 1 ]; then
+        secure="true"
+    fi
+    print_section_header "Configuring QCNL..."
+    cat > /etc/sgx_default_qcnl.conf << EOL
+PCCS_URL=${api}
+USE_SECURE_CERT=${secure}
+RETRY_TIMES=6
+RETRY_DELAY=10
+LOCAL_PCK_URL=${api}
+LOCAL_PCK_RETRY_TIMES=6
+LOCAL_PCK_RETRY_DELAY=10
+EOL
+    check_error "Failed to create QCNL configuration"
+}
+
+install_remote_pccs_ca() {
+    if [ -z "${PCCS_CA_FILE}" ] || [ ! -f "${PCCS_CA_FILE}" ]; then
+        echo -e "${RED}Error: PCCS_URL is set but PCCS_CA_FILE is missing${NC}" >&2
+        exit 1
+    fi
+    if [ -z "${PCCS_USER_TOKEN}" ]; then
+        echo -e "${RED}Error: PCCS_URL is set but PCCS_USER_TOKEN is missing${NC}" >&2
+        exit 1
+    fi
+    print_section_header "Installing site PCCS CA..."
+    mkdir -p /usr/local/share/ca-certificates
+    cp "${PCCS_CA_FILE}" /usr/local/share/ca-certificates/pccs-site.crt
+    update-ca-certificates
+    check_error "Failed to install the site PCCS CA"
+}
+
+pccs_secure_cert_flag() {
+    if [ "$REMOTE_PCCS" -eq 1 ]; then
+        echo true
+    else
+        echo false
+    fi
+}
+
+pccs_registration_token() {
+    if [ "$REMOTE_PCCS" -eq 1 ]; then
+        echo "${PCCS_USER_TOKEN}"
+    else
+        echo "${PCCS_PASSWORD}"
+    fi
+}
+
 # Configure PCCS: write its config + QCNL, install Node deps and SSL keys
 # (Intel-repo path only), and fix ownership. Grouped into one function to keep
 # the top-level flow readable.
@@ -378,18 +439,7 @@ configure_pccs() {
 }
 EOL
 
-    # Configure QCNL
-    print_section_header "Configuring QCNL..."
-    cat > /etc/sgx_default_qcnl.conf << EOL
-PCCS_URL=https://localhost:${PCCS_PORT}/sgx/certification/v4/
-USE_SECURE_CERT=false
-RETRY_TIMES=6
-RETRY_DELAY=10
-LOCAL_PCK_URL=http://localhost:${PCCS_PORT}/sgx/certification/v4/
-LOCAL_PCK_RETRY_TIMES=6
-LOCAL_PCK_RETRY_DELAY=10
-EOL
-    check_error "Failed to create QCNL configuration"
+    write_qcnl
 
     # On the Intel SGX repo path (Ubuntu >= 25.10, incl. 26.04) the sgx-dcap-pccs
     # package was installed with DEBIAN_FRONTEND=noninteractive, so its interactive
@@ -740,9 +790,9 @@ register_platform() {
     # Register with PCCS using password
     echo -e "${GREEN}Registering with PCCS...${NC}"
     PCKIDRetrievalTool \
-        -url "https://localhost:${PCCS_PORT}" \
-        -use_secure_cert false \
-        -user_token "${PCCS_PASSWORD}"
+        -url "${PCCS_URL}" \
+        -use_secure_cert "$(pccs_secure_cert_flag)" \
+        -user_token "$(pccs_registration_token)"
 
     return $?
 }
@@ -764,8 +814,12 @@ get_pck_identity() {
 
 # HTTP code for this platform's PCK cert from the LOCAL PCCS (200 = available).
 pccs_pckcert_code() {
-    curl -ks -o /dev/null -w '%{http_code}' \
-        "${PCCS_URL}/sgx/certification/v4/pckcert?qeid=${QEID}&encrypted_ppid=${EPPID}&cpusvn=${CPUSVN}&pcesvn=${PCESVN}&pceid=${PCEID}"
+    local curl_tls=(-k)
+    if [ "$REMOTE_PCCS" -eq 1 ]; then
+        curl_tls=(--cacert "${PCCS_CA_FILE}")
+    fi
+    curl -s "${curl_tls[@]}" -o /dev/null -w '%{http_code}' \
+        "${PCCS_URL%/}/sgx/certification/v4/pckcert?qeid=${QEID}&encrypted_ppid=${EPPID}&cpusvn=${CPUSVN}&pcesvn=${PCESVN}&pceid=${PCEID}"
 }
 
 # HTTP code from Intel PCS directly, using the configured ApiKey. This bypasses
@@ -800,10 +854,15 @@ ensure_platform_registered() {
 
     # Try one (re)registration via PCCS, then recheck.
     echo "PCK cert not in PCCS yet, attempting registration..."
-    PCKIDRetrievalTool -url "$PCCS_URL" -use_secure_cert false -user_token "$PCCS_PASSWORD" || true
+    PCKIDRetrievalTool -url "$PCCS_URL" -use_secure_cert "$(pccs_secure_cert_flag)" -user_token "$(pccs_registration_token)" || true
     if [ "$(pccs_pckcert_code)" = "200" ]; then
         echo -e "${SUCCESS} Platform registered (PCK cert now in PCCS)${NC}"
         return 0
+    fi
+
+    if [ "$REMOTE_PCCS" -eq 1 ]; then
+        echo -e "${FAILURE} Site PCCS did not serve the PCK cert after registration.${NC}"
+        return 1
     fi
 
     # Still failing through PCCS. Ask Intel PCS directly to tell a PCCS problem
@@ -914,6 +973,16 @@ rm -f /etc/sgx_default_qcnl.conf
 # Install packages
 print_section_header "Installing packages..."
 
+attestation_packages=(
+    tdx-qgs
+    libsgx-dcap-default-qpl
+    sgx-ra-service
+    sgx-pck-id-retrieval-tool
+)
+if [ "$REMOTE_PCCS" -eq 0 ]; then
+    attestation_packages=(sgx-dcap-pccs "${attestation_packages[@]}")
+fi
+
 if [ "$USE_INTEL_REPO" -eq 1 ]; then
     # Intel SGX repo: install attestation packages directly.
     # Top-level packages only; lib* deps (urts, enclave-common, pce/tdx-logic,
@@ -925,45 +994,48 @@ if [ "$USE_INTEL_REPO" -eq 1 ]; then
     # DEBIAN_FRONTEND=noninteractive: sgx-dcap-pccs postinst otherwise launches
     # an interactive install.sh; noninteractive makes it skip that (we write the
     # PCCS config ourselves below) and the package configures cleanly.
-    DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        sgx-dcap-pccs \
-        tdx-qgs \
-        libsgx-dcap-default-qpl \
-        sgx-ra-service \
-        sgx-pck-id-retrieval-tool
+    # A site PCCS_URL skips sgx-dcap-pccs: this host must not run its own cache.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "${attestation_packages[@]}"
     check_error "Failed to install packages"
 else
     # Install the same host attestation components used by Canonical, but do it
     # directly and without their global PPA pin or --allow-downgrades.
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-remove \
-        sgx-dcap-pccs \
-        tdx-qgs \
-        libsgx-dcap-default-qpl \
-        sgx-ra-service \
-        sgx-pck-id-retrieval-tool
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-remove "${attestation_packages[@]}"
     check_error "Failed to install attestation packages"
 fi
 
-# Configure PCCS (config + QCNL + npm/SSL + permissions); defined above.
-configure_pccs
+if [ "$REMOTE_PCCS" -eq 1 ]; then
+    install_remote_pccs_ca
+    write_qcnl
+    print_section_header "Enabling quote generation..."
+    systemctl enable qgsd
+    systemctl daemon-reload
+else
+    # Configure PCCS (config + QCNL + npm/SSL + permissions); defined above.
+    configure_pccs
 
-# Enable and start services
-print_section_header "Enabling and starting services..."
-systemctl enable pccs qgsd mpa_registration_tool
-systemctl daemon-reload
+    # Enable and start services
+    print_section_header "Enabling and starting services..."
+    systemctl enable pccs qgsd mpa_registration_tool
+    systemctl daemon-reload
 
-# Start PCCS first. Use restart (not start): if pccs is already running from a
-# previous run / boot it would keep its stale in-memory config and ignore the
-# freshly written default.json (e.g. an updated ApiKey), causing 401s from Intel
-# PCS. restart forces it to reload the current config.
-print_section_header "Starting PCCS..."
-systemctl restart pccs
-wait_for_service pccs
-check_error "Failed to start PCCS"
-sleep 5
+    # Start PCCS first. Use restart (not start): if pccs is already running from a
+    # previous run / boot it would keep its stale in-memory config and ignore the
+    # freshly written default.json (e.g. an updated ApiKey), causing 401s from Intel
+    # PCS. restart forces it to reload the current config.
+    print_section_header "Starting PCCS..."
+    systemctl restart pccs
+    wait_for_service pccs
+    check_error "Failed to start PCCS"
+    sleep 5
+fi
 
 # Get platform info and register
-cd /opt/intel/sgx-dcap-pccs/
+if [ "$REMOTE_PCCS" -eq 1 ]; then
+    cd /tmp
+else
+    cd /opt/intel/sgx-dcap-pccs/
+fi
 print_section_header "Running PCKIDRetrievalTool..."
 rm -f pckid_retrieval.csv
 PCKIDRetrievalTool
@@ -990,12 +1062,17 @@ if [ "$(stat -Lc '%a %U:%G' /run/tdx-qgs/qgs.socket)" != "660 qgsd:qgsd" ]; then
         /run/tdx-qgs/qgs.socket >&2
     exit 1
 fi
-systemctl restart mpa_registration_tool
+if [ "$REMOTE_PCCS" -eq 0 ]; then
+    systemctl restart mpa_registration_tool
+fi
 
 # Check services status
 print_section_header "Checking services status..."
-# Check PCCS and QGSD status
-for service in pccs qgsd; do
+status_services=(qgsd)
+if [ "$REMOTE_PCCS" -eq 0 ]; then
+    status_services=(pccs qgsd)
+fi
+for service in "${status_services[@]}"; do
     echo -e "\n${YELLOW}${service} Status:${NC}"
     if ! systemctl is-active --quiet $service; then
         echo -e "${RED}Error: $service is not running${NC}"
@@ -1007,14 +1084,16 @@ for service in pccs qgsd; do
     fi
 done
 
-# Separately handle mpa_registration_tool since it's expected to exit
-echo -e "\n${YELLOW}mpa_registration_tool Status:${NC}"
-if systemctl is-enabled --quiet mpa_registration_tool; then
-    echo -e "${GREEN}mpa_registration_tool was properly configured${NC}"
-    systemctl status mpa_registration_tool --no-pager || true
-else
-    echo -e "${RED}Error: mpa_registration_tool is not properly configured${NC}"
-    exit 1
+if [ "$REMOTE_PCCS" -eq 0 ]; then
+    # Separately handle mpa_registration_tool since it's expected to exit
+    echo -e "\n${YELLOW}mpa_registration_tool Status:${NC}"
+    if systemctl is-enabled --quiet mpa_registration_tool; then
+        echo -e "${GREEN}mpa_registration_tool was properly configured${NC}"
+        systemctl status mpa_registration_tool --no-pager || true
+    else
+        echo -e "${RED}Error: mpa_registration_tool is not properly configured${NC}"
+        exit 1
+    fi
 fi
 
 # All components installed and started — confirm the platform is registered.
